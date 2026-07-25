@@ -1,0 +1,193 @@
+/**
+ * atproto/session.ts - Bluesky 账号密码登录 + 会话管理。
+ *
+ * 直接使用 CredentialSession 让用户输入 handle + app password 登录，
+ * 不走 OAuth 流程。登录后创建 Agent 供 PDS 操作使用。
+ *
+ * 会话数据（accessJwt / refreshJwt）存在 AsyncStorage，App 重启后可恢复。
+ */
+
+import { Agent, CredentialSession } from '@atproto/api';
+import type { AtpSessionData, AtpSessionEvent } from '@atproto/api';
+
+import { PDS_URL } from '../config';
+import type { DmeStorage } from '../storage/db';
+
+/** 持久化的会话数据，用于 App 重启后恢复。 */
+interface StoredSession {
+  did: string;
+  handle: string;
+  accessJwt: string;
+  refreshJwt: string;
+  active: boolean;
+  pdsUrl: string;
+}
+
+const STORAGE_KEY = 'session';
+
+/**
+ * 管理用户的 Bluesky PDS 会话。
+ *
+ * 通过 CredentialSession 的 persistSession 回调在 token 刷新时自动
+ * 持久化最新会话，App 重启后可恢复。
+ */
+export class DmeSession {
+  private session: CredentialSession | null = null;
+  private agentInstance: Agent | null = null;
+  private pdsUrl: string = PDS_URL;
+
+  /** 持久化存储引用，persistSession 回调中使用。 */
+  private storageRef: DmeStorage | null = null;
+
+  /**
+   * 用户输入 handle + app password 登录。
+   *
+   * @param identifier - Bluesky handle（如 alice.bsky.social）
+   * @param password - Bluesky app password（不是账号密码，在设置页生成）
+   * @param storage - 可选，传入则持久化会话
+   */
+  async login(
+    identifier: string,
+    password: string,
+    storage?: DmeStorage,
+    pdsUrl: string = PDS_URL,
+  ): Promise<void> {
+    this.storageRef = storage ?? null;
+    this.pdsUrl = pdsUrl;
+    const session = this.createCredentialSession();
+    await session.login({ identifier, password });
+
+    this.session = session;
+    this.agentInstance = new Agent(session);
+  }
+
+  /**
+   * 从持久化存储恢复会话。
+   *
+   * @returns true 如果恢复成功
+   */
+  async restore(storage: DmeStorage): Promise<boolean> {
+    this.storageRef = storage;
+    const raw = await storage.getRaw(STORAGE_KEY);
+    if (!raw) return false;
+
+    try {
+      const stored = JSON.parse(raw) as StoredSession;
+      this.pdsUrl = stored.pdsUrl ?? PDS_URL;
+      const session = this.createCredentialSession();
+      await session.resumeSession({
+        did: stored.did,
+        handle: stored.handle,
+        accessJwt: stored.accessJwt,
+        refreshJwt: stored.refreshJwt,
+        active: stored.active,
+      });
+
+      this.session = session;
+      this.agentInstance = new Agent(session);
+      return true;
+    } catch {
+      await storage.deleteRaw(STORAGE_KEY);
+      return false;
+    }
+  }
+
+  /**
+   * 登出并清除持久化会话。
+   */
+  async logout(storage?: DmeStorage): Promise<void> {
+    if (this.session) {
+      try {
+        await this.session.logout();
+      } catch {
+        // 忽略网络错误，本地清除即可
+      }
+    }
+    this.session = null;
+    this.agentInstance = null;
+
+    const target = storage ?? this.storageRef;
+    if (target) {
+      await target.deleteRaw(STORAGE_KEY);
+    }
+    this.storageRef = null;
+  }
+
+  /** 已认证用户的 DID。 */
+  get did(): string {
+    if (!this.session?.did) {
+      throw new Error('DmeSession: not authenticated. Call login/restore first.');
+    }
+    return this.session.did;
+  }
+
+  /** 已认证用户的 handle，未登录时返回空字符串。 */
+  get handle(): string {
+    return this.session?.session?.handle ?? '';
+  }
+
+  /** @atproto/api Agent，用于 PDS 操作。 */
+  get agent(): Agent {
+    if (!this.agentInstance) {
+      throw new Error('DmeSession: not authenticated. Call login/restore first.');
+    }
+    return this.agentInstance;
+  }
+
+  /** 是否已登录。 */
+  get isAuthenticated(): boolean {
+    return this.session !== null;
+  }
+
+  setStorage(storage: DmeStorage): void {
+    this.storageRef = storage;
+  }
+
+  get sessionData(): AtpSessionData | null {
+    return this.session?.session ?? null;
+  }
+
+  /**
+   * 创建 CredentialSession 并注册 persistSession 回调。
+   *
+   * 回调在会话创建/刷新时自动写入存储，在过期/失败时清除存储，
+   * 保证 token 刷新后持久化的总是最新 token。
+   */
+  private createCredentialSession(): CredentialSession {
+    return new CredentialSession(
+      new URL(this.pdsUrl),
+      undefined,
+      (evt: AtpSessionEvent, session: AtpSessionData | undefined) =>
+        this.handlePersistSession(evt, session),
+    );
+  }
+
+  /**
+   * persistSession 回调：根据事件类型同步存储。
+   *
+   * - create / update: 写入最新会话
+   * - expired / create-failed / network-error: 清除存储
+   */
+  private async handlePersistSession(
+    evt: AtpSessionEvent,
+    session: AtpSessionData | undefined,
+  ): Promise<void> {
+    const storage = this.storageRef;
+    if (!storage) return;
+
+    if ((evt === 'create' || evt === 'update') && session) {
+      const stored: StoredSession = {
+        did: session.did,
+        handle: session.handle,
+        accessJwt: session.accessJwt,
+        refreshJwt: session.refreshJwt,
+        active: session.active,
+        pdsUrl: this.pdsUrl,
+      };
+      await storage.putRaw(STORAGE_KEY, JSON.stringify(stored));
+    } else if (evt === 'expired' || evt === 'create-failed') {
+      await storage.deleteRaw(STORAGE_KEY);
+    }
+    // 'network-error': 保留现有存储，下次恢复时重试
+  }
+}

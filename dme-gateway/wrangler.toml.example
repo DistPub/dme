@@ -1,0 +1,6 @@
+name = "dme-gateway"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[vars]
+DME_SERVER_URL = "http://localhost:8080"

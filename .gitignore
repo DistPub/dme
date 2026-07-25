@@ -1,0 +1,16 @@
+.DS_Store
+node_modules
+dist
+*.log
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+/dme-server/dme-server
+/dme-server/tmp
+/dme-server/*.db
+/dme-gateway/.wrangler
+/dme-gateway/wrangler.toml
+/.codegraph
+/.omo
+/dme-client/.expo

@@ -21,19 +21,13 @@ import { pickAndDecodeQR } from '../handshake/qr-decode';
 import { encryptMessage } from '../crypto/envelope';
 import type { HandshakePayload } from '../handshake/handshake';
 import { DidResolver } from '@atproto/identity';
+import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
-type RootStackParamList = {
-  Login: undefined;
-  Setup: undefined;
-  ChatList: undefined;
-  ChatView: { friendDid: string };
-  QrDisplay: undefined;
-  QrScan: undefined;
-};
+type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
 export function QrScanScreen(): React.JSX.Element {
   const app = useApp();
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<Navigation>();
 
   const [status, setStatus] = useState<'idle' | 'scanning' | 'confirm' | 'processing' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -43,12 +37,14 @@ export function QrScanScreen(): React.JSX.Element {
   const resolveHandle = async (did: string): Promise<string> => {
     try {
       const resolver = new DidResolver({});
-      const doc = await resolver.resolve(did) as any;
+      const doc = (await resolver.resolve(did)) as DidDocWithHandle | null;
       const aka = doc?.alsoKnownAs;
       if (Array.isArray(aka) && aka.length > 0) {
         return aka[0].replace(/^at:\/\//, '');
       }
-    } catch {}
+    } catch (err) {
+      console.error('Failed to resolve handle for', did, err);
+    }
     return did;
   };
 

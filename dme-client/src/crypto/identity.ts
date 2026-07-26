@@ -28,7 +28,7 @@ import { x25519PubToDidKey } from './did-key';
  * to share and is published in the DID document.
  */
 export interface IdentityKey {
-  /** X25519 private key (32 bytes). Never serialized to JSON. */
+  /** X25519 private key (32 bytes). Stored as base64 in AsyncStorage via serializeIdentityKey(). */
   privateKey: Uint8Array;
 
   /** X25519 public key (32 bytes). Safe to share. */

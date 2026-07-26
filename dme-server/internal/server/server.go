@@ -6,14 +6,16 @@ package server
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
-	"github.com/dme/dme-server/internal/store"
+	"dme/dme-server/internal/store"
 )
 
 // Server holds the store and HTTP handler.
 type Server struct {
 	store *store.Store
+	log   *slog.Logger
 }
 
 // New creates a Server with a BadgerDB-backed store.
@@ -22,7 +24,7 @@ func New(dbPath string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{store: st}, nil
+	return &Server{store: st, log: slog.Default()}, nil
 }
 
 // Handler returns the HTTP handler.
@@ -59,7 +61,9 @@ func (s *Server) Close() error {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+		s.log.Error("health: failed to encode response", "err", err)
+	}
 }
 
 type batchGetReq struct {
@@ -72,27 +76,33 @@ func (s *Server) handleBatchGet(w http.ResponseWriter, r *http.Request) {
 	var req batchGetReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		if encErr := json.NewEncoder(w).Encode(map[string]string{
 			"error":   "InvalidRequest",
 			"message": err.Error(),
-		})
+		}); encErr != nil {
+			s.log.Error("batchGet: failed to encode error response", "err", encErr)
+		}
 		return
 	}
 
 	envelopes, err := s.store.GetBatch(r.Context(), req.QueueIDs)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		if encErr := json.NewEncoder(w).Encode(map[string]string{
 			"error":   "StoreError",
 			"message": err.Error(),
-		})
+		}); encErr != nil {
+			s.log.Error("batchGet: failed to encode error response", "err", encErr)
+		}
 		return
 	}
 	if envelopes == nil {
 		envelopes = []store.Envelope{}
 	}
 
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"envelopes": envelopes,
-	})
+	}); err != nil {
+		s.log.Error("batchGet: failed to encode response", "err", err)
+	}
 }

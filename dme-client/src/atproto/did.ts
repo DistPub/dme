@@ -18,6 +18,7 @@ import type { Agent } from '@atproto/api';
 import { DidResolver } from '@atproto/identity';
 
 import { DME_ENCRYPTION_KEY_ID } from '../crypto/constants';
+import { PLC_DIRECTORY_URL } from '../config';
 import {
   multibaseToX25519Pub,
   x25519PubToDidKey,
@@ -144,7 +145,7 @@ export class DmeDidManager {
 
 async function resolveDidDocument(did: string): Promise<DidDocumentLike> {
   if (did.startsWith('did:plc:')) {
-    const resp = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
+    const resp = await fetch(`${PLC_DIRECTORY_URL}/${encodeURIComponent(did)}`);
     if (!resp.ok) {
       throw new Error(`DmeDidManager: PLC resolution failed: ${resp.status} ${resp.statusText}`);
     }

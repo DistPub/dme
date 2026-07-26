@@ -32,8 +32,8 @@ export function LoginScreen(): React.JSX.Element {
     if (!handle.trim() || !password.trim()) return;
     try {
       await app.login(handle.trim(), password.trim(), pdsUrl.trim() || PDS_URL);
-    } catch {
-      // Error is stored in app.error; UI can display it
+    } catch (err) {
+      console.error('Login failed:', err);
     }
   }, [app, handle, password, pdsUrl]);
 

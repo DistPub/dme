@@ -130,7 +130,6 @@ export class DmeStorage {
 
   async putMessage(msg: StoredMessage): Promise<void> {
     const friendDid = msg.fromDid === this.userDid ? msg.toDid : msg.fromDid;
-    console.log(`[STORAGE] putMessage: msg.fromDid=${msg.fromDid}, msg.toDid=${msg.toDid}, this.userDid=${this.userDid} -> friendDid=${friendDid}`);
     const key = this.prefix + `messages:${friendDid}`;
     const raw = await AsyncStorage.getItem(key);
     const messages: StoredMessage[] = raw ? JSON.parse(raw) : [];
@@ -162,9 +161,6 @@ export class DmeStorage {
       }
     }
     const result = [...friends].filter((did) => did !== this.userDid);
-    if (result.length === 0) {
-      console.log(`[STORAGE] listFriends: prefix=${this.prefix}, all keys=${keys.filter(k => k.startsWith(this.prefix))}`);
-    }
     return result;
   }
 

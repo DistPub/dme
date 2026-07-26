@@ -144,7 +144,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const newPoller = new DmePoller(newPds, correctStorage);
 
       newPoller.start(async (friendDid, plaintext, envelope) => {
-        console.log(`[POLLER] onMessage: friendDid=${friendDid}, userDid=${userDid}, queueId=${envelope.queueId}`);
         await correctStorage.putMessage({
           id: envelope.queueId,
           fromDid: friendDid,
@@ -153,7 +152,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           createdAt: envelope.createdAt,
           sent: false,
         });
-        console.log(`[POLLER] putMessage done: stored as messages:${friendDid === userDid ? friendDid + ' (SELF!)' : friendDid}`);
         setChatListVersion((v) => v + 1);
       });
 
@@ -326,23 +324,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (!pds) throw new Error('PDS not initialized');
 
       let ratchet = poller?.getRatchet(friendDid);
-      console.log(`[SEND] friendDid=${friendDid}, userDid=${session.did}, pollerRatchet=${!!ratchet}`);
       if (!ratchet) {
         const ratchetJson = await storage.getRatchet(friendDid);
         if (!ratchetJson) {
           throw new Error(`No ratchet found for ${friendDid}. Complete handshake first.`);
         }
         ratchet = DoubleRatchet.deserialize(ratchetJson);
-        console.log(`[SEND] fallback to storage ratchet, adding to poller`);
         poller?.addConversation(friendDid, ratchet);
       }
 
       const plaintextBytes = new TextEncoder().encode(plaintext);
       const envelope = encryptMessage(ratchet, plaintextBytes);
-      console.log(`[SEND] encrypted: queueId=${envelope.queueId}, canSend=${ratchet.canSend}`);
 
       await pds.createEnvelope(envelope);
-      console.log(`[SEND] createEnvelope done`);
       await storage.putRatchet(friendDid, ratchet.serialize());
       await storage.putMessage({
         id: envelope.queueId,
@@ -352,7 +346,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         createdAt: envelope.createdAt,
         sent: true,
       });
-      console.log(`[SEND] putMessage done: fromDid=${session.did}, toDid=${friendDid}`);
     },
     [session, storage, pds, poller],
   );
@@ -390,7 +383,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await storage.putRatchet(payload.aliceDid, result.ratchet.serialize());
       await storage.putActivationQueueId(payload.aliceDid, result.initialQueueId);
       poller.addConversation(payload.aliceDid, result.ratchet, result.initialQueueId);
-      poller.pollOnce().catch(console.error);
+      poller.pollOnce().catch((err) => console.error('pollOnce after acceptHandshake failed:', err));
       return { ratchet: result.ratchet, sharedSecret: result.sharedSecret };
     },
     [ensureIdentityKey, handshake, storage, poller],
@@ -426,8 +419,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           decryptMessage(ratchet, env);
           decrypted = true;
           break;
-        } catch {
-          // Not a valid ratchet message, skip
+        } catch (err) {
+          console.warn('checkPendingInvite: decrypt attempt failed for', bobDid, err);
         }
       }
       if (!decrypted) return;

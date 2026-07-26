@@ -26,15 +26,9 @@ import { SkiaButton } from './SkiaButton';
 import { useApp } from '../state/AppContext';
 import type { StoredMessage } from '../storage/db';
 import type { PendingInvite } from '../storage/db';
+import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
-type RootStackParamList = {
-  Login: undefined;
-  Setup: undefined;
-  ChatList: undefined;
-  ChatView: { friendDid: string };
-  QrDisplay: undefined;
-  QrScan: undefined;
-};
+type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
 interface ConversationRow {
   friendDid: string;
@@ -92,7 +86,7 @@ const SwipeableRow = React.memo(function SwipeableRow({
 
 export function ChatListScreen(): React.JSX.Element {
   const app = useApp();
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<Navigation>();
 
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,14 +97,16 @@ export function ChatListScreen(): React.JSX.Element {
     if (cached) return cached;
     try {
       const resolver = new DidResolver({});
-      const doc = await resolver.resolve(did) as any;
+      const doc = (await resolver.resolve(did)) as DidDocWithHandle | null;
       const aka = doc?.alsoKnownAs;
       if (Array.isArray(aka) && aka.length > 0) {
         const handle = aka[0].replace(/^at:\/\//, '');
         handleCacheRef.current[did] = handle;
         return handle;
       }
-    } catch {}
+    } catch (err) {
+      console.error('resolveHandle failed for', did, err);
+    }
     handleCacheRef.current[did] = did;
     return did;
   }, []);
@@ -164,11 +160,11 @@ export function ChatListScreen(): React.JSX.Element {
   }, [navigation]);
 
   const onCheckInvite = useCallback((bobDid: string) => {
-    app.checkPendingInvite(bobDid).catch(console.error);
+    app.checkPendingInvite(bobDid).catch((err) => console.error('checkPendingInvite failed:', err));
   }, [app]);
 
   const onDeleteInvite = useCallback((bobDid: string) => {
-    app.deletePendingInvite(bobDid).catch(console.error);
+    app.deletePendingInvite(bobDid).catch((err) => console.error('deletePendingInvite failed:', err));
   }, [app]);
 
   const renderInviteRow = useCallback(
@@ -275,7 +271,7 @@ export function ChatListScreen(): React.JSX.Element {
           />
           <SkiaButton
             label="Logout"
-            onPress={() => app.logout().catch(console.error)}
+            onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
             variant="secondary"
             style={styles.iconBtn}
           />

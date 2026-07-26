@@ -18,22 +18,15 @@ import { SkiaButton } from './SkiaButton';
 import { MessageBubble } from './MessageBubble';
 import { useApp } from '../state/AppContext';
 import type { StoredMessage } from '../storage/db';
-
-type RootStackParamList = {
-  Login: undefined;
-  Setup: undefined;
-  ChatList: undefined;
-  ChatView: { friendDid: string };
-  QrDisplay: undefined;
-  QrScan: undefined;
-};
+import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
+type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
 export function ChatViewScreen(): React.JSX.Element {
   const app = useApp();
   const route = useRoute<ChatViewRouteProp>();
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<Navigation>();
   const { friendDid } = route.params;
 
   const [messages, setMessages] = useState<StoredMessage[]>([]);
@@ -64,11 +57,13 @@ export function ChatViewScreen(): React.JSX.Element {
       try {
         const { DidResolver } = await import('@atproto/identity');
         const resolver = new DidResolver({});
-        const doc = await resolver.resolve(friendDid) as any;
+        const doc = (await resolver.resolve(friendDid)) as DidDocWithHandle | null;
         if (!cancelled && doc?.alsoKnownAs?.[0]) {
           setFriendHandle(doc.alsoKnownAs[0].replace(/^at:\/\//, ''));
         }
-      } catch {}
+      } catch (err) {
+        console.error('Failed to resolve handle for', friendDid, err);
+      }
     })();
     return () => { cancelled = true; };
   }, [friendDid]);

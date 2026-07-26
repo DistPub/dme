@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/dme/dme-server/internal/store"
+	"dme/dme-server/internal/store"
 )
 
 // Storer is the minimal store interface the consumer needs.

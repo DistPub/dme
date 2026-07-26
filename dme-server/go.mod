@@ -1,4 +1,4 @@
-module github.com/dme/dme-server
+module dme/dme-server
 
 go 1.22
 

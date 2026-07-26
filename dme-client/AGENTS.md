@@ -24,20 +24,20 @@ dme-client/
     ├── config.ts         # PDS_URL, DME_SERVER_URL, PLC_DIRECTORY_URL, 轮询间隔
     ├── crypto/           # 加密原语（见 crypto/AGENTS.md）
     ├── atproto/          # session.ts / pds.ts / did.ts
-    ├── handshake/        # handshake.ts / invite.ts / qr-encode.ts / qr-decode.ts / wait.ts
+    ├── handshake/        # handshake.ts / invite.ts / qr-encode.ts / qr-decode.ts
     ├── poll/poller.ts    # 5-15s 随机间隔轮询 + LRU 去重
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
     ├── state/AppContext.tsx  # 全局状态（11 字段，14 action）
     ├── protocol/         # types.ts + lexicons/ JSON
-    ├── ui/               # 11 个文件（6 屏幕 + 5 组件）
-    └── types/qrcode.d.ts
+    ├── ui/               # 10 个文件（6 屏幕 + 4 组件）
+    └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
 
 ## 快速定位
 
 | 任务 | 位置 |
 |---|---|
-| 添加新屏幕 | App.tsx `RootStackParamList` + `src/ui/` 新文件 |
+| 添加新屏幕 | `src/types/navigation.ts` 加路由 + `src/ui/` 新文件 |
 | 修改全局状态 | `src/state/AppContext.tsx` |
 | 改轮询逻辑 | `src/poll/poller.ts` |
 | 改存储 key | `src/storage/db.ts` |
@@ -66,9 +66,8 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList` 和 `?auto=1` 查询参数。
 - **主题**: `theme.ts` 单一 `as const` 对象，暗色（#0a0a0a），无切换
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 
-## 反模式（仅列出根 AGENTS.md 未覆盖项）
+## 注意事项
 
-- **`RootStackParamList` 重复**: 在 App.tsx + 5 个屏幕文件中各定义一份，未集中导出
-- **`.catch(console.error)`**: 6 处 fire-and-forget promise（AppContext:393, SetupScreen:206,216, ChatListScreen:167,171,278）
 - **无 Expo Router**: 用手动 `NavigationContainer` 而非文件路由，无 `app/` 目录
 - **MessageBubble 非 Skia**: 实际用原生 RN View/Text，非 Skia Canvas 渲染
+- **RootStackParamList**: 集中定义在 `src/types/navigation.ts`，App.tsx 和各屏幕从此 import

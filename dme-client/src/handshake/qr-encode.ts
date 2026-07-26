@@ -10,31 +10,10 @@
  */
 
 import type { HandshakePayload } from './handshake';
+import { bytesToBase64url } from '../crypto/utils';
 
-/**
- * Encode a HandshakePayload into a base64url string suitable for
- * embedding in a QR code.
- *
- * The payload is JSON-serialized then base64url-encoded. The QR code
- * contains this string directly.
- *
- * @param payload - The handshake payload to encode.
- * @returns base64url-encoded JSON string.
- */
 export function encodeHandshakeQR(payload: HandshakePayload): string {
   const json = JSON.stringify(payload);
   const bytes = new TextEncoder().encode(json);
   return bytesToBase64url(bytes);
-}
-
-// ---------------------------------------------------------------------------
-// Base64url helper
-// ---------------------------------------------------------------------------
-
-function bytesToBase64url(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

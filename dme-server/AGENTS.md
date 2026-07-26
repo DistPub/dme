@@ -14,7 +14,7 @@ Go AppView 服务。消费 Jetstream 事件存入 BadgerDB（7 天 TTL），暴�
 ```
 dme-server/
 ├── main.go                          # 入口：flag 解析 + goroutine 编排 + 优雅关闭
-├── go.mod                           # module github.com/dme/dme-server, go 1.22
+├── go.mod                           # module dme/dme-server, go 1.22
 └── internal/
     ├── config/config.go             # --addr --db --jetstream flag 解析
     ├── server/server.go             # HTTP ServeMux + CORS（2 端点）
@@ -70,11 +70,4 @@ dme-server/
 - **接口最小化**: `jetstream.Storer` 只声明 `Put()` 方法
 - **配置模式**: `Default()` 返回默认 -> `FromFlags()` 覆盖 -> `String()` 日志
 - **优雅关闭**: `signal.NotifyContext(SIGINT, SIGTERM)` -> `httpServer.Shutdown(10s)` -> `defer srv.Close()`
-
-## 反模式
-
-- **`_ =` 丢弃错误**: server.go 4 处 `_ = json.NewEncoder(w).Encode(...)`（行 62, 75, 85, 95）
-- **模块路径不可解析**: `github.com/dme/dme-server` 域名不存在，仅本地使用
-- **无 cursor**: Jetstream 消费者启动从最新事件开始，不回溯历史
-
-依赖: `dgraph-io/badger/v4` v4.3.0 + `coder/websocket` v1.8.12
+- **无 cursor**: Jetstream 消费者启动从最新事件开始消费，不回溯历史（刻意设计，消息有 7 天 TTL 兜底）

@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dme/dme-server/internal/config"
-	"github.com/dme/dme-server/internal/jetstream"
-	"github.com/dme/dme-server/internal/server"
+	"dme/dme-server/internal/config"
+	"dme/dme-server/internal/jetstream"
+	"dme/dme-server/internal/server"
 )
 
 func main() {

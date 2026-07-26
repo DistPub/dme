@@ -21,17 +21,12 @@ import { theme } from './theme';
 import { SkiaButton } from './SkiaButton';
 import { useApp } from '../state/AppContext';
 import { DmeDidManager } from '../atproto/did';
+import type { RootStackParamList } from '../types/navigation';
 
 function readWebQuery(key: string): string | null {
   if (Platform.OS !== 'web') return null;
   return new URLSearchParams(window.location.search).get(key);
 }
-
-type RootStackParamList = {
-  Login: undefined;
-  Setup: undefined;
-  ChatList: undefined;
-};
 
 interface SetupScreenProps {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Setup'>;
@@ -203,17 +198,17 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
             />
             <SkiaButton
               label="Back to Login"
-              onPress={() => app.logout().catch(console.error)}
-              variant="secondary"
-              style={styles.fullButton}
-            />
-          </>
+            onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
+            variant="secondary"
+            style={styles.fullButton}
+          />
+        </>
         )}
 
         {step !== 'checking' && step !== 'check_error' && (
           <SkiaButton
             label="Cancel"
-            onPress={() => app.logout().catch(console.error)}
+            onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
             variant="secondary"
             style={styles.fullButton}
           />

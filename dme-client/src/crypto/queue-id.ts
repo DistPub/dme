@@ -17,6 +17,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { concatBytes, utf8ToBytes } from '@noble/hashes/utils';
 
 import { QUEUEID_SALT } from './constants';
+import { bytesToHex } from './utils';
 
 /**
  * Encode a non-negative integer as a 4-byte little-endian Uint8Array.
@@ -61,17 +62,4 @@ export function deriveQueueId(
   );
   const hash = sha256(data);
   return bytesToHex(hash);
-}
-
-/**
- * Convert a Uint8Array to a lowercase hex string.
- * Local copy to avoid an extra import from @noble/hashes/utils when
- * only the hex encoding is needed.
- */
-function bytesToHex(bytes: Uint8Array): string {
-  let hex = '';
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i]!.toString(16).padStart(2, '0');
-  }
-  return hex;
 }

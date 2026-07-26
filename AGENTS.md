@@ -50,6 +50,7 @@ Bob 收消息:
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
 | 网关代理 | `dme-gateway/src/index.ts` |
+| 导航类型 | `dme-client/src/types/navigation.ts` |
 
 ## 关键代码符号
 
@@ -73,28 +74,11 @@ Bob 收消息:
 - **TypeScript**: `strict: true`（两个 TS 项目都是）
 - **Go**: 1.22，仅 2 个直接依赖（badger/v4 + coder/websocket），无框架
 - **加密库**: @noble/curves + @noble/hashes + @noble/ciphers（非 WebCrypto，因 Safari < 17 不支持 X25519）
-- **日志**: Go 用 `log/slog` JSON 输出；TS 用 `console.log`（生产代码中 37 处）
+- **日志**: Go 用 `log/slog` JSON 输出；TS 用 `console.error`/`console.warn`（仅错误和警告）
 - **错误处理**: Go 用 `fmt.Errorf("...: %w", err)` 包装；TS 用 `throw new Error("prefix: ...")`
 - **命名导出**: TS 统一 `export function/class`，无 default export（除 App.tsx 和 CF Worker）
 - **无测试/lint/格式化**: 三个系统均无测试框架、lint 配置、prettier
-
-## 反模式（禁止）
-
-- **`as any`**: 3 处在 UI 文件中解析 DID 文档（ChatListScreen:106, ChatViewScreen:67, QrScanScreen:46）— 应做类型收窄
-- **空 catch 块**: 8 处 `} catch {}` 静默吞错（ChatListScreen:113, ChatViewScreen:71, QrScanScreen:51 等）
-- **`_ =` 丢弃错误**: Go server.go 中 4 处 `_ = json.NewEncoder(w).Encode(...)`
-- **硬编码 URL**: `config.ts` 和 `did.ts` 中重复硬编码 `plc.directory`
-- **私钥明文存储**: X25519 私钥以 base64 存在 AsyncStorage，无 Secure Enclave
-- **`console.log` 泄露**: poller.ts 中 15 处 console.log 输出 queueId 和明文预览
-
-## 死代码
-
-| 文件 | 说明 |
-|---|---|
-| `src/handshake/wait.ts` | `waitForHandshake()` 0 处引用，实际用 30s 间隔轮询替代 |
-| `src/ui/TextInputOverlay.tsx` | 0 处引用，所有屏幕直接用 RN TextInput |
-| `@atproto/crypto` 依赖 | package.json 中有但源码无 import |
-| `qr` 依赖 | package.json 中有但源码无 import |
+- **私钥明文存储**: X25519 私钥以 base64 存在 AsyncStorage，无 Secure Enclave（@noble 库不支持 non-extractable key，已知限制）
 
 ## 命令
 
@@ -116,6 +100,5 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **Lexicon key**: 实际 JSON 文件中 `"key": "tid"`（AT Protocol 自动生成时间戳 rkey），非 `literal:self`
 - **Gateway IP 剥离**: 未显式实现 header 剥离，靠 CF 边缘 IP 隐式隔离（`proxy()` 只转发 body + Content-Type）
 - **Skia 渲染范围**: 仅 `SkiaButton` 和屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；`MessageBubble` 是原生 RN View/Text
-- **RootStackParamList**: 在 6 个文件中重复定义，未集中导出
-- **Go 模块路径**: `github.com/dme/dme-server` 不可外部解析，仅本地使用
+- **Go 模块路径**: `dme/dme-server`（本地路径，非 GitHub）
 - **dme.db/**: 运行时自动创建的 BadgerDB 数据目录，已 gitignored

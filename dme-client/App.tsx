@@ -32,15 +32,9 @@ import { ChatListScreen } from './src/ui/ChatListScreen';
 import { ChatViewScreen } from './src/ui/ChatViewScreen';
 import { QrDisplayScreen } from './src/ui/QrDisplayScreen';
 import { QrScanScreen } from './src/ui/QrScanScreen';
+import type { RootStackParamList } from './src/types/navigation';
 
-export type RootStackParamList = {
-  Login: undefined;
-  Setup: undefined;
-  ChatList: undefined;
-  ChatView: { friendDid: string };
-  QrDisplay: undefined;
-  QrScan: undefined;
-};
+export type { RootStackParamList };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();

@@ -26,7 +26,8 @@ export async function checkBobDmeStatus(
 ): Promise<BobStatus> {
   try {
     await didManager.getRemoteEncryptionKey(bobDid);
-  } catch {
+  } catch (err) {
+    console.error('checkBobDmeStatus: Bob has no DME key, treating as not_registered:', err);
     return 'not_registered';
   }
 

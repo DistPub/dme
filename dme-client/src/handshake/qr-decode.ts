@@ -19,6 +19,7 @@ import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
 import jsQR from 'jsqr';
 
 import type { HandshakePayload } from './handshake';
+import { base64urlToBytes } from '../crypto/utils';
 
 /**
  * 打开图库选图，识别 QR 码，返回握手 payload。
@@ -116,19 +117,4 @@ export function decodeHandshakeQR(data: string): HandshakePayload {
   }
 
   return payload;
-}
-
-// ---------------------------------------------------------------------------
-// Base64url helper
-// ---------------------------------------------------------------------------
-
-function base64urlToBytes(str: string): Uint8Array {
-  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }

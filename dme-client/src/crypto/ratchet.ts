@@ -37,6 +37,7 @@ import {
   KEY_LENGTH,
   MKSKIPPED_MAX,
 } from './constants';
+import { bytesToHex } from './utils';
 import { deriveQueueId } from './queue-id';
 
 /**
@@ -174,18 +175,6 @@ function b64ToBytes(b64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
-}
-
-/**
- * Convert a Uint8Array to a lowercase hex string. Local copy (same as
- * queue-id.ts) for skippedKeys cache keys: `${hex(dhPub)}:${messageNum}`.
- */
-function bytesToHex(bytes: Uint8Array): string {
-  let hex = '';
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i]!.toString(16).padStart(2, '0');
-  }
-  return hex;
 }
 
 /**

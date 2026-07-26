@@ -58,10 +58,5 @@ Double Ratchet + X25519 加密模块。6 个文件，~1100 行。使用 @noble �
 - **`as const`**: 常量文件中所有字符串常量
 - **interface**: 用 `interface` 而非 `type`，`Serialized*` 模式用于 JSON 适配
 - **序列化**: `serialize()`/`deserialize()` 将 Uint8Array 转 base64 存 AsyncStorage
-
-## 反模式
-
-- **私钥明文存储**: `dhSelfPriv` 和身份私钥以 base64 存在 AsyncStorage，无 Secure Enclave
-- **非恒定时间比较**: `bytesEqual`（ratchet.ts:191）用于 DH 公钥比较，非密钥材料 - 安全但需注意
-- **`identity.ts:31` 注释矛盾**: 声称 `privateKey` "Never serialized to JSON"，但 `serializeIdentityKey()` 确实做了
-- **工具函数重复**: `bytesToHex` 在 queue-id.ts 和 ratchet.ts 各一份；`bytesToBase64url` 在 envelope.ts 和 handshake.ts 各一份
+- **私钥明文存储**: `dhSelfPriv` 和身份私钥以 base64 存在 AsyncStorage，无 Secure Enclave（@noble 库不支持 non-extractable key，已知限制）
+- **非恒定时间比较**: `bytesEqual`（ratchet.ts）用于 DH 公钥比较，非密钥材料，安全但非恒定时间

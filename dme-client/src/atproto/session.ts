@@ -86,7 +86,8 @@ export class DmeSession {
       this.session = session;
       this.agentInstance = new Agent(session);
       return true;
-    } catch {
+    } catch (err) {
+      console.error('DmeSession: restore failed, clearing stored session:', err);
       await storage.deleteRaw(STORAGE_KEY);
       return false;
     }
@@ -99,8 +100,8 @@ export class DmeSession {
     if (this.session) {
       try {
         await this.session.logout();
-      } catch {
-        // 忽略网络错误，本地清除即可
+      } catch (err) {
+        console.error('DmeSession: logout network error (ignored):', err);
       }
     }
     this.session = null;

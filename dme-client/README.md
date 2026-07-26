@@ -1,21 +1,5 @@
 # dme-client
 
-TypeScript Web App for DME.
+DME 移动端客户端，支持 iOS、Android 和网页。
 
-## 模块
-
-- `src/crypto/identity.ts` — 身份密钥生成（WebCrypto），DID 公钥声明
-- `src/crypto/ratchet.ts` — Double Ratchet 加密状态机
-- `src/atproto/session.ts` — atproto OAuth 登录 + 会话管理
-- `src/atproto/pds.ts` — PDS 记录创建（dme.queue.envelope）
-- `src/atproto/firehose.ts` — 大洪水订阅（监听握手包裹）
-- `src/poll/poller.ts` — 定时轮询，OHTTP 盲化请求
-- `src/handshake/qr.ts` — 加密二维码生成/扫描
-- `src/ui/` — 聊天界面
-
-## 开发
-
-```bash
-bun install
-bun run dev
-```
+用户通过 Bluesky 账号登录，生成加密身份密钥并声明到 DID 文档，然后通过扫码与对方完成握手建立加密会话。可发送和接收端到端加密私信，消息本地解密后存储在设备上。

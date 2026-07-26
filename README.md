@@ -1,12 +1,11 @@
 # DME (Decentralized Message Envelope)
 
-基于 AT Protocol 的端到端加密私信协议。三个独立系统，各自独立构建部署：
+基于 Bluesky (AT Protocol) 的端到端加密私信系统。
 
-```
-dme/
-├── dme-client/     Expo App - 身份、加解密、握手、轮询
-├── dme-server/     Go 服务 - AppView，订阅 firehose + KV 暂存 + 批量盲查
-└── dme-gateway/    Cloudflare Worker - OHTTP 盲化代理
-```
+用户用 Bluesky 账号登录，通过扫码握手与对方建立加密会话，消息加密后写入 Bluesky PDS，经服务端索引后由收件人轮询拉取并本地解密。
 
-各系统独立管理依赖，无共享配置。详见各子目录 README。
+三个独立系统：
+
+- **dme-client** — 手机/网页客户端，负责身份管理、加解密、握手和收发消息
+- **dme-server** — 服务端，实时监听 Bluesky 上的加密消息并暂存，供客户端批量查询
+- **dme-gateway** — 网关代理，隐藏客户端真实 IP 后转发请求到服务端

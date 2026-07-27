@@ -1,28 +1,41 @@
 /**
- * atproto/did.ts - DID document reading and writing.
+ * atproto/did.ts - DID document reading and writing for MLS dual keys.
  *
- * Manages the DME encryption key published in the user's did:plc DID
- * document. Handshake partners discover each other's X25519 public key
- * through this document without a separate key server.
+ * Publishes both Ed25519 (#dme_signing) and X25519 (#dme_encryption)
+ * public keys to the user's did:plc DID document via PLC operations.
+ * Handshake partners discover each other's keys through this document
+ * without a separate key server.
  *
- * Reading: getRemoteEncryptionKey resolves a DID and decodes the
- *   #dme_encryption verificationMethod's publicKeyMultibase (standard
- *   X25519 multicodec multibase).
+ *   #dme_encryption (X25519)  -> KeyPackage QR encryption
+ *   #dme_signing   (Ed25519)  -> MLS credential signature verification
  *
- * Writing: declareEncryptionKey signs a PLC operation through the PDS
- *   (com.atproto.identity.signPlcOperation + submitPlcOperation), adding
- *   the #dme_encryption verificationMethod as a did:key URI.
+ * Reading: getRemoteEncryptionKey / getRemoteSigningKey resolve a DID
+ *   and decode the corresponding verificationMethod's publicKeyMultibase
+ *   through the did-key.ts encode/decode helpers.
+ *
+ * Writing: declareKeys signs a PLC operation through the PDS
+ *   (com.atproto.identity.signPlcOperation + submitPlcOperation),
+ *   adding both verificationMethods as did:key URIs.
  */
 
-import type { Agent } from '@atproto/api';
+import { Agent } from '@atproto/api';
 import { DidResolver } from '@atproto/identity';
 
-import { DME_ENCRYPTION_KEY_ID } from '../crypto/constants';
 import { PLC_DIRECTORY_URL } from '../config';
 import {
-  multibaseToX25519Pub,
-  x25519PubToDidKey,
+  decodeEd25519DidKey,
+  decodeX25519DidKey,
+  encodeEd25519DidKey,
+  encodeX25519DidKey,
 } from '../crypto/did-key';
+import {
+  DME_ENCRYPTION_KEY_ID,
+  DME_SIGNING_KEY_ID,
+  type IdentityKeys,
+} from '../crypto/identity';
+
+/** DID_KEY_PREFIX prepended to multibase values from PLC documents. */
+const DID_KEY_PREFIX = 'did:key:';
 
 /**
  * A verificationMethod entry in a DID document.
@@ -43,114 +56,150 @@ interface DidDocumentLike {
 }
 
 /**
- * Manages reading and writing the DME encryption key in DID documents.
+ * Declare both DME keys (Ed25519 signing + X25519 encryption) in the
+ * user's own did:plc DID document by signing and submitting a PLC
+ * operation through the PDS.
+ *
+ * Flow:
+ *   1. getRecommendedDidCredentials() - fetch current DID fields
+ *   2. Merge both keys (as did:key URIs) into verificationMethods
+ *      under the "dme_encryption" and "dme_signing" fragments
+ *   3. signPlcOperation() - PDS signs the update
+ *   4. submitPlcOperation() - publish the signed operation to PLC
+ *
+ * @param did      - The user's own DID (must match the session's DID).
+ * @param keys     - Dual identity keys (Ed25519 signing + X25519 encryption).
+ * @param agent    - Authenticated Agent.
+ * @param plcToken - PLC operation token (emailed to the user via requestPlcSignature).
+ * @throws if PLC submission fails.
  */
-export class DmeDidManager {
-  private readonly didResolver: DidResolver;
-
-  constructor() {
-    this.didResolver = new DidResolver({});
-  }
-
-  /**
-   * Read a remote user's DME encryption public key from their DID document.
-   *
-   * @param did - The remote user's DID (e.g., "did:plc:abc123...").
-   * @returns 32-byte X25519 public key.
-   * @throws if the DID cannot be resolved or has no #dme_encryption key.
-   */
-  async getRemoteEncryptionKey(did: string): Promise<Uint8Array> {
-    const doc = await resolveDidDocument(did);
-
-    if (!doc || !doc.verificationMethod) {
-      throw new Error(`DmeDidManager: DID ${did} has no verificationMethod entries`);
-    }
-
-    const dmeKey = doc.verificationMethod.find(
-      (vm) => vm.id.endsWith(DME_ENCRYPTION_KEY_ID),
+export async function declareKeys(
+  did: string,
+  keys: IdentityKeys,
+  agent: Agent,
+  plcToken: string,
+): Promise<void> {
+  const agentDid = agent.assertDid;
+  if (agentDid !== did) {
+    throw new Error(
+      `declareKeys: agent DID ${agentDid} does not match expected ${did}`,
     );
-
-    if (!dmeKey) {
-      throw new Error(
-        `DmeDidManager: DID ${did} has no ${DME_ENCRYPTION_KEY_ID} verificationMethod`,
-      );
-    }
-
-    if (!dmeKey.publicKeyMultibase) {
-      throw new Error(
-        `DmeDidManager: ${DME_ENCRYPTION_KEY_ID} for ${did} has no publicKeyMultibase`,
-      );
-    }
-
-    return multibaseToX25519Pub(dmeKey.publicKeyMultibase);
   }
 
-  /**
-   * Declare the DME encryption public key in the user's own did:plc
-   * DID document by signing and submitting a PLC operation through the
-   * PDS.
-   *
-   * Flow:
-   *   1. getRecommendedDidCredentials() - fetch current DID fields
-   *      (rotationKeys, alsoKnownAs, verificationMethods, services)
-   *   2. Merge the DME encryption key (as a did:key URI) into
-   *      verificationMethods under the "dme_encryption" fragment
-   *   3. signPlcOperation() - PDS signs the update with a rotation key
-   *      using the token from requestPlcOperationSignature
-   *   4. submitPlcOperation() - publish the signed operation to PLC
-   *
-   * @param pubKey   - The 32-byte X25519 public key to declare.
-   * @param agent    - Authenticated @atproto/api Agent.
-   * @param plcToken - Token from requestPlcOperationSignature (emailed
-   *                   to the user). Required for signPlcOperation.
-   */
-  async declareEncryptionKey(
-    pubKey: Uint8Array,
-    agent: Agent,
-    plcToken: string,
-  ): Promise<void> {
-    const creds = await agent.com.atproto.identity.getRecommendedDidCredentials();
+  const creds = await agent.com.atproto.identity.getRecommendedDidCredentials();
 
-    const fragment = DME_ENCRYPTION_KEY_ID.slice(1);
-    const verificationMethods = {
-      ...creds.data.verificationMethods,
-      [fragment]: x25519PubToDidKey(pubKey),
-    };
+  const encFragment = DME_ENCRYPTION_KEY_ID.slice(1);
+  const sigFragment = DME_SIGNING_KEY_ID.slice(1);
+  const verificationMethods = {
+    ...creds.data.verificationMethods,
+    [encFragment]: encodeX25519DidKey(keys.encryption.publicKey),
+    [sigFragment]: encodeEd25519DidKey(keys.signing.publicKey),
+  };
 
-    const signed = await agent.com.atproto.identity.signPlcOperation({
-      token: plcToken,
-      verificationMethods,
-      rotationKeys: creds.data.rotationKeys,
-      alsoKnownAs: creds.data.alsoKnownAs,
-      services: creds.data.services,
-    });
+  const signed = await agent.com.atproto.identity.signPlcOperation({
+    token: plcToken,
+    verificationMethods,
+    rotationKeys: creds.data.rotationKeys,
+    alsoKnownAs: creds.data.alsoKnownAs,
+    services: creds.data.services,
+  });
 
-    await agent.com.atproto.identity.submitPlcOperation({
-      operation: signed.data.operation,
-    });
-  }
-
-  /**
-   * Request a PLC operation signature token be emailed to the user.
-   *
-   * The user receives a token and enters it into declareEncryptionKey.
-   * Call this before declareEncryptionKey.
-   *
-   * @param agent - Authenticated @atproto/api Agent.
-   */
-  static async requestPlcSignature(agent: Agent): Promise<void> {
-    await agent.com.atproto.identity.requestPlcOperationSignature();
-  }
+  await agent.com.atproto.identity.submitPlcOperation({
+    operation: signed.data.operation,
+  });
 }
 
-async function resolveDidDocument(did: string): Promise<DidDocumentLike> {
+/**
+ * Read a remote user's DME X25519 encryption public key from their
+ * DID document's #dme_encryption verificationMethod.
+ *
+ * @param did - The remote user's DID (e.g., "did:plc:abc123...").
+ * @returns 32-byte X25519 public key, or null if not declared.
+ * @throws if DID resolution fails (network error, invalid DID, etc.).
+ */
+export async function getRemoteEncryptionKey(
+  did: string,
+): Promise<Uint8Array | null> {
+  const vm = await findVerificationMethod(did, DME_ENCRYPTION_KEY_ID);
+  if (!vm?.publicKeyMultibase) return null;
+  return decodeX25519DidKey(`${DID_KEY_PREFIX}${vm.publicKeyMultibase}`);
+}
+
+/**
+ * Read a remote user's DME Ed25519 signing public key from their
+ * DID document's #dme_signing verificationMethod.
+ *
+ * @param did - The remote user's DID (e.g., "did:plc:abc123...").
+ * @returns 32-byte Ed25519 public key, or null if not declared.
+ * @throws if DID resolution fails (network error, invalid DID, etc.).
+ */
+export async function getRemoteSigningKey(
+  did: string,
+): Promise<Uint8Array | null> {
+  const vm = await findVerificationMethod(did, DME_SIGNING_KEY_ID);
+  if (!vm?.publicKeyMultibase) return null;
+  return decodeEd25519DidKey(`${DID_KEY_PREFIX}${vm.publicKeyMultibase}`);
+}
+
+/**
+ * Request a PLC operation signature token be emailed to the user.
+ * Call this before declareKeys if token-based signing is needed.
+ *
+ * @param agent - Authenticated Agent.
+ */
+export async function requestPlcSignature(
+  agent: Agent,
+): Promise<void> {
+  await agent.com.atproto.identity.requestPlcOperationSignature();
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a DID document and find a verificationMethod by fragment.
+ *
+ * @param did      - The DID to resolve.
+ * @param fragment - The verificationMethod fragment (e.g., "#dme_encryption").
+ * @returns The matching DidVerificationMethod, or null if not found.
+ * @throws if DID resolution fails.
+ */
+async function findVerificationMethod(
+  did: string,
+  fragment: string,
+): Promise<DidVerificationMethod | null> {
+  const doc = await resolveDidDocument(did);
+  if (!doc?.verificationMethod) return null;
+  return (
+    doc.verificationMethod.find((vm) => vm.id.endsWith(fragment)) ?? null
+  );
+}
+
+/**
+ * Resolve a DID to its document.
+ *
+ * did:plc DIDs are fetched directly from the PLC directory; all others
+ * fall through to @atproto/identity's DidResolver.
+ *
+ * @param did - The DID to resolve.
+ * @returns The DID document, or null if not found.
+ * @throws if PLC resolution returns a non-OK response.
+ */
+async function resolveDidDocument(
+  did: string,
+): Promise<DidDocumentLike | null> {
   if (did.startsWith('did:plc:')) {
-    const resp = await fetch(`${PLC_DIRECTORY_URL}/${encodeURIComponent(did)}`);
+    const resp = await fetch(
+      `${PLC_DIRECTORY_URL}/${encodeURIComponent(did)}`,
+    );
     if (!resp.ok) {
-      throw new Error(`DmeDidManager: PLC resolution failed: ${resp.status} ${resp.statusText}`);
+      throw new Error(
+        `did: PLC resolution failed: ${resp.status} ${resp.statusText}`,
+      );
     }
     return (await resp.json()) as DidDocumentLike;
   }
   const resolver = new DidResolver({});
-  return (await resolver.resolve(did)) as DidDocumentLike;
+  return (await resolver.resolve(did)) as DidDocumentLike | null;
 }

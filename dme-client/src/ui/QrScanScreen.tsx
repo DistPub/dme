@@ -1,5 +1,5 @@
 /**
- * ui/QrScanScreen.tsx - Scan QR from gallery and accept handshake.
+ * ui/QrScanScreen.tsx - Scan QR from gallery and accept invite (MLS).
  *
  * All content uses flexbox layout. Canvas only renders background.
  */
@@ -13,26 +13,28 @@ import {
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as ImagePicker from 'expo-image-picker';
+import jsQR from 'jsqr';
 
 import { theme } from './theme';
 import { SkiaButton } from './SkiaButton';
 import { useApp } from '../state/AppContext';
-import { pickAndDecodeQR } from '../handshake/qr-decode';
-import { encryptMessage } from '../crypto/envelope';
-import type { HandshakePayload } from '../handshake/handshake';
+import { decodeQrPayload } from '../handshake/qr-encode';
 import { DidResolver } from '@atproto/identity';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
+type Status = 'idle' | 'scanning' | 'confirm' | 'processing' | 'error';
+
 export function QrScanScreen(): React.JSX.Element {
   const app = useApp();
   const navigation = useNavigation<Navigation>();
 
-  const [status, setStatus] = useState<'idle' | 'scanning' | 'confirm' | 'processing' | 'error'>('idle');
+  const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [aliceHandle, setAliceHandle] = useState('');
-  const [pendingPayload, setPendingPayload] = useState<HandshakePayload | null>(null);
+  const [aliceHandle, setAliceHandle] = useState<string>('');
+  const [qrString, setQrString] = useState<string | null>(null);
 
   const resolveHandle = async (did: string): Promise<string> => {
     try {
@@ -43,9 +45,43 @@ export function QrScanScreen(): React.JSX.Element {
         return aka[0].replace(/^at:\/\//, '');
       }
     } catch (err) {
-      console.error('Failed to resolve handle for', did, err);
+      console.error('QrScan: resolveHandle failed for', did, err);
     }
     return did;
+  };
+
+  const pickQrString = async (): Promise<string | null> => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+    });
+
+    if (result.canceled || !result.assets[0]) {
+      return null;
+    }
+
+    const asset = result.assets[0];
+    const uri = asset.uri;
+
+    // Decode image via canvas to get RGBA pixel data for jsQR
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = uri;
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Failed to load image'));
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    const code = jsQR(imageData.data, canvas.width, canvas.height);
+    return code?.data ?? null;
   };
 
   const onScan = useCallback(async (): Promise<void> => {
@@ -53,15 +89,16 @@ export function QrScanScreen(): React.JSX.Element {
     setError(null);
 
     try {
-      const payload = await pickAndDecodeQR();
-      if (!payload) {
+      const decoded = await pickQrString();
+      if (!decoded) {
         setStatus('idle');
         return;
       }
 
+      const payload = decodeQrPayload(decoded);
       const handle = await resolveHandle(payload.aliceDid);
       setAliceHandle(handle);
-      setPendingPayload(payload);
+      setQrString(decoded);
       setStatus('confirm');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to scan QR';
@@ -72,30 +109,19 @@ export function QrScanScreen(): React.JSX.Element {
   }, []);
 
   const onAccept = useCallback(async (): Promise<void> => {
-    if (!pendingPayload) return;
+    if (!qrString) return;
     setStatus('processing');
 
     try {
-      const { ratchet } = await app.acceptHandshake(pendingPayload);
-
-      const ackEnvelope = encryptMessage(
-        ratchet,
-        new TextEncoder().encode('ACK'),
-      );
-      if (!app.pds) {
-        throw new Error('PDS not initialized');
-      }
-      await app.pds.createEnvelope(ackEnvelope);
-      await app.storage!.putRatchet(pendingPayload.aliceDid, ratchet.serialize());
-
+      await app.acceptInviteQr(qrString);
       navigation.goBack();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to accept handshake';
+      const msg = err instanceof Error ? err.message : 'Failed to accept invite';
       console.error('[QrScan] accept error:', msg, err);
       setError(msg);
       setStatus('error');
     }
-  }, [app, navigation, pendingPayload]);
+  }, [app, navigation, qrString]);
 
   return (
     <View style={styles.container}>
@@ -111,7 +137,7 @@ export function QrScanScreen(): React.JSX.Element {
         )}
 
         {status === 'processing' && (
-          <Text style={styles.statusText}>Accepting handshake...</Text>
+          <Text style={styles.statusText}>Accepting invite...</Text>
         )}
 
         {status === 'confirm' && (
@@ -147,7 +173,7 @@ export function QrScanScreen(): React.JSX.Element {
             <SkiaButton
               label="Decline"
               onPress={() => {
-                setPendingPayload(null);
+                setQrString(null);
                 setAliceHandle('');
                 setStatus('idle');
               }}

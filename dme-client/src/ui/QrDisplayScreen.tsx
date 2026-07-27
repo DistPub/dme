@@ -19,7 +19,6 @@ import QRCode from 'react-native-qrcode-skia';
 import { theme } from './theme';
 import { SkiaButton } from './SkiaButton';
 import { useApp } from '../state/AppContext';
-import { DmeDidManager } from '../atproto/did';
 import {
   checkBobDmeStatus,
   generateQrPngBytes,
@@ -28,8 +27,6 @@ import {
   createDmeInvitePost,
 } from '../handshake/invite';
 import type { BobStatus } from '../handshake/invite';
-import type { PendingInvite } from '../storage/db';
-import { encodeHandshakeQR } from '../handshake/qr-encode';
 
 type RootStackParamList = {
   Login: undefined;
@@ -57,7 +54,6 @@ export function QrDisplayScreen(): React.JSX.Element {
   const [qrValue, setQrValue] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const pendingRef = useRef<{ queueId1: string } | null>(null);
   const submittedRef = useRef(false);
 
   const onCheckBob = useCallback(async (): Promise<void> => {
@@ -72,8 +68,7 @@ export function QrDisplayScreen(): React.JSX.Element {
       });
       const resolvedDid = result.data.did;
 
-      const manager = new DmeDidManager();
-      const status = await checkBobDmeStatus(manager, app.storage, resolvedDid);
+      const status = await checkBobDmeStatus(app.storage, resolvedDid);
       setBobDid(resolvedDid);
       setBobHandle(trimmed);
       setBobStatus(status);
@@ -82,10 +77,8 @@ export function QrDisplayScreen(): React.JSX.Element {
         setPostText(generateInvitePostText(trimmed));
         setPhase('preview');
       } else if (status === 'registered_not_friend') {
-        const payload = await app.startHandshake(resolvedDid);
-        pendingRef.current = { queueId1: payload.queueId1 };
-        const encoded = encodeHandshakeQR(payload);
-        setQrValue(encoded);
+        const { qrString } = await app.generateInviteQr(resolvedDid);
+        setQrValue(qrString);
         setPostText(generateAddFriendPostText(trimmed));
         setPhase('preview');
       } else {
@@ -95,7 +88,7 @@ export function QrDisplayScreen(): React.JSX.Element {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to check Bob\'s status');
       setPhase('error');
     }
-  }, [handle, app]);
+  }, [handle, app.session, app.storage, app.generateInviteQr]);
 
   const onPublish = useCallback(async (): Promise<void> => {
     if (!app.session || phase !== 'preview') return;
@@ -106,19 +99,7 @@ export function QrDisplayScreen(): React.JSX.Element {
         ? generateQrPngBytes(qrValue)
         : null;
 
-      const postResult = await createDmeInvitePost(app.session.agent, postText, qrBytes);
-
-      if (bobStatus === 'registered_not_friend' && pendingRef.current) {
-        const invite: PendingInvite = {
-          bobDid,
-          bobHandle,
-          queueId1: pendingRef.current.queueId1,
-          postUri: postResult.uri,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-        };
-        await app.addPendingInvite(invite);
-      }
+      await createDmeInvitePost(app.session.agent, postText, qrBytes);
 
       setPhase('published');
       setTimeout(() => navigation.goBack(), 1500);
@@ -126,7 +107,7 @@ export function QrDisplayScreen(): React.JSX.Element {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to publish invite');
       setPhase('error');
     }
-  }, [phase, bobStatus, qrValue, postText, bobDid, bobHandle, app, navigation]);
+  }, [phase, bobStatus, qrValue, postText, app, navigation]);
 
   const onCancel = useCallback((): void => {
     navigation.goBack();
@@ -140,7 +121,6 @@ export function QrDisplayScreen(): React.JSX.Element {
     setPostText('');
     setErrorMsg('');
     setBobStatus(null);
-    pendingRef.current = null;
   }, []);
 
   const onGoToChat = useCallback((): void => {

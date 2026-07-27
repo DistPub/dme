@@ -1,64 +1,103 @@
 /**
- * poll/poller.ts - 定时轮询接收消息。
+ * poll/poller.ts - MLS message polling.
  *
- * 对每个对话伙伴，根据 ratchet 状态计算下一个 QueueID，批量查询 gateway。
- * Gateway 剥离客户端 IP 后转发到 dme-server。
+ * Two polling modes:
+ *   1. Welcome polling - poll for pending incoming MLS Welcome messages
+ *      using queueIds stored in PendingWelcome entries (derived from
+ *      KeyPackage initKeys via deriveWelcomeQueueId at creation time).
+ *   2. Message polling - poll for application messages and commits in
+ *      established MLS groups, deriving queueIds from the MLS exporter
+ *      secret + sender leaf index + expected generation.
  *
- * 决策 Q3 消息去重：
- *   主：ratchet 推进后旧 chain key 销毁，重复解密天然失败。
- *   兜底：QueueID LRU 集合（1000 条 / ~64KB）存 AsyncStorage，
- *         崩溃恢复时防止重复展示。
+ * Blind-lookup architecture preserved: the server sees only opaque queueIds.
  *
- * 轮询间隔随机化（5-15 分钟），避免流量模式分析。
+ * Dedup: QueueID LRU set in AsyncStorage prevents duplicate display after
+ * crash recovery (primary dedup is MLS generation advancement).
  */
 
-import type { DmeEnvelope } from '../protocol/index';
-
-import type { DoubleRatchet } from '../crypto/ratchet';
-import { decryptMessage } from '../crypto/envelope';
+import type { DmeEnvelope } from '../protocol/types';
 import type { DmePds } from '../atproto/pds';
-import type { DmeStorage } from '../storage/db';
-import { POLL_MAX_INTERVAL_MS, POLL_MIN_INTERVAL_MS } from '../crypto/constants';
+import type { DmeStorage, PendingWelcome } from '../storage/db';
+import type { MlsSession } from '../crypto/mls-session';
+import { deriveMessageQueueId } from '../crypto/mls-queue-id';
+import { getMlsImpl } from '../crypto/mls-config';
+import { base64urlToBytes } from '../crypto/utils';
 
-export type OnMessageCallback = (
-  friendDid: string,
-  plaintext: string,
-  envelope: DmeEnvelope,
-) => void | Promise<void>;
+/** Minimum polling interval in ms (randomized to avoid traffic analysis). */
+const POLL_MIN_INTERVAL_MS = 5_000;
+/** Maximum polling interval in ms. */
+const POLL_MAX_INTERVAL_MS = 15_000;
 
-interface TrackedConversation {
-  friendDid: string;
-  ratchet: DoubleRatchet;
-  initialQueueId?: string;
-}
+export type IncomingMessage = {
+  groupId: string;
+  senderDid: string;
+  plaintext: string;
+  envelope: DmeEnvelope;
+};
+
+export type IncomingWelcome = {
+  queueId: string;
+  /** Raw MLS Welcome wire bytes (decoded from envelope.payload base64url). */
+  welcomeBytes: Uint8Array;
+};
+
+export type OnMessageCallback = (msg: IncomingMessage) => Promise<void>;
+export type OnWelcomeCallback = (welcome: IncomingWelcome) => Promise<void>;
+
+type QueueContext =
+  | {
+      type: 'message';
+      groupId: string;
+      senderLeafIndex: number;
+      senderDid: string;
+      generation: number;
+    }
+  | { type: 'welcome'; queueId: string };
 
 export class DmePoller {
-  private conversations: Map<string, TrackedConversation> = new Map();
   private readonly pds: DmePds;
   private readonly storage: DmeStorage;
+  private readonly sessions: Map<string, MlsSession> = new Map();
+  private readonly pendingWelcomes: Map<string, PendingWelcome> = new Map();
   private onMessage: OnMessageCallback | null = null;
+  private onWelcome: OnWelcomeCallback | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private batchSize = 3;
 
-  constructor(pds: DmePds, storage: DmeStorage) {
+  constructor(pds: DmePds, storage: DmeStorage, batchSize = 3) {
     this.pds = pds;
     this.storage = storage;
+    this.batchSize = batchSize;
   }
 
-  addConversation(friendDid: string, ratchet: DoubleRatchet, initialQueueId?: string): void {
-    this.conversations.set(friendDid, { friendDid, ratchet, initialQueueId });
+  setBatchSize(size: number): void {
+    this.batchSize = Math.max(1, Math.min(20, size));
   }
 
-  removeConversation(friendDid: string): void {
-    this.conversations.delete(friendDid);
+  addSession(groupId: string, session: MlsSession): void {
+    this.sessions.set(groupId, session);
   }
 
-  getRatchet(friendDid: string): DoubleRatchet | null {
-    return this.conversations.get(friendDid)?.ratchet ?? null;
+  removeSession(groupId: string): void {
+    this.sessions.delete(groupId);
   }
 
-  start(onMessage: OnMessageCallback): void {
+  getSession(groupId: string): MlsSession | null {
+    return this.sessions.get(groupId) ?? null;
+  }
+
+  addPendingWelcome(entry: PendingWelcome): void {
+    this.pendingWelcomes.set(entry.queueId, entry);
+  }
+
+  removePendingWelcome(queueId: string): void {
+    this.pendingWelcomes.delete(queueId);
+  }
+
+  start(onMessage: OnMessageCallback, onWelcome: OnWelcomeCallback): void {
     this.onMessage = onMessage;
+    this.onWelcome = onWelcome;
     this.running = true;
     this.scheduleNextPoll(0);
   }
@@ -70,35 +109,69 @@ export class DmePoller {
       this.timer = null;
     }
     this.onMessage = null;
+    this.onWelcome = null;
   }
 
   async pollOnce(): Promise<void> {
-    if (this.conversations.size === 0) {
-      return;
-    }
-
-    const queueIdToFriend = new Map<string, string>();
     const allQueueIds: string[] = [];
+    const queueIdToContext = new Map<string, QueueContext>();
 
-    for (const conv of this.conversations.values()) {
+    const impl = await getMlsImpl();
+
+    // 1. Collect queueIds for active MLS conversations.
+    //    memberDids[i] has LeafIndex i (NOT tree position i*2).
+    //    senderLeafIndex from MlsSession is also a LeafIndex.
+    //    secretTree and deriveMessageQueueId both use LeafIndex.
+    for (const [groupId, session] of this.sessions) {
       try {
-        let queueId: string;
-        if (!conv.ratchet.isRecvReady && conv.initialQueueId) {
-          queueId = conv.initialQueueId;
-        } else {
-          queueId = conv.ratchet.nextRecvQueueId();
+        const exporterSecret = session.getExporterSecret();
+        const memberDids = session.getMemberDids();
+        const ownLeafIndex = session.getSenderLeafIndex();
+
+        const allGens = memberDids.map((_, i) => session.getExpectedGeneration(i));
+        console.log('DmePoller: group', groupId, 'ownLeafIndex', ownLeafIndex, 'allGens', allGens);
+
+        for (let i = 0; i < memberDids.length; i++) {
+          if (i === ownLeafIndex) continue;
+          const senderDid = memberDids[i];
+          if (!senderDid) continue;
+
+          const baseGen = session.getExpectedGeneration(i);
+          for (let g = 0; g < this.batchSize; g++) {
+            const generation = baseGen + g;
+            const queueId = await deriveMessageQueueId(
+              exporterSecret,
+              i,
+              generation,
+              impl,
+            );
+            console.log('DmePoller: batch queueId', queueId, 'for leafIndex', i, 'gen', generation);
+            allQueueIds.push(queueId);
+            queueIdToContext.set(queueId, {
+              type: 'message',
+              groupId,
+              senderLeafIndex: i,
+              senderDid,
+              generation,
+            });
+          }
         }
-        queueIdToFriend.set(queueId, conv.friendDid);
-        allQueueIds.push(queueId);
       } catch (err) {
-        console.error('DmePoller: ratchet not ready for', conv.friendDid, err);
+        console.error('DmePoller: failed to derive queueIds for group', groupId, err);
       }
     }
 
-    if (allQueueIds.length === 0) {
-      return;
+    // 2. Collect queueIds for pending Welcomes.
+    for (const queueId of this.pendingWelcomes.keys()) {
+      allQueueIds.push(queueId);
+      queueIdToContext.set(queueId, { type: 'welcome', queueId });
     }
 
+    if (allQueueIds.length === 0) return;
+
+    console.log('DmePoller: polling', allQueueIds.length, 'queueIds');
+
+    // 3. Batch query PDS (server sees only opaque queueIds).
     let envelopes: DmeEnvelope[];
     try {
       envelopes = await this.pds.batchGetEnvelopes(allQueueIds);
@@ -107,37 +180,72 @@ export class DmePoller {
       return;
     }
 
-      // 处理返回的 envelopes
-      for (const env of envelopes) {
-        const friendDid = queueIdToFriend.get(env.queueId);
-        if (!friendDid) {
-          continue;
-        }
+    console.log('DmePoller: got', envelopes.length, 'envelopes');
 
-        const conv = this.conversations.get(friendDid);
-        if (!conv) continue;
+    // 4. Sort message envelopes by (sender, generation) to ensure in-order
+    //    processing within the same sender. Out-of-order decryption breaks
+    //    the MLS secret tree key chain.
+    envelopes.sort((a, b) => {
+      const ctxA = queueIdToContext.get(a.queueId);
+      const ctxB = queueIdToContext.get(b.queueId);
+      if (ctxA?.type === 'message' && ctxB?.type === 'message') {
+        const s = ctxA.senderLeafIndex - ctxB.senderLeafIndex;
+        if (s !== 0) return s;
+        return ctxA.generation - ctxB.generation;
+      }
+      if (ctxA?.type === 'message') return -1;
+      if (ctxB?.type === 'message') return 1;
+      return 0;
+    });
 
-        // 去重检查
-        const alreadyProcessed = await this.storage.isQueueIdProcessed(env.queueId);
-        if (alreadyProcessed) {
-          continue;
-        }
+    // 5. Process results.
+    for (const env of envelopes) {
+      const ctx = queueIdToContext.get(env.queueId);
+      if (!ctx) continue;
 
-        // 尝试解密
-        try {
-          const plaintextBytes = decryptMessage(conv.ratchet, env);
-          const plaintext = new TextDecoder().decode(plaintextBytes);
+      if (await this.storage.isQueueIdProcessed(env.queueId)) {
+        console.log('DmePoller: skipping already-processed queueId', env.queueId);
+        continue;
+      }
 
-          if (this.onMessage) {
-            await this.onMessage(friendDid, plaintext, env);
+      try {
+        if (ctx.type === 'welcome') {
+          const welcomeBytes = base64urlToBytes(env.payload);
+          if (this.onWelcome) {
+            await this.onWelcome({ queueId: ctx.queueId, welcomeBytes });
+          }
+        } else {
+          const session = this.sessions.get(ctx.groupId);
+          if (!session) {
+            console.log('DmePoller: no session for group', ctx.groupId);
+            continue;
           }
 
-          await this.storage.markQueueIdProcessed(env.queueId);
-          await this.storage.putRatchet(friendDid, conv.ratchet.serialize());
-        } catch (err) {
-          console.error('DmePoller: decrypt failed for', friendDid, err);
+          const ciphertext = base64urlToBytes(env.payload);
+          const result = await session.decrypt(ciphertext);
+
+          console.log('DmePoller: decrypt done, plaintext=' + !!result.plaintext + ' isCommit=' + result.isCommit);
+
+          if (result.plaintext && this.onMessage) {
+            await this.onMessage({
+              groupId: ctx.groupId,
+              senderDid: ctx.senderDid,
+              plaintext: new TextDecoder().decode(result.plaintext),
+              envelope: env,
+            });
+          }
+
+          const genBefore = session.getExpectedGeneration(ctx.senderLeafIndex);
+          await this.storage.putMlsSession(ctx.groupId, session.serialize());
+          const genAfter = session.getExpectedGeneration(ctx.senderLeafIndex);
+          console.log('DmePoller: gen before save=' + genBefore + ' after save=' + genAfter);
         }
+
+        await this.storage.markQueueIdProcessed(env.queueId);
+      } catch (err) {
+        console.error('DmePoller: process failed for', env.queueId, err);
       }
+    }
   }
 
   private scheduleNextPoll(delayMs: number): void {
@@ -149,7 +257,6 @@ export class DmePoller {
       } catch (err) {
         console.error('DmePoller: poll cycle error:', err);
       }
-
       const nextDelay = randomInterval(POLL_MIN_INTERVAL_MS, POLL_MAX_INTERVAL_MS);
       this.scheduleNextPoll(nextDelay);
     }, delayMs);

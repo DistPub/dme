@@ -4,23 +4,22 @@
  * Flow:
  *   1. Check if identity key exists and is declared on DID.
  *   2. If already declared -> skip to ChatList.
- *   3. Generate key (if missing).
- *   4. "Publish to DID" -> requestPlcSignature.
- *   5. TextInput for email token.
- *   6. declareEncryptionKey -> navigate to ChatList.
+ *   3. "Publish to DID" -> requestPlcSignature (emails token).
+ *   4. Enter PLC token -> declareKeys(plcToken).
+ *   5. navigate to ChatList.
  *
  * All content uses flexbox layout.
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, StyleSheet, Text, View, TextInput } from 'react-native';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
 import { SkiaButton } from './SkiaButton';
 import { useApp } from '../state/AppContext';
-import { DmeDidManager } from '../atproto/did';
+import { getRemoteEncryptionKey, requestPlcSignature } from '../atproto/did';
 import type { RootStackParamList } from '../types/navigation';
 
 function readWebQuery(key: string): string | null {
@@ -40,14 +39,17 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
   const [plcToken, setPlcToken] = useState('');
 
   const checkKey = useCallback(async (signal: { cancelled: boolean }): Promise<void> => {
-    if (!app.session || !app.identityKey) return;
+    if (!app.session || !app.identityKeys) return;
 
-    const manager = new DmeDidManager();
     try {
-      const remoteKey = await manager.getRemoteEncryptionKey(app.session.did);
-      const localKey = app.identityKey.publicKey;
+      const remoteKey = await getRemoteEncryptionKey(app.session.did);
+      if (!remoteKey) {
+        if (!signal.cancelled) setStep('publish');
+        return;
+      }
+      const localKey = app.identityKeys.encryption.publicKey;
       const matches = remoteKey.length === localKey.length &&
-        remoteKey.every((b, i) => b === localKey[i]);
+        remoteKey.every((b: number, i: number) => b === localKey[i]);
       if (!signal.cancelled) {
         if (matches) {
           setStep('done');
@@ -59,14 +61,10 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
     } catch (err) {
       if (signal.cancelled) return;
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('DmeDidManager:')) {
-        setStep('publish');
-      } else {
-        setError(msg);
-        setStep('check_error');
-      }
+      setError(msg);
+      setStep('check_error');
     }
-  }, [app.session, app.identityKey, navigation]);
+  }, [app.session, app.identityKeys, navigation]);
 
   useEffect(() => {
     const signal = { cancelled: false };
@@ -78,57 +76,43 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
     if (!app.session) return;
     setError(null);
     try {
-      await DmeDidManager.requestPlcSignature(app.session.agent);
+      await requestPlcSignature(app.session.agent);
       setStep('token');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to request PLC signature');
     }
   }, [app.session]);
 
-  const autoPublishRan = useRef(false);
-  const autoPublish = readWebQuery('autoPublish') === '1';
-  useEffect(() => {
-    if (autoPublish && !autoPublishRan.current && step === 'publish' && app.session) {
-      autoPublishRan.current = true;
-      requestSignature();
-    }
-  }, [autoPublish, step, app.session, requestSignature]);
-
-  const declareKey = useCallback(async (): Promise<void> => {
-    if (!plcToken.trim()) return;
+  const declareKeys = useCallback(async (token: string): Promise<void> => {
     setError(null);
     setStep('declaring');
 
     try {
-      await app.declareKey(plcToken.trim());
+      await app.declareKeys(token.trim());
       setStep('done');
       navigation.replace('ChatList');
     } catch (err) {
       setStep('token');
-      setError(err instanceof Error ? err.message : 'Failed to declare encryption key');
+      setError(err instanceof Error ? err.message : 'Failed to declare keys');
     }
-  }, [app, plcToken, navigation]);
+  }, [app, navigation]);
 
-  const autoDeclareRan = useRef(false);
-  const pendingAutoDeclare = useRef(false);
+  // Auto-publish: request signature, then if urlToken provided, auto-declare
+  const autoPublishRan = useRef(false);
+  const autoPublish = readWebQuery('autoPublish') === '1';
   const urlToken = readWebQuery('token');
   useEffect(() => {
-    if (urlToken && !autoDeclareRan.current && (step === 'token' || step === 'publish')) {
-      autoDeclareRan.current = true;
-      if (step === 'publish') {
-        setStep('token');
+    if (autoPublish && !autoPublishRan.current && step === 'publish' && app.session) {
+      autoPublishRan.current = true;
+      if (urlToken) {
+        // Token provided via URL, skip email step
+        declareKeys(urlToken);
+      } else {
+        // Request signature email
+        requestSignature();
       }
-      pendingAutoDeclare.current = true;
-      setPlcToken(urlToken);
     }
-  }, [urlToken, step]);
-
-  useEffect(() => {
-    if (pendingAutoDeclare.current && plcToken && step === 'token') {
-      pendingAutoDeclare.current = false;
-      declareKey();
-    }
-  }, [plcToken, step, declareKey]);
+  }, [autoPublish, urlToken, step, app.session, declareKeys, requestSignature]);
 
   return (
     <View style={styles.container}>
@@ -154,20 +138,21 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
 
         {step === 'token' && (
           <>
+            <Text style={styles.statusText}>
+              Enter the PLC token sent to your email:
+            </Text>
             <TextInput
               style={styles.input}
               value={plcToken}
               onChangeText={setPlcToken}
-              placeholder="Enter PLC email token"
-              placeholderTextColor={theme.colors.placeholder}
+              placeholder="PLC token"
+              placeholderTextColor={theme.colors.textSecondary}
               autoCapitalize="none"
               autoCorrect={false}
-              onSubmitEditing={declareKey}
-              returnKeyType="send"
             />
             <SkiaButton
-              label="Confirm"
-              onPress={declareKey}
+              label="Declare Keys"
+              onPress={() => declareKeys(plcToken)}
               variant="primary"
               style={styles.fullButton}
             />
@@ -175,12 +160,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
         )}
 
         {step === 'declaring' && (
-          <TextInput
-            style={styles.input}
-            value="Declaring key..."
-            onChangeText={() => {}}
-            editable={false}
-          />
+          <Text style={styles.statusText}>Declaring keys...</Text>
         )}
 
         {step === 'check_error' && (
@@ -198,17 +178,17 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
             />
             <SkiaButton
               label="Back to Login"
-            onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
-            variant="secondary"
-            style={styles.fullButton}
-          />
-        </>
+              onPress={() => app.logout().catch((err: unknown) => console.error('Logout failed:', err))}
+              variant="secondary"
+              style={styles.fullButton}
+            />
+          </>
         )}
 
-        {step !== 'checking' && step !== 'check_error' && (
+        {step !== 'checking' && step !== 'check_error' && step !== 'declaring' && (
           <SkiaButton
             label="Cancel"
-            onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
+            onPress={() => app.logout().catch((err: unknown) => console.error('Logout failed:', err))}
             variant="secondary"
             style={styles.fullButton}
           />

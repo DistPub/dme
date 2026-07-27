@@ -7,6 +7,7 @@ export type RootStackParamList = {
   ChatView: { friendDid: string };
   QrDisplay: undefined;
   QrScan: undefined;
+  Settings: undefined;
 };
 
 /** DID 文档中用于 handle 解析的最小结构。 */

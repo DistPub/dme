@@ -1,120 +1,123 @@
 /**
- * crypto/identity.ts - X25519 identity key management.
+ * crypto/identity.ts - Ed25519 + X25519 identity key management.
  *
- * Each DME user has a long-term X25519 key pair. The public key is
- * published in the user's did:plc DID document under a
- * `#dme_encryption` verificationMethod so that handshake partners can
- * discover it without a separate key server.
+ * Each DME user has two long-term key pairs:
+ *   - Ed25519 signing key  -> MLS credential signature + DID #dme_signing
+ *   - X25519 encryption key -> KeyPackage QR encryption + DID #dme_encryption
  *
- * Why @noble/curves instead of WebCrypto?
- *   WebCrypto does not support X25519 in all browsers (Safari < 17,
- *   older Firefox). @noble/curves is a pure-JS, audited, zero-dependency
- *   implementation that works everywhere.
+ * Both are published in the DID document. The signing key authenticates
+ * MLS credentials; the encryption key encrypts KeyPackages in QR codes.
  *
- * The private key is stored in AsyncStorage (via DmeStorage) because
- * WebCrypto's non-extractable key mechanism is unavailable for X25519
- * in @noble. The key is stored as raw bytes.
+ * Private keys are stored as base64 in AsyncStorage (via DmeStorage)
+ * because @noble does not support non-extractable keys.
  */
 
-import { x25519 } from '@noble/curves/ed25519';
+import { ed25519, x25519 } from '@noble/curves/ed25519';
 
-import { DME_ENCRYPTION_KEY_ID } from './constants';
-import { x25519PubToDidKey } from './did-key';
+/** DID verificationMethod fragment for the X25519 encryption key. */
+export const DME_ENCRYPTION_KEY_ID = '#dme_encryption' as const;
 
-/**
- * An X25519 identity key pair.
- *
- * The private key must never leave the device. The public key is safe
- * to share and is published in the DID document.
- */
-export interface IdentityKey {
-  /** X25519 private key (32 bytes). Stored as base64 in AsyncStorage via serializeIdentityKey(). */
+/** DID verificationMethod fragment for the Ed25519 signing key. */
+export const DME_SIGNING_KEY_ID = '#dme_signing' as const;
+
+/** A single key pair (private + public). */
+interface KeyPair {
   privateKey: Uint8Array;
-
-  /** X25519 public key (32 bytes). Safe to share. */
   publicKey: Uint8Array;
+}
 
-  /** DID verificationMethod id fragment, always "#dme_encryption". */
-  didKeyId: string;
+/** Dual identity keys: Ed25519 for signing, X25519 for encryption. */
+export interface IdentityKeys {
+  /** Ed25519 signing keypair (MLS credentials, DID #dme_signing). */
+  signing: KeyPair;
+  /** X25519 encryption keypair (KeyPackage QR, DID #dme_encryption). */
+  encryption: KeyPair;
+}
+
+/** JSON-safe representation of IdentityKeys for AsyncStorage. */
+interface SerializedIdentityKeys {
+  signing: { privateKey: string; publicKey: string };
+  encryption: { privateKey: string; publicKey: string };
+}
+
+function bytesToB64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  return btoa(binary);
+}
+
+function b64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /**
- * Serialized form of an IdentityKey for AsyncStorage storage.
- * Uint8Arrays are converted to arrays of numbers for JSON compatibility.
- */
-export interface SerializedIdentityKey {
-  /** Private key bytes as number array. */
-  privateKey: number[];
-  /** Public key bytes as number array. */
-  publicKey: number[];
-  /** DID verificationMethod id fragment. */
-  didKeyId: string;
-}
-
-/**
- * Generate a new X25519 identity key pair.
+ * Generate a new dual identity (Ed25519 signing + X25519 encryption).
  *
- * Uses `x25519.utils.randomPrivateKey()` which internally calls
- * `crypto.getRandomValues()` for cryptographically secure randomness.
- *
- * @returns A new IdentityKey with a random private key.
+ * @returns New IdentityKeys with random private keys.
  */
-export function generateIdentityKey(): IdentityKey {
-  const privateKey = x25519.utils.randomPrivateKey();
-  const publicKey = x25519.getPublicKey(privateKey);
+export function generateIdentityKeys(): IdentityKeys {
+  const signingPriv = ed25519.utils.randomPrivateKey();
+  const signingPub = ed25519.getPublicKey(signingPriv);
+  const encPriv = x25519.utils.randomPrivateKey();
+  const encPub = x25519.getPublicKey(encPriv);
   return {
-    privateKey,
-    publicKey,
-    didKeyId: DME_ENCRYPTION_KEY_ID,
+    signing: { privateKey: signingPriv, publicKey: signingPub },
+    encryption: { privateKey: encPriv, publicKey: encPub },
   };
 }
 
 /**
- * Export the public key as a did:key URI for inclusion in a DID
- * document's verificationMethods map.
+ * Serialize IdentityKeys to a JSON string for AsyncStorage.
  *
- * Uses standard X25519 multicodec (varint [0xec, 0x01]) + base58btc
- * multibase encoding, so the value round-trips through @atproto/identity
- * DID resolution into a verificationMethod's publicKeyMultibase field.
+ * Uint8Arrays are stored as base64 strings.
  *
- * @param key - The identity key pair.
- * @returns did:key URI, e.g. `did:key:z6LSphwcdxk3...`.
+ * @param keys - The identity key pairs.
+ * @returns JSON string.
  */
-export function exportPublicKeyForDid(key: IdentityKey): string {
-  return x25519PubToDidKey(key.publicKey);
+export function exportIdentityKeys(keys: IdentityKeys): string {
+  const serialized: SerializedIdentityKeys = {
+    signing: {
+      privateKey: bytesToB64(keys.signing.privateKey),
+      publicKey: bytesToB64(keys.signing.publicKey),
+    },
+    encryption: {
+      privateKey: bytesToB64(keys.encryption.privateKey),
+      publicKey: bytesToB64(keys.encryption.publicKey),
+    },
+  };
+  return JSON.stringify(serialized);
 }
 
 /**
- * Import a previously stored identity key from its serialized form.
+ * Deserialize IdentityKeys from a JSON string.
  *
- * @param stored - The serialized key from AsyncStorage.
- * @returns The reconstructed IdentityKey.
+ * @param serialized - JSON string from exportIdentityKeys().
+ * @returns Reconstructed IdentityKeys.
  */
-export function importIdentityKey(stored: SerializedIdentityKey): IdentityKey {
+export function importIdentityKeys(serialized: string): IdentityKeys {
+  const s = JSON.parse(serialized) as SerializedIdentityKeys;
   return {
-    privateKey: Uint8Array.from(stored.privateKey),
-    publicKey: Uint8Array.from(stored.publicKey),
-    didKeyId: stored.didKeyId,
+    signing: {
+      privateKey: b64ToBytes(s.signing.privateKey),
+      publicKey: b64ToBytes(s.signing.publicKey),
+    },
+    encryption: {
+      privateKey: b64ToBytes(s.encryption.privateKey),
+      publicKey: b64ToBytes(s.encryption.publicKey),
+    },
   };
 }
 
 /**
- * Serialize an IdentityKey for AsyncStorage storage.
- *
- * @param key - The identity key pair.
- * @returns JSON-safe serialized form.
- */
-export function serializeIdentityKey(key: IdentityKey): SerializedIdentityKey {
-  return {
-    privateKey: Array.from(key.privateKey),
-    publicKey: Array.from(key.publicKey),
-    didKeyId: key.didKeyId,
-  };
-}
-
-/**
- * Compute the X25519 shared secret between a private key and a
- * remote public key. Used during the X3DH handshake.
+ * Compute the X25519 shared secret between a private key and a remote
+ * public key. Used for KeyPackage encryption in QR handshake.
  *
  * @param ourPrivateKey - Our X25519 private key (32 bytes).
  * @param theirPublicKey - Their X25519 public key (32 bytes).

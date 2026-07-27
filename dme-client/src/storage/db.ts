@@ -2,21 +2,19 @@
  * storage/db.ts - AsyncStorage 持久化层。
  *
  * 存储所有客户端长期状态：
- *   1. 身份密钥对（X25519，每用户一份）
- *   2. Double Ratchet 状态（每个对话一份）
+ *   1. 身份密钥对（Ed25519 + X25519，每用户一份）
+ *   2. MLS group session 状态（每个对话一份）
  *   3. 消息历史（解密后的明文 + 元数据）
  *   4. QueueID LRU 集合（去重，~1000 条 / ~64KB）
- *   5. 会话数据（accessJwt / refreshJwt）
+ *   5. KeyPackage 池（本地未使用的 KeyPackage 列表）
+ *   6. Pending Welcome 记录（等待接收 Welcome 的邀请）
  *
  * 所有数据以 DID 为前缀命名空间，切换账号互不干扰。
- *
- * QueueID LRU 实现 Q3 决策：ratchet 推进天然去重（旧 chain key 销毁），
- * 崩溃恢复时用 LRU 集合兜底。
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { IdentityKey } from '../crypto/identity';
+import type { IdentityKeys } from '../crypto/identity';
 
 /** 存储的消息记录。 */
 export interface StoredMessage {
@@ -28,17 +26,26 @@ export interface StoredMessage {
   sent: boolean;
 }
 
-/** 好友申请记录。 */
-export interface PendingInvite {
-  bobDid: string;
-  bobHandle: string;
-  queueId1: string;
-  postUri: string;
-  status: 'pending' | 'accepted' | 'failed';
+/** 等待接收 Welcome 的记录。 */
+export interface PendingWelcome {
+  queueId: string;
+  groupId: string;
+  keyPackageSerialized: string;
   createdAt: string;
 }
 
+/** 本地 KeyPackage 池条目。 */
+export interface KeyPackagePoolEntry {
+  id: string;
+  publicPackageSerialized: string;
+  privatePackageSerialized: string;
+  createdAt: string;
+  consumed: boolean;
+}
+
 const QUEUEID_LRU_MAX = 1000;
+
+const KEY_PACKAGE_POOL_KEY = 'keyPackagePool';
 
 /**
  * AsyncStorage 封装，所有 key 以 `dme:<did>:` 为前缀。
@@ -72,10 +79,10 @@ export class DmeStorage {
   // 身份密钥
   // -----------------------------------------------------------------------
 
-  async putIdentityKey(key: IdentityKey): Promise<void> {
+  async putIdentityKeys(keys: IdentityKeys): Promise<void> {
     await AsyncStorage.setItem(
       this.prefix + 'identity',
-      JSON.stringify(key, (k, v) => {
+      JSON.stringify(keys, (k, v) => {
         // Uint8Array -> base64
         if (v instanceof Uint8Array) {
           return { __type: 'Uint8Array', data: bytesToBase64(v) };
@@ -85,7 +92,7 @@ export class DmeStorage {
     );
   }
 
-  async getIdentityKey(): Promise<IdentityKey | null> {
+  async getIdentityKeys(): Promise<IdentityKeys | null> {
     const raw = await AsyncStorage.getItem(this.prefix + 'identity');
     if (!raw) return null;
     return JSON.parse(raw, (k, v) => {
@@ -93,35 +100,23 @@ export class DmeStorage {
         return base64ToBytes(v.data);
       }
       return v;
-    }) as IdentityKey;
+    }) as IdentityKeys;
   }
 
   // -----------------------------------------------------------------------
-  // Ratchet 状态
+  // MLS Session 状态
   // -----------------------------------------------------------------------
 
-  async putRatchet(friendDid: string, serialized: string): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + `ratchet:${friendDid}`, serialized);
+  async putMlsSession(groupId: string, serialized: string): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + `mlsSession:${groupId}`, serialized);
   }
 
-  async getRatchet(friendDid: string): Promise<string | null> {
-    return AsyncStorage.getItem(this.prefix + `ratchet:${friendDid}`);
+  async getMlsSession(groupId: string): Promise<string | null> {
+    return AsyncStorage.getItem(this.prefix + `mlsSession:${groupId}`);
   }
 
-  async deleteRatchet(friendDid: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `ratchet:${friendDid}`);
-  }
-
-  async putActivationQueueId(friendDid: string, queueId: string): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + `activationQueueId:${friendDid}`, queueId);
-  }
-
-  async getActivationQueueId(friendDid: string): Promise<string | null> {
-    return AsyncStorage.getItem(this.prefix + `activationQueueId:${friendDid}`);
-  }
-
-  async deleteActivationQueueId(friendDid: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `activationQueueId:${friendDid}`);
+  async deleteMlsSession(groupId: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + `mlsSession:${groupId}`);
   }
 
   // -----------------------------------------------------------------------
@@ -137,30 +132,30 @@ export class DmeStorage {
     await AsyncStorage.setItem(key, JSON.stringify(messages));
   }
 
-  async getMessages(friendDid: string): Promise<StoredMessage[]> {
-    const raw = await AsyncStorage.getItem(this.prefix + `messages:${friendDid}`);
+  async getMessages(groupId: string): Promise<StoredMessage[]> {
+    const raw = await AsyncStorage.getItem(this.prefix + `messages:${groupId}`);
     if (!raw) return [];
     const messages = JSON.parse(raw) as StoredMessage[];
-    return messages.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return messages;
   }
 
-  async deleteMessages(friendDid: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `messages:${friendDid}`);
+  async deleteMessages(groupId: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + `messages:${groupId}`);
   }
 
-  async listFriends(): Promise<string[]> {
+  async listGroups(): Promise<string[]> {
     const keys = await AsyncStorage.getAllKeys();
     const msgPrefix = this.prefix + 'messages:';
-    const ratchetPrefix = this.prefix + 'ratchet:';
-    const friends = new Set<string>();
+    const mlsSessionPrefix = this.prefix + 'mlsSession:';
+    const groups = new Set<string>();
     for (const k of keys) {
       if (k.startsWith(msgPrefix)) {
-        friends.add(k.slice(msgPrefix.length));
-      } else if (k.startsWith(ratchetPrefix)) {
-        friends.add(k.slice(ratchetPrefix.length));
+        groups.add(k.slice(msgPrefix.length));
+      } else if (k.startsWith(mlsSessionPrefix)) {
+        groups.add(k.slice(mlsSessionPrefix.length));
       }
     }
-    const result = [...friends].filter((did) => did !== this.userDid);
+    const result = [...groups].filter((did) => did !== this.userDid);
     return result;
   }
 
@@ -199,28 +194,83 @@ export class DmeStorage {
   }
 
   // -----------------------------------------------------------------------
-  // 好友申请记录
+  // KeyPackage 池
   // -----------------------------------------------------------------------
 
-  async putPendingInvite(invite: PendingInvite): Promise<void> {
-    const key = this.prefix + `pendingInvite:${invite.bobDid}`;
-    await AsyncStorage.setItem(key, JSON.stringify(invite));
+  async putKeyPackagePool(entries: KeyPackagePoolEntry[]): Promise<void> {
+    await AsyncStorage.setItem(
+      this.prefix + KEY_PACKAGE_POOL_KEY,
+      JSON.stringify(entries),
+    );
   }
 
-  async getPendingInvites(): Promise<PendingInvite[]> {
+  async getKeyPackagePool(): Promise<KeyPackagePoolEntry[]> {
+    const raw = await AsyncStorage.getItem(this.prefix + KEY_PACKAGE_POOL_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as KeyPackagePoolEntry[];
+  }
+
+  async addKeyPackageToPool(entry: KeyPackagePoolEntry): Promise<void> {
+    const pool = await this.getKeyPackagePool();
+    pool.push(entry);
+    await this.putKeyPackagePool(pool);
+  }
+
+  async markKeyPackageConsumed(id: string): Promise<void> {
+    const pool = await this.getKeyPackagePool();
+    const updated = pool.map((entry) =>
+      entry.id === id ? { ...entry, consumed: true } : entry,
+    );
+    await this.putKeyPackagePool(updated);
+  }
+
+  async removeKeyPackageFromPool(id: string): Promise<void> {
+    const pool = await this.getKeyPackagePool();
+    const filtered = pool.filter((entry) => entry.id !== id);
+    await this.putKeyPackagePool(filtered);
+  }
+
+  // -----------------------------------------------------------------------
+  // Pending Welcome 记录
+  // -----------------------------------------------------------------------
+
+  async putPendingWelcome(entry: PendingWelcome): Promise<void> {
+    const key = this.prefix + `pendingWelcome:${entry.queueId}`;
+    await AsyncStorage.setItem(key, JSON.stringify(entry));
+  }
+
+  async getPendingWelcomes(): Promise<PendingWelcome[]> {
     const keys = await AsyncStorage.getAllKeys();
-    const prefix = this.prefix + 'pendingInvite:';
-    const inviteKeys = keys.filter((k) => k.startsWith(prefix));
-    const results: PendingInvite[] = [];
-    for (const k of inviteKeys) {
+    const prefix = this.prefix + 'pendingWelcome:';
+    const welcomeKeys = keys.filter((k) => k.startsWith(prefix));
+    const results: PendingWelcome[] = [];
+    for (const k of welcomeKeys) {
       const raw = await AsyncStorage.getItem(k);
-      if (raw) results.push(JSON.parse(raw) as PendingInvite);
+      if (raw) results.push(JSON.parse(raw) as PendingWelcome);
     }
     return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  async deletePendingInvite(bobDid: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `pendingInvite:${bobDid}`);
+  async deletePendingWelcome(queueId: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + `pendingWelcome:${queueId}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // 设置
+  // -----------------------------------------------------------------------
+
+  private readonly POLL_BATCH_SIZE_KEY = 'pollBatchSize';
+
+  async getPollBatchSize(): Promise<number> {
+    const raw = await AsyncStorage.getItem(this.prefix + this.POLL_BATCH_SIZE_KEY);
+    if (!raw) return 3;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 1 && n <= 20 ? n : 3;
+  }
+
+  async setPollBatchSize(size: number): Promise<void> {
+    const clamped = Math.max(1, Math.min(20, size));
+    await AsyncStorage.setItem(this.prefix + this.POLL_BATCH_SIZE_KEY, String(clamped));
   }
 
   // -----------------------------------------------------------------------

@@ -48,7 +48,7 @@ export class DmePds {
         queueId: env.queueId,
         payload: env.payload,
         createdAt: env.createdAt,
-        ratchetEpoch: env.ratchetEpoch,
+        ...(env.messageType ? { messageType: env.messageType } : {}),
       },
     });
 

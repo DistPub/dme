@@ -1,17 +1,20 @@
 /**
- * handshake/invite.ts - 邀请流程逻辑。
+ * handshake/invite.ts - 邀请流程逻辑（MLS 版本）。
  *
  * 三种情况:
- *   1. Bob 没注册 DME → 文本帖子邀请注册
- *   2. Bob 已注册但不是好友 → 帖子嵌入 QR 码邀请加好友
- *   3. Bob 已是好友 → 提示直接去聊天
+ *   1. Bob 没注册 DME -> 文本帖子邀请注册
+ *   2. Bob 已注册但不是好友 -> 帖子嵌入 QR 码邀请加好友
+ *   3. Bob 已是好友 -> 提示直接去聊天
+ *
+ * QR 内容由 prepareInviteQr() 生成（加密 KeyPackage），帖子创建逻辑
+ * 保持不变（com.atproto.repo.createRecord）。
  */
 
 import { Agent, RichText } from '@atproto/api';
 import { ImageFormat, Skia } from '@shopify/react-native-skia';
 import QRCodeLib from 'qrcode';
 
-import type { DmeDidManager } from '../atproto/did';
+import { getRemoteEncryptionKey } from '../atproto/did';
 import type { DmeStorage } from '../storage/db';
 
 export type BobStatus = 'not_registered' | 'registered_not_friend' | 'already_friend';
@@ -19,21 +22,31 @@ export type BobStatus = 'not_registered' | 'registered_not_friend' | 'already_fr
 const QR_MODULE_SIZE = 4;
 const QR_MARGIN_MODULES = 4;
 
+/**
+ * 检查 Bob 的 DME 状态。
+ *
+ * 1. 查询 Bob 的 DID 文档是否有 #dme_encryption 公钥
+ * 2. 检查本地存储是否已有与 Bob 的对话记录
+ */
 export async function checkBobDmeStatus(
-  didManager: DmeDidManager,
   storage: DmeStorage | null,
   bobDid: string,
 ): Promise<BobStatus> {
+  let encKey: Uint8Array | null;
   try {
-    await didManager.getRemoteEncryptionKey(bobDid);
+    encKey = await getRemoteEncryptionKey(bobDid);
   } catch (err) {
-    console.error('checkBobDmeStatus: Bob has no DME key, treating as not_registered:', err);
+    console.error('checkBobDmeStatus: DID 解析失败:', err);
+    return 'not_registered';
+  }
+
+  if (!encKey) {
     return 'not_registered';
   }
 
   if (storage) {
-    const ratchet = await storage.getRatchet(bobDid);
-    if (ratchet) return 'already_friend';
+    const groups = await storage.listGroups();
+    if (groups.includes(bobDid)) return 'already_friend';
   }
 
   return 'registered_not_friend';

@@ -1,7 +1,7 @@
 /**
- * state/AppContext.tsx - Global app state + actions for DME.
+ * state/AppContext.tsx - Global app state + actions for DME (MLS).
  *
- * Manages session, identity, encryption keys, handshake, and poller.
+ * Manages session, identity keys, MLS sessions, poller, and KeyPackage pool.
  * All async operations flow through here.
  */
 
@@ -15,90 +15,169 @@ import React, {
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { KeyPackage, PrivateKeyPackage } from 'ts-mls';
 
 import { DmeSession } from '../atproto/session';
 import { DmePds } from '../atproto/pds';
-import { DmeDidManager } from '../atproto/did';
-import { DmeHandshake } from '../handshake/handshake';
+import { declareKeys, getRemoteEncryptionKey } from '../atproto/did';
+import { acceptInvite, processWelcome } from '../handshake/handshake';
+import { encodeQrPayload } from '../handshake/qr-encode';
 import { DmePoller } from '../poll/poller';
+import type { IncomingMessage, IncomingWelcome } from '../poll/poller';
 import { DmeStorage } from '../storage/db';
-import type { PendingInvite } from '../storage/db';
-import { generateIdentityKey } from '../crypto/identity';
-import { encryptMessage, decryptMessage } from '../crypto/envelope';
-import { DoubleRatchet } from '../crypto/ratchet';
+import type { PendingWelcome, KeyPackagePoolEntry, StoredMessage } from '../storage/db';
+import { generateIdentityKeys } from '../crypto/identity';
+import type { IdentityKeys } from '../crypto/identity';
+import { MlsSession } from '../crypto/mls-session';
+import { getMlsImpl, KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
+import {
+  generateKeyPackageForUser,
+  encryptKeyPackage,
+  serializeEncryptedKeyPackage,
+} from '../crypto/keypackage';
+import type { KeyPackagePair } from '../crypto/keypackage';
+import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
+import { bytesToBase64url } from '../crypto/utils';
 import { DME_SERVER_URL, PDS_URL } from '../config';
+import type { DmeEnvelope } from '../protocol/types';
 
-import type { IdentityKey } from '../crypto/identity';
-import type { HandshakePayload } from '../handshake/handshake';
+// ---------------------------------------------------------------------------
+// Serialization helpers (Uint8Array <-> base64 via JSON replacer)
+// ---------------------------------------------------------------------------
+
+function serializeWithUint8Array(obj: unknown): string {
+  return JSON.stringify(obj, (_k, v) => {
+    if (v instanceof Uint8Array) {
+      return { __type: 'Uint8Array', data: bytesToBase64url(v) };
+    }
+    if (typeof v === 'bigint') {
+      return { __type: 'BigInt', data: v.toString() };
+    }
+    return v;
+  });
+}
+
+function deserializeWithUint8Array<T>(serialized: string): T {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return JSON.parse(serialized, (_k, v: any) => {
+    if (v && typeof v === 'object' && v.__type === 'Uint8Array') {
+      const b64 = v.data.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+      const binary = atob(padded);
+      const result = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) result[i] = binary.charCodeAt(i);
+      return result;
+    }
+    if (v && typeof v === 'object' && v.__type === 'BigInt') {
+      return BigInt(v.data);
+    }
+    return v;
+  }) as T;
+}
+
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+// ---------------------------------------------------------------------------
+// Context types
+// ---------------------------------------------------------------------------
 
 interface AppState {
   session: DmeSession | null;
   storage: DmeStorage | null;
-  identityKey: IdentityKey | null;
+  identityKeys: IdentityKeys | null;
   poller: DmePoller | null;
   pds: DmePds | null;
-  didManager: DmeDidManager | null;
-  handshake: DmeHandshake | null;
   loading: boolean;
   error: string | null;
-  pendingInvites: PendingInvite[];
+  groups: string[];
+  pendingWelcomes: PendingWelcome[];
+  keyPackagePool: KeyPackagePoolEntry[];
   chatListVersion: number;
+  pollBatchSize: number;
 }
 
 interface AppActions {
   login: (identifier: string, password: string, pdsUrl?: string) => Promise<void>;
   logout: () => Promise<void>;
   restoreSession: () => Promise<boolean>;
-  ensureIdentityKey: () => Promise<void>;
-  declareKey: (plcToken: string) => Promise<void>;
-  sendMessage: (friendDid: string, plaintext: string) => Promise<void>;
-  deleteFriend: (friendDid: string) => Promise<void>;
-  startHandshake: (remoteDid: string) => Promise<HandshakePayload>;
-  acceptHandshake: (payload: HandshakePayload) => Promise<{ ratchet: DoubleRatchet; sharedSecret: Uint8Array }>;
-  addPendingInvite: (invite: PendingInvite) => Promise<void>;
-  deletePendingInvite: (bobDid: string) => Promise<void>;
-  checkPendingInvite: (bobDid: string) => Promise<void>;
-  checkAllPendingInvites: () => Promise<void>;
+  setupIdentity: () => Promise<void>;
+  declareKeys: (plcToken: string) => Promise<void>;
+  sendMessage: (groupId: string, text: string) => Promise<void>;
+  deleteFriend: (groupId: string) => Promise<void>;
+  generateInviteQr: (bobDid: string) => Promise<{ qrString: string; keyPackageInitKey: Uint8Array }>;
+  acceptInviteQr: (qrString: string) => Promise<void>;
+  refreshKeyPackagePool: () => Promise<void>;
+  setPollBatchSize: (size: number) => Promise<void>;
 }
 
 interface AppContextValue extends AppState, AppActions {}
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
 export function AppProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [session, setSession] = useState<DmeSession | null>(null);
   const [storage, setStorage] = useState<DmeStorage | null>(null);
-  const [identityKey, setIdentityKey] = useState<IdentityKey | null>(null);
+  const [identityKeys, setIdentityKeys] = useState<IdentityKeys | null>(null);
   const [poller, setPoller] = useState<DmePoller | null>(null);
   const [pds, setPds] = useState<DmePds | null>(null);
-  const [didManager, setDidManager] = useState<DmeDidManager | null>(null);
-  const [handshake, setHandshake] = useState<DmeHandshake | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
+  const [pendingWelcomes, setPendingWelcomes] = useState<PendingWelcome[]>([]);
+  const [keyPackagePool, setKeyPackagePool] = useState<KeyPackagePoolEntry[]>([]);
   const [chatListVersion, setChatListVersion] = useState(0);
-  const inviteCheckTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const checkAllPendingInvitesRef = useRef<() => Promise<void>>(async () => {});
+  const [pollBatchSize, setPollBatchSizeState] = useState(3);
 
-  const refreshPendingInvites = useCallback(async (s: DmeStorage | null) => {
-    if (!s) return;
-    const invites = await s.getPendingInvites();
-    setPendingInvites(invites);
-  }, []);
+  const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
 
-  const stopInviteChecker = useCallback(() => {
-    if (inviteCheckTimer.current) {
-      clearInterval(inviteCheckTimer.current);
-      inviteCheckTimer.current = null;
+  // -------------------------------------------------------------------------
+  // KeyPackage pool
+  // -------------------------------------------------------------------------
+
+  const refreshKeyPackagePool = useCallback(async (): Promise<void> => {
+    if (!storage || !identityKeys || !session) return;
+
+    const pool = await storage.getKeyPackagePool();
+    const available = pool.filter((e) => !e.consumed);
+    const needed = KEYPACKAGE_POOL_SIZE - available.length;
+
+    for (let i = 0; i < Math.max(0, needed); i++) {
+      const pair = await generateKeyPackageForUser(
+        session.did,
+        identityKeys.signing.privateKey,
+        identityKeys.signing.publicKey,
+      );
+      const entry: KeyPackagePoolEntry = {
+        id: generateId(),
+        publicPackageSerialized: serializeWithUint8Array(pair.publicPackage),
+        privatePackageSerialized: serializeWithUint8Array(pair.privatePackage),
+        createdAt: new Date().toISOString(),
+        consumed: false,
+      };
+      await storage.addKeyPackageToPool(entry);
     }
-  }, []);
 
-  const startInviteChecker = useCallback(() => {
-    stopInviteChecker();
-    inviteCheckTimer.current = setInterval(() => {
-      checkAllPendingInvitesRef.current();
-    }, 30_000);
-  }, [stopInviteChecker]);
+    if (needed > 0) {
+      setKeyPackagePool(await storage.getKeyPackagePool());
+    }
+  }, [storage, identityKeys, session]);
+
+  const setPollBatchSize = useCallback(async (size: number): Promise<void> => {
+    if (!storage || !poller) return;
+    await storage.setPollBatchSize(size);
+    poller.setBatchSize(size);
+    setPollBatchSizeState(size);
+  }, [storage, poller]);
+
+  // -------------------------------------------------------------------------
+  // Login / Logout / Restore
+  // -------------------------------------------------------------------------
 
   const login = useCallback(async (identifier: string, password: string, pdsUrl?: string): Promise<void> => {
     setLoading(true);
@@ -116,8 +195,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const correctStorage = new DmeStorage(userDid);
       newSession.setStorage(correctStorage);
 
-      // CredentialSession 的 persistSession 回调在 login 成功时已经把数据写入了
-      // placeholder storage，需要把所有 placeholder 数据迁移到以真实 DID 为前缀的 storage。
+      // Migrate placeholder data
       const allKeys = await AsyncStorage.getAllKeys();
       const placeholderPrefix = `dme:${userDidPlaceholder}:`;
       const placeholderKeys = allKeys.filter((k) => k.startsWith(placeholderPrefix));
@@ -133,63 +211,78 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
 
       const newPds = new DmePds(newSession.agent, DME_SERVER_URL);
-      const newDidManager = new DmeDidManager();
-      const storedKey = await correctStorage.getIdentityKey();
-      const key = storedKey ?? generateIdentityKey();
-      if (!storedKey) {
-        await correctStorage.putIdentityKey(key);
+
+      // Load or generate identity keys
+      const storedKeys = await correctStorage.getIdentityKeys();
+      const keys = storedKeys ?? generateIdentityKeys();
+      if (!storedKeys) {
+        await correctStorage.putIdentityKeys(keys);
       }
 
-      const newHandshake = new DmeHandshake(key, newDidManager, correctStorage);
-      const newPoller = new DmePoller(newPds, correctStorage);
+      const batchSize = await correctStorage.getPollBatchSize();
+      const newPoller = new DmePoller(newPds, correctStorage, batchSize);
 
-      newPoller.start(async (friendDid, plaintext, envelope) => {
-        await correctStorage.putMessage({
-          id: envelope.queueId,
-          fromDid: friendDid,
-          toDid: userDid,
-          plaintext,
-          createdAt: envelope.createdAt,
-          sent: false,
-        });
-        setChatListVersion((v) => v + 1);
-      });
+      newPoller.start(
+        async (msg: IncomingMessage) => {
+          await correctStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: msg.plaintext,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+          });
+          setChatListVersion((v) => v + 1);
+        },
+        async (welcome: IncomingWelcome) => {
+          await processWelcomeRef.current(welcome);
+        },
+      );
 
-      const restoreFriends = await correctStorage.listFriends();
-      for (const friendDid of restoreFriends) {
-        const ratchetJson = await correctStorage.getRatchet(friendDid);
-        if (!ratchetJson) continue;
-        try {
-          const ratchet = DoubleRatchet.deserialize(ratchetJson);
-          const activationQueueId = await correctStorage.getActivationQueueId(friendDid);
-          newPoller.addConversation(friendDid, ratchet, activationQueueId ?? undefined);
-        } catch (err) {
-          console.error('Failed to restore ratchet for', friendDid, err);
+      // Restore MLS sessions
+      const groupIds = await correctStorage.listGroups();
+      const impl = await getMlsImpl();
+      for (const gid of groupIds) {
+        const serialized = await correctStorage.getMlsSession(gid);
+        if (serialized) {
+          try {
+            const mlsSession = await MlsSession.deserialize(serialized, impl);
+            newPoller.addSession(gid, mlsSession);
+          } catch (err) {
+            console.error('AppContext: failed to restore MLS session for', gid, err);
+          }
         }
       }
 
+      // Restore pending welcomes
+      const welcomes = await correctStorage.getPendingWelcomes();
+      for (const w of welcomes) {
+        newPoller.addPendingWelcome(w);
+      }
+
+      // Restore KeyPackage pool
+      const pool = await correctStorage.getKeyPackagePool();
+
       setSession(newSession);
       setStorage(correctStorage);
-      setIdentityKey(key);
+      setIdentityKeys(keys);
       setPds(newPds);
-      setDidManager(newDidManager);
-      setHandshake(newHandshake);
       setPoller(newPoller);
-
-      await refreshPendingInvites(correctStorage);
-      startInviteChecker();
+      setGroups(groupIds);
+      setPendingWelcomes(welcomes);
+      setKeyPackagePool(pool);
+      setPollBatchSizeState(batchSize);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
       throw err;
     } finally {
       setLoading(false);
     }
-  }, [refreshPendingInvites, startInviteChecker]);
+  }, []);
 
   const logout = useCallback(async (): Promise<void> => {
     setLoading(true);
     try {
-      stopInviteChecker();
       poller?.stop();
       if (session) {
         await session.logout(storage ?? undefined);
@@ -199,16 +292,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     } finally {
       setSession(null);
       setStorage(null);
-      setIdentityKey(null);
+      setIdentityKeys(null);
       setPds(null);
-      setDidManager(null);
-      setHandshake(null);
       setPoller(null);
       setError(null);
-      setPendingInvites([]);
+      setGroups([]);
+      setPendingWelcomes([]);
+      setKeyPackagePool([]);
+      setPollBatchSizeState(3);
       setLoading(false);
     }
-  }, [session, storage, poller, stopInviteChecker]);
+  }, [session, storage, poller]);
 
   const restoreSession = useCallback(async (): Promise<boolean> => {
     setLoading(true);
@@ -220,7 +314,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       );
       if (sessionKeys.length === 0) return false;
 
-      // 优先恢复非 placeholder 的 session，避免恢复 did:plc:unknown 导致 userDid 和 session.did 不一致
       const nonPlaceholderKeys = sessionKeys.filter((k) => !k.includes('did:plc:unknown'));
       const keysToProcess = nonPlaceholderKeys.length > 0 ? nonPlaceholderKeys : sessionKeys;
 
@@ -234,51 +327,63 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         tempSession.setStorage(tempStorage);
 
         const newPds = new DmePds(tempSession.agent, DME_SERVER_URL);
-        const newDidManager = new DmeDidManager();
-        const storedKey = await tempStorage.getIdentityKey();
-        const keyValue = storedKey ?? generateIdentityKey();
-        if (!storedKey) {
-          await tempStorage.putIdentityKey(keyValue);
+        const storedKeys = await tempStorage.getIdentityKeys();
+        const idKeys = storedKeys ?? generateIdentityKeys();
+        if (!storedKeys) {
+          await tempStorage.putIdentityKeys(idKeys);
         }
 
-        const newHandshake = new DmeHandshake(keyValue, newDidManager, tempStorage);
-        const newPoller = new DmePoller(newPds, tempStorage);
+        const batchSize = await tempStorage.getPollBatchSize();
+        const newPoller = new DmePoller(newPds, tempStorage, batchSize);
 
-        newPoller.start(async (friendDid, plaintext, envelope) => {
-          await tempStorage.putMessage({
-            id: envelope.queueId,
-            fromDid: friendDid,
-            toDid: did,
-            plaintext,
-            createdAt: envelope.createdAt,
-            sent: false,
-          });
-          setChatListVersion((v) => v + 1);
-        });
+        newPoller.start(
+          async (msg: IncomingMessage) => {
+            await tempStorage.putMessage({
+              id: msg.envelope.queueId,
+              fromDid: msg.senderDid,
+              toDid: did,
+              plaintext: msg.plaintext,
+              createdAt: msg.envelope.createdAt,
+              sent: false,
+            });
+            setChatListVersion((v) => v + 1);
+          },
+          async (welcome: IncomingWelcome) => {
+            await processWelcomeRef.current(welcome);
+          },
+        );
 
-        const restoreFriends = await tempStorage.listFriends();
-        for (const friendDid of restoreFriends) {
-          const ratchetJson = await tempStorage.getRatchet(friendDid);
-          if (!ratchetJson) continue;
-          try {
-            const ratchet = DoubleRatchet.deserialize(ratchetJson);
-            const activationQueueId = await tempStorage.getActivationQueueId(friendDid);
-            newPoller.addConversation(friendDid, ratchet, activationQueueId ?? undefined);
-          } catch (err) {
-            console.error('Failed to restore ratchet for', friendDid, err);
+        // Restore MLS sessions
+        const groupIds = await tempStorage.listGroups();
+        const impl = await getMlsImpl();
+        for (const gid of groupIds) {
+          const serialized = await tempStorage.getMlsSession(gid);
+          if (serialized) {
+            try {
+              const mlsSession = await MlsSession.deserialize(serialized, impl);
+              newPoller.addSession(gid, mlsSession);
+            } catch (err) {
+              console.error('AppContext: failed to restore MLS session for', gid, err);
+            }
           }
         }
 
+        const welcomes = await tempStorage.getPendingWelcomes();
+        for (const w of welcomes) {
+          newPoller.addPendingWelcome(w);
+        }
+
+        const pool = await tempStorage.getKeyPackagePool();
+
         setSession(tempSession);
         setStorage(tempStorage);
-        setIdentityKey(keyValue);
+        setIdentityKeys(idKeys);
         setPds(newPds);
-        setDidManager(newDidManager);
-        setHandshake(newHandshake);
         setPoller(newPoller);
-
-        await refreshPendingInvites(tempStorage);
-        startInviteChecker();
+        setGroups(groupIds);
+        setPendingWelcomes(welcomes);
+        setKeyPackagePool(pool);
+        setPollBatchSizeState(batchSize);
         return true;
       }
 
@@ -289,221 +394,253 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     } finally {
       setLoading(false);
     }
-  }, [refreshPendingInvites, startInviteChecker]);
+  }, []);
 
-  const ensureIdentityKey = useCallback(async (): Promise<void> => {
-    if (identityKey) return;
-    if (!storage) throw new Error('Storage not initialized');
+  // -------------------------------------------------------------------------
+  // Identity
+  // -------------------------------------------------------------------------
 
-    const storedKey = await storage.getIdentityKey();
-    if (storedKey) {
-      setIdentityKey(storedKey);
+  const setupIdentity = useCallback(async (): Promise<void> => {
+    if (identityKeys) return;
+    if (!storage) throw new Error('setupIdentity: storage not initialized');
+
+    const stored = await storage.getIdentityKeys();
+    if (stored) {
+      setIdentityKeys(stored);
       return;
     }
 
-    const key = generateIdentityKey();
-    await storage.putIdentityKey(key);
-    setIdentityKey(key);
-  }, [identityKey, storage]);
+    const keys = generateIdentityKeys();
+    await storage.putIdentityKeys(keys);
+    setIdentityKeys(keys);
+  }, [identityKeys, storage]);
 
-  const declareKey = useCallback(
-    async (plcToken: string): Promise<void> => {
-      if (!identityKey) throw new Error('Identity key not available');
-      if (!session) throw new Error('Session not initialized');
-      if (!didManager) throw new Error('DID manager not initialized');
+  const declareKeysAction = useCallback(async (plcToken: string): Promise<void> => {
+    if (!identityKeys) throw new Error('declareKeys: identity keys not available');
+    if (!session) throw new Error('declareKeys: session not initialized');
 
-      await didManager.declareEncryptionKey(identityKey.publicKey, session.agent, plcToken);
-    },
-    [identityKey, session, didManager],
-  );
+    await declareKeys(session.did, identityKeys, session.agent, plcToken);
+  }, [identityKeys, session]);
 
-  const sendMessage = useCallback(
-    async (friendDid: string, plaintext: string): Promise<void> => {
-      if (!session) throw new Error('Not authenticated');
-      if (!storage) throw new Error('Storage not initialized');
-      if (!pds) throw new Error('PDS not initialized');
+  // -------------------------------------------------------------------------
+  // Invite / Accept
+  // -------------------------------------------------------------------------
 
-      let ratchet = poller?.getRatchet(friendDid);
-      if (!ratchet) {
-        const ratchetJson = await storage.getRatchet(friendDid);
-        if (!ratchetJson) {
-          throw new Error(`No ratchet found for ${friendDid}. Complete handshake first.`);
-        }
-        ratchet = DoubleRatchet.deserialize(ratchetJson);
-        poller?.addConversation(friendDid, ratchet);
-      }
-
-      const plaintextBytes = new TextEncoder().encode(plaintext);
-      const envelope = encryptMessage(ratchet, plaintextBytes);
-
-      await pds.createEnvelope(envelope);
-      await storage.putRatchet(friendDid, ratchet.serialize());
-      await storage.putMessage({
-        id: envelope.queueId,
-        fromDid: session.did,
-        toDid: friendDid,
-        plaintext,
-        createdAt: envelope.createdAt,
-        sent: true,
-      });
-    },
-    [session, storage, pds, poller],
-  );
-
-  const deleteFriend = useCallback(
-    async (friendDid: string): Promise<void> => {
-      if (!storage) throw new Error('Storage not initialized');
-      await storage.deleteRatchet(friendDid);
-      await storage.deleteMessages(friendDid);
-      await storage.deleteActivationQueueId(friendDid);
-      poller?.removeConversation(friendDid);
-      setChatListVersion((v) => v + 1);
-    },
-    [storage, poller],
-  );
-
-  const startHandshake = useCallback(
-    async (remoteDid: string): Promise<HandshakePayload> => {
-      await ensureIdentityKey();
-      if (!handshake) throw new Error('Handshake not initialized');
-      if (!session) throw new Error('Session not initialized');
-      return handshake.initiate(remoteDid, session.did);
-    },
-    [ensureIdentityKey, handshake, session],
-  );
-
-  const acceptHandshake = useCallback(
-    async (payload: HandshakePayload): Promise<{ ratchet: DoubleRatchet; sharedSecret: Uint8Array }> => {
-      await ensureIdentityKey();
-      if (!handshake) throw new Error('Handshake not initialized');
-      if (!storage) throw new Error('Storage not initialized');
-      if (!poller) throw new Error('Poller not initialized');
-
-      const result = await handshake.accept(payload);
-      await storage.putRatchet(payload.aliceDid, result.ratchet.serialize());
-      await storage.putActivationQueueId(payload.aliceDid, result.initialQueueId);
-      poller.addConversation(payload.aliceDid, result.ratchet, result.initialQueueId);
-      poller.pollOnce().catch((err) => console.error('pollOnce after acceptHandshake failed:', err));
-      return { ratchet: result.ratchet, sharedSecret: result.sharedSecret };
-    },
-    [ensureIdentityKey, handshake, storage, poller],
-  );
-
-  const addPendingInvite = useCallback(async (invite: PendingInvite): Promise<void> => {
-    if (!storage) return;
-    await storage.putPendingInvite(invite);
-    await refreshPendingInvites(storage);
-  }, [storage, refreshPendingInvites]);
-
-  const deletePendingInvite = useCallback(async (bobDid: string): Promise<void> => {
-    if (!storage) return;
-    await storage.deletePendingInvite(bobDid);
-    await refreshPendingInvites(storage);
-  }, [storage, refreshPendingInvites]);
-
-  const checkPendingInvite = useCallback(async (bobDid: string): Promise<void> => {
-    if (!storage || !pds || !handshake) return;
-    const invites = await storage.getPendingInvites();
-    const invite = invites.find((i) => i.bobDid === bobDid);
-    if (!invite || invite.status !== 'pending') return;
-
-    try {
-      const envelopes = await pds.batchGetEnvelopes([invite.queueId1]);
-      if (envelopes.length === 0) return;
-
-      const ratchet = await handshake.initReceiverRatchet(bobDid);
-
-      let decrypted = false;
-      for (const env of envelopes) {
-        try {
-          decryptMessage(ratchet, env);
-          decrypted = true;
-          break;
-        } catch (err) {
-          console.warn('checkPendingInvite: decrypt attempt failed for', bobDid, err);
-        }
-      }
-      if (!decrypted) return;
-
-      await handshake.deletePendingHandshake(bobDid);
-      await storage.putRatchet(bobDid, ratchet.serialize());
-      if (poller) {
-        poller.addConversation(bobDid, ratchet);
-      }
-
-      await storage.deletePendingInvite(bobDid);
-      await refreshPendingInvites(storage);
-      setChatListVersion((v) => v + 1);
-    } catch (err) {
-      console.error('checkPendingInvite failed for', bobDid, err);
+  const generateInviteQr = useCallback(async (
+    bobDid: string,
+  ): Promise<{ qrString: string; keyPackageInitKey: Uint8Array }> => {
+    if (!storage || !identityKeys || !session || !poller) {
+      throw new Error('generateInviteQr: not fully initialized');
     }
-  }, [storage, pds, handshake, poller, refreshPendingInvites]);
 
-  const checkAllPendingInvites = useCallback(async (): Promise<void> => {
-    if (!storage) return;
-    const invites = await storage.getPendingInvites();
-    const pending = invites.filter((i) => i.status === 'pending');
-    await Promise.all(pending.map((i) => checkPendingInvite(i.bobDid)));
-  }, [storage, checkPendingInvite]);
+    // Ensure pool has entries
+    await refreshKeyPackagePool();
+    const pool = await storage.getKeyPackagePool();
+    const available = pool.find((e) => !e.consumed);
+    if (!available) throw new Error('generateInviteQr: no KeyPackage available in pool');
 
-  checkAllPendingInvitesRef.current = checkAllPendingInvites;
+    // Deserialize KeyPackage pair from pool
+    const pair: KeyPackagePair = {
+      publicPackage: deserializeWithUint8Array<KeyPackage>(available.publicPackageSerialized),
+      privatePackage: deserializeWithUint8Array<PrivateKeyPackage>(available.privatePackageSerialized),
+    };
+
+    // Get Bob's X25519 public key
+    const bobEncKey = await getRemoteEncryptionKey(bobDid);
+    if (!bobEncKey) throw new Error('generateInviteQr: Bob has no DME encryption key');
+
+    // Encrypt KeyPackage and create QR
+    const encrypted = await encryptKeyPackage(pair.publicPackage, bobEncKey);
+    const encryptedKeyPackage = serializeEncryptedKeyPackage(
+      encrypted.ephemeralPublicKey,
+      encrypted.ciphertext,
+    );
+    const qrString = encodeQrPayload({ encryptedKeyPackage, aliceDid: session.did });
+    const keyPackageInitKey = pair.publicPackage.initKey;
+
+    // Track pending welcome
+    const welcomeQueueId = deriveWelcomeQueueId(keyPackageInitKey);
+    const entry: PendingWelcome = {
+      queueId: welcomeQueueId,
+      groupId: bobDid,
+      keyPackageSerialized: serializeWithUint8Array(pair),
+      createdAt: new Date().toISOString(),
+    };
+    await storage.putPendingWelcome(entry);
+    poller.addPendingWelcome(entry);
+    setPendingWelcomes((prev) => [...prev, entry]);
+
+    // Mark pool entry as consumed
+    await storage.markKeyPackageConsumed(available.id);
+    setKeyPackagePool(await storage.getKeyPackagePool());
+
+    return { qrString, keyPackageInitKey };
+  }, [storage, identityKeys, session, poller, refreshKeyPackagePool]);
+
+  const acceptInviteQr = useCallback(async (qrString: string): Promise<void> => {
+    if (!storage || !identityKeys || !session || !pds || !poller) {
+      throw new Error('acceptInviteQr: not fully initialized');
+    }
+
+    const result = await acceptInvite(session.did, identityKeys, qrString);
+
+    // Store MLS session
+    await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
+    poller.addSession(result.groupId, result.mlsSession);
+
+    // Store Welcome as PDS envelope so Alice can poll for it
+    const envelope: DmeEnvelope = {
+      $type: 'dme.queue.envelope',
+      queueId: result.welcomeQueueId,
+      payload: result.welcomePayload,
+      createdAt: new Date().toISOString(),
+      messageType: 'welcome',
+    };
+    await pds.createEnvelope(envelope);
+
+    setGroups((prev) => [...prev, result.groupId]);
+    setChatListVersion((v) => v + 1);
+  }, [storage, identityKeys, session, pds, poller]);
+
+  // -------------------------------------------------------------------------
+  // Process received Welcome (called from poller callback)
+  // -------------------------------------------------------------------------
+
+  const processReceivedWelcome = useCallback(async (welcome: IncomingWelcome): Promise<void> => {
+    if (!storage || !identityKeys || !session || !poller) {
+      console.error('processReceivedWelcome: not fully initialized');
+      return;
+    }
+
+    const welcomes = await storage.getPendingWelcomes();
+    const entry = welcomes.find((w) => w.queueId === welcome.queueId);
+    if (!entry) {
+      console.error('processReceivedWelcome: no pending welcome for', welcome.queueId);
+      return;
+    }
+
+    const pair = deserializeWithUint8Array<KeyPackagePair>(entry.keyPackageSerialized);
+
+    const result = await processWelcome(
+      welcome.welcomeBytes,
+      session.did,
+      identityKeys,
+      pair.publicPackage,
+      pair.privatePackage,
+    );
+
+    await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
+    poller.addSession(result.groupId, result.mlsSession);
+
+    await storage.deletePendingWelcome(welcome.queueId);
+    poller.removePendingWelcome(welcome.queueId);
+
+    setGroups((prev) => [...prev, result.groupId]);
+    setPendingWelcomes((prev) => prev.filter((w) => w.queueId !== welcome.queueId));
+    setChatListVersion((v) => v + 1);
+  }, [storage, identityKeys, session, poller]);
+
+  processWelcomeRef.current = processReceivedWelcome;
+
+  // -------------------------------------------------------------------------
+  // Messaging
+  // -------------------------------------------------------------------------
+
+  const sendMessage = useCallback(async (groupId: string, text: string): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('sendMessage: not fully initialized');
+    }
+
+    const mlsSession = poller.getSession(groupId);
+    if (!mlsSession) throw new Error(`sendMessage: no MLS session for ${groupId}`);
+
+    const plaintextBytes = new TextEncoder().encode(text);
+    const result = await mlsSession.encrypt(plaintextBytes);
+
+    // Save updated session state
+    await storage.putMlsSession(groupId, mlsSession.serialize());
+
+    // Store message locally
+    const msg: StoredMessage = {
+      id: result.queueId,
+      fromDid: session.did,
+      toDid: groupId,
+      plaintext: text,
+      createdAt: new Date().toISOString(),
+      sent: true,
+    };
+    await storage.putMessage(msg);
+
+    // Send via PDS
+    const envelope: DmeEnvelope = {
+      $type: 'dme.queue.envelope',
+      queueId: result.queueId,
+      payload: bytesToBase64url(result.ciphertext),
+      createdAt: new Date().toISOString(),
+      messageType: 'application',
+    };
+    await pds.createEnvelope(envelope);
+
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  const deleteFriend = useCallback(async (groupId: string): Promise<void> => {
+    if (!storage || !poller) throw new Error('deleteFriend: not initialized');
+
+    poller.removeSession(groupId);
+    await storage.deleteMlsSession(groupId);
+    await storage.deleteMessages(groupId);
+
+    setGroups((prev) => prev.filter((g) => g !== groupId));
+    setChatListVersion((v) => v + 1);
+  }, [storage, poller]);
+
+  // -------------------------------------------------------------------------
+  // Cleanup
+  // -------------------------------------------------------------------------
 
   useEffect(() => {
-    return () => stopInviteChecker();
-  }, [stopInviteChecker]);
+    return () => {
+      poller?.stop();
+    };
+  }, [poller]);
+
+  // -------------------------------------------------------------------------
+  // Context value
+  // -------------------------------------------------------------------------
 
   const value = useMemo<AppContextValue>(
     () => ({
       session,
       storage,
-      identityKey,
+      identityKeys,
       poller,
       pds,
-      didManager,
-      handshake,
       loading,
       error,
-      pendingInvites,
+      groups,
+      pendingWelcomes,
+      keyPackagePool,
       chatListVersion,
+      pollBatchSize,
       login,
       logout,
       restoreSession,
-      ensureIdentityKey,
-      declareKey,
+      setupIdentity,
+      declareKeys: declareKeysAction,
       sendMessage,
       deleteFriend,
-      startHandshake,
-      acceptHandshake,
-      addPendingInvite,
-      deletePendingInvite,
-      checkPendingInvite,
-      checkAllPendingInvites,
+      generateInviteQr,
+      acceptInviteQr,
+      refreshKeyPackagePool,
+      setPollBatchSize,
     }),
     [
-      session,
-      storage,
-      identityKey,
-      poller,
-      pds,
-      didManager,
-      handshake,
-      loading,
-      error,
-      pendingInvites,
-      chatListVersion,
-      login,
-      logout,
-      restoreSession,
-      ensureIdentityKey,
-      declareKey,
-      sendMessage,
-      deleteFriend,
-      startHandshake,
-      acceptHandshake,
-      addPendingInvite,
-      deletePendingInvite,
-      checkPendingInvite,
-      checkAllPendingInvites,
+      session, storage, identityKeys, poller, pds, loading, error,
+      groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize,
+      login, logout, restoreSession, setupIdentity, declareKeysAction,
+      sendMessage, deleteFriend, generateInviteQr, acceptInviteQr,
+      refreshKeyPackagePool, setPollBatchSize,
     ],
   );
 

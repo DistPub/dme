@@ -34,6 +34,7 @@ export function ChatViewScreen(): React.JSX.Element {
   const [sending, setSending] = useState(false);
   const [friendHandle, setFriendHandle] = useState(friendDid);
   const listRef = useRef<FlatList<StoredMessage>>(null);
+  const inputRef = useRef<TextInput>(null);
 
   const loadMessages = useCallback(async (): Promise<void> => {
     if (!app.storage) return;
@@ -76,6 +77,7 @@ export function ChatViewScreen(): React.JSX.Element {
       await app.sendMessage(friendDid, trimmed);
       setText('');
       await loadMessages();
+      inputRef.current?.focus();
     } catch (err) {
       console.error('Send failed:', err);
     } finally {
@@ -125,6 +127,7 @@ export function ChatViewScreen(): React.JSX.Element {
 
       <View style={styles.inputBar}>
         <TextInput
+          ref={inputRef}
           style={styles.input}
           value={text}
           onChangeText={setText}

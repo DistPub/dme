@@ -3,22 +3,34 @@
  *
  * The Lexicon itself lives in lexicons/dme.queue.envelope.json.
  * This file mirrors the Lexicon in TypeScript for type safety.
+ *
+ * MLS messages carry their own epoch in the wire format, so no
+ * explicit epoch field is needed on the envelope.
  */
+
+/**
+ * MLS message type distinguishes application messages from group
+ * management operations. The server uses this for routing decisions
+ * (e.g., Welcome messages go to a different queueId than application
+ * messages).
+ */
+export type MessageType = 'application' | 'commit' | 'welcome';
 
 export interface DmeEnvelope {
   /** Lexicon type identifier. */
   $type: 'dme.queue.envelope';
 
   /**
-   * QueueID - the hash of the current ratchet state. Used as the lookup
-   * key when polling via the gateway. Server and AppView use this
-   * as the primary key in their KV store.
+   * QueueID - derived from MLS state (Welcome: SHA-256 of KeyPackage
+   * initKey; Application: MLS exporter secret + leaf index + generation).
+   * Used as the lookup key when polling via the gateway. Server and
+   * AppView use this as the primary key in their KV store.
    */
   queueId: string;
 
   /**
-   * Base64url-encoded ciphertext. Symmetrically encrypted with the
-   * message key derived from the current ratchet state.
+   * Base64url-encoded MLS message bytes. Contains the full MLS wire
+   * format (including epoch, framing, and AEAD ciphertext).
    */
   payload: string;
 
@@ -26,10 +38,10 @@ export interface DmeEnvelope {
   createdAt: string;
 
   /**
-   * Ratchet epoch number. Allows the recipient to skip ahead when
-   * they poll future queueIds and miss some intermediate states.
+   * MLS message type. Distinguishes application messages from
+   * commit/welcome group management operations.
    */
-  ratchetEpoch?: number;
+  messageType?: MessageType;
 }
 
 /**

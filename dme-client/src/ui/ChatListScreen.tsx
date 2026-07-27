@@ -25,14 +25,14 @@ import { theme } from './theme';
 import { SkiaButton } from './SkiaButton';
 import { useApp } from '../state/AppContext';
 import type { StoredMessage } from '../storage/db';
-import type { PendingInvite } from '../storage/db';
+import type { PendingWelcome } from '../storage/db';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
 interface ConversationRow {
-  friendDid: string;
-  friendHandle: string;
+  groupId: string;
+  groupHandle: string;
   lastMessage: StoredMessage | null;
 }
 
@@ -118,14 +118,14 @@ export function ChatListScreen(): React.JSX.Element {
       return;
     }
 
-    const friends = await app.storage.listFriends();
+    const groups = await app.storage.listGroups();
     const rows: ConversationRow[] = [];
-    for (const friendDid of friends) {
-      const messages = await app.storage.getMessages(friendDid);
+    for (const groupId of groups) {
+      const messages = await app.storage.getMessages(groupId);
       const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-      const friendHandle = await resolveHandle(friendDid);
+      const groupHandle = await resolveHandle(groupId);
 
-      rows.push({ friendDid, friendHandle, lastMessage });
+      rows.push({ groupId, groupHandle, lastMessage });
     }
     setConversations(rows);
     setLoading(false);
@@ -145,8 +145,8 @@ export function ChatListScreen(): React.JSX.Element {
   }, [loadConversations]);
 
   const navigateToChat = useCallback(
-    (friendDid: string): void => {
-      navigation.navigate('ChatView', { friendDid });
+    (groupId: string): void => {
+      navigation.navigate('ChatView', { friendDid: groupId });
     },
     [navigation],
   );
@@ -159,38 +159,33 @@ export function ChatListScreen(): React.JSX.Element {
     navigation.navigate('QrScan');
   }, [navigation]);
 
-  const onCheckInvite = useCallback((bobDid: string) => {
-    app.checkPendingInvite(bobDid).catch((err) => console.error('checkPendingInvite failed:', err));
+  const navigateToSettings = useCallback((): void => {
+    navigation.navigate('Settings');
+  }, [navigation]);
+
+  const onDeleteWelcome = useCallback((queueId: string) => {
+    if (!app.storage) return;
+    app.storage.deletePendingWelcome(queueId).catch((err: unknown) => console.error('deletePendingWelcome failed:', err));
   }, [app]);
 
-  const onDeleteInvite = useCallback((bobDid: string) => {
-    app.deletePendingInvite(bobDid).catch((err) => console.error('deletePendingInvite failed:', err));
-  }, [app]);
-
-  const renderInviteRow = useCallback(
-    (invite: PendingInvite): React.JSX.Element => (
+  const renderWelcomeRow = useCallback(
+    (welcome: PendingWelcome): React.JSX.Element => (
       <View style={styles.inviteRow}>
         <View style={styles.inviteInfo}>
-          <Text style={styles.inviteHandle} numberOfLines={1}>{invite.bobHandle}</Text>
+          <Text style={styles.inviteHandle} numberOfLines={1}>{welcome.groupId}</Text>
           <Text style={styles.inviteStatus}>
-            {invite.status === 'pending' ? 'Waiting for scan...' :
-             invite.status === 'accepted' ? 'Accepted' : 'Failed'}
+            Waiting for welcome…
           </Text>
         </View>
-        {invite.status === 'pending' && (
-          <TouchableOpacity onPress={() => onCheckInvite(invite.bobDid)} style={styles.inviteBtn}>
-            <Text style={styles.inviteBtnText}>Check</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={() => onDeleteInvite(invite.bobDid)} style={styles.inviteBtn}>
+        <TouchableOpacity onPress={() => onDeleteWelcome(welcome.queueId)} style={styles.inviteBtn}>
           <Text style={[styles.inviteBtnText, { color: theme.colors.error }]}>Delete</Text>
         </TouchableOpacity>
       </View>
     ),
-    [onCheckInvite, onDeleteInvite],
+    [onDeleteWelcome],
   );
 
-  const [openDid, setOpenDid] = useState<string | null>(null);
+  const [openGroupId, setOpenGroupId] = useState<string | null>(null);
 
   const renderRightActions = useCallback(
     (
@@ -222,17 +217,17 @@ export function ChatListScreen(): React.JSX.Element {
         : 'No messages yet';
       return (
         <SwipeableRow
-          isOpen={openDid === item.friendDid}
-          onOpen={() => setOpenDid(item.friendDid)}
-          onClose={() => setOpenDid((prev) => (prev === item.friendDid ? null : prev))}
-          onDelete={() => app.deleteFriend(item.friendDid)}
-          onTap={() => navigateToChat(item.friendDid)}
+          isOpen={openGroupId === item.groupId}
+          onOpen={() => setOpenGroupId(item.groupId)}
+          onClose={() => setOpenGroupId((prev) => (prev === item.groupId ? null : prev))}
+          onDelete={() => app.deleteFriend(item.groupId)}
+          onTap={() => navigateToChat(item.groupId)}
           renderRightActions={renderRightActions}
         >
           <View style={styles.row}>
             <View style={styles.rowHeader}>
               <Text style={styles.rowTitle} numberOfLines={1}>
-                {item.friendHandle}
+                {item.groupHandle}
               </Text>
             </View>
             <Text
@@ -245,7 +240,7 @@ export function ChatListScreen(): React.JSX.Element {
         </SwipeableRow>
       );
     },
-    [navigateToChat, openDid, app.deleteFriend, renderRightActions],
+    [navigateToChat, openGroupId, app.deleteFriend, renderRightActions],
   );
 
   return (
@@ -270,6 +265,12 @@ export function ChatListScreen(): React.JSX.Element {
             style={styles.iconBtn}
           />
           <SkiaButton
+            label="Settings"
+            onPress={navigateToSettings}
+            variant="secondary"
+            style={styles.iconBtn}
+          />
+          <SkiaButton
             label="Logout"
             onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
             variant="secondary"
@@ -282,14 +283,14 @@ export function ChatListScreen(): React.JSX.Element {
         style={styles.list}
         contentContainerStyle={styles.listContent}
         data={conversations}
-        keyExtractor={(item) => item.friendDid}
+        keyExtractor={(item) => item.groupId}
         renderItem={renderItem}
         ListHeaderComponent={
-          app.pendingInvites.length > 0 ? (
+          app.pendingWelcomes.length > 0 ? (
             <View style={styles.inviteSection}>
-              <Text style={styles.sectionTitle}>Pending Invites ({app.pendingInvites.length})</Text>
-              {app.pendingInvites.map((invite) => (
-                <View key={invite.bobDid}>{renderInviteRow(invite)}</View>
+              <Text style={styles.sectionTitle}>Pending Welcomes ({app.pendingWelcomes.length})</Text>
+              {app.pendingWelcomes.map((welcome) => (
+                <View key={welcome.queueId}>{renderWelcomeRow(welcome)}</View>
               ))}
             </View>
           ) : null

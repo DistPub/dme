@@ -32,6 +32,7 @@ import { ChatListScreen } from './src/ui/ChatListScreen';
 import { ChatViewScreen } from './src/ui/ChatViewScreen';
 import { QrDisplayScreen } from './src/ui/QrDisplayScreen';
 import { QrScanScreen } from './src/ui/QrScanScreen';
+import { SettingsScreen } from './src/ui/SettingsScreen';
 import type { RootStackParamList } from './src/types/navigation';
 
 export type { RootStackParamList };
@@ -120,6 +121,7 @@ function NavigationRoot(): React.JSX.Element {
         <Stack.Screen name="ChatView" component={ChatViewScreen} />
         <Stack.Screen name="QrDisplay" component={QrDisplayScreen} />
         <Stack.Screen name="QrScan" component={QrScanScreen} />
+        <Stack.Screen name="Settings" component={SettingsScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

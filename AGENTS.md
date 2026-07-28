@@ -148,7 +148,10 @@ cd dme-client && bun install && bun run dev          # expo start
 cd dme-client && bun run web                          # web only
 
 # dme-server
-cd dme-server && go run main.go --addr :8080 --db ./dme.db --jetstream wss://jetstream1.us-east.bsky.network
+cd dme-server && go run main.go --addr :8080 --db ./dme.db --jetstream wss://jetstream2.fr.hose.cam
+#   --addr      HTTP 监听地址（默认 :8080）
+#   --db        BadgerDB 数据目录（默认 ./dme.db，自动创建，已 gitignored）
+#   --jetstream Jetstream WSS（按区域选：us-east 1, us-west 2, eu 3）
 
 # dme-gateway
 cd dme-gateway && cp wrangler.toml.example wrangler.toml && bun install && bun run dev
@@ -167,3 +170,4 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **群聊消息存储**: 通过 `StoredMessage.conversationId` 指定存储到群聊而非1:1，`kind` 字段区分消息类型
 - **群主离线**: 只有群主能 addMember/removeMember，群主离线时无法管理成员
 - **群聊创建者**: 群主不能离开群组（MLS 限制 removeMember 不能移除 committer），只能解散
+- **浏览器调试现场保护**: 当用户要求「看控制台日志」时，直接使用 `browsermcp_browser_get_console_logs` 抓取当前页面日志，禁止 `browsermcp_browser_navigate` 刷新或跳转页面，避免破坏报错现场

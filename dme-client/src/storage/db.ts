@@ -357,7 +357,7 @@ export class DmeStorage {
     const keys = await AsyncStorage.getAllKeys();
     const dmeKeys = keys.filter((k) => k.startsWith(this.prefix));
     if (dmeKeys.length > 0) {
-      await AsyncStorage.multiRemove(dmeKeys);
+      await Promise.all(dmeKeys.map((key) => AsyncStorage.removeItem(key)));
     }
   }
 }

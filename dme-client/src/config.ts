@@ -1,5 +1,5 @@
 /** 默认 Bluesky PDS base URL,用户可在登录页覆盖。 */
-export const PDS_URL = 'https://bsky.social';
+export const PDS_URL = 'https://network.hukoubook.com';
 
 /** DME server base URL (direct or via gateway, client doesn't distinguish). */
 export const DME_SERVER_URL = 'http://localhost:8080';

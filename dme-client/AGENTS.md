@@ -82,6 +82,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理
 - **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`；`conversationId` 指定存储到哪个会话
+- **AsyncStorage v3 web API**: `@react-native-async-storage/async-storage` v3 在 web 端只导出 `getItem`/`setItem`/`removeItem`/`getAllKeys`/`clear`/`getMany`/`setMany`/`removeMany`，**没有** v2 的 `multiRemove`/`multiGet`/`multiSet`。批量操作须用 `Promise.all(keys.map(k => AsyncStorage.removeItem(k)))` 等替代，禁止直接调 `AsyncStorage.multi*`（web 会抛 `TypeError: ... is not a function`，native 正常）
 
 ## 注意事项
 

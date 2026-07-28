@@ -259,7 +259,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         }
       }
       if (placeholderKeys.length > 0) {
-        await AsyncStorage.multiRemove(placeholderKeys);
+        await Promise.all(placeholderKeys.map((key) => AsyncStorage.removeItem(key)));
       }
 
       const newPds = new DmePds(newSession.agent, DME_SERVER_URL);

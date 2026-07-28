@@ -55,3 +55,13 @@ export const DME_ENVELOPE_NSID = 'dme.queue.envelope' as const;
  * After this period, the ciphertext is physically destroyed.
  */
 export const ENVELOPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Lexicon NSID for the identity backup record. */
+export const DME_BACKUP_NSID = 'dme.backup.identity' as const;
+
+/** PDS record storing password-encrypted identity private keys. */
+export interface IdentityBackupRecord {
+  $type: 'dme.backup.identity';
+  encryptedData: string;
+  createdAt: string;
+}

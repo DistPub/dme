@@ -16,7 +16,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
-import { SkiaButton } from './SkiaButton';
+import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import type { RootStackParamList } from '../types/navigation';
 
@@ -179,14 +179,14 @@ export function CreateGroupScreen(): React.JSX.Element {
               <Text style={styles.errorText}>{errorMsg}</Text>
             ) : null}
 
-            <SkiaButton
+            <Button
               label={`Send Invites (${selectedCount})`}
               onPress={onCreate}
               variant="primary"
               disabled={!canCreate}
               style={styles.fullButton}
             />
-            <SkiaButton
+            <Button
               label="Cancel"
               onPress={() => navigation.goBack()}
               variant="secondary"

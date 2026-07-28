@@ -4,9 +4,11 @@
  */
 
 import envelopeLexicon from './lexicons/dme.queue.envelope.json';
+import backupLexicon from './lexicons/dme.backup.identity.json';
 
 export const lexicons = {
   [envelopeLexicon.id]: envelopeLexicon,
+  [backupLexicon.id]: backupLexicon,
 };
 
-export const DME_LEXICONS = [envelopeLexicon];
+export const DME_LEXICONS = [envelopeLexicon, backupLexicon];

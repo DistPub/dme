@@ -15,7 +15,7 @@ import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/nativ
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
-import { SkiaButton } from './SkiaButton';
+import { Button } from './Button';
 import { MessageBubble } from './MessageBubble';
 import { useApp } from '../state/AppContext';
 import type { StoredMessage } from '../storage/db';
@@ -169,13 +169,13 @@ export function ChatViewScreen(): React.JSX.Element {
               <Text style={styles.inviteResponded}>Responded</Text>
             ) : (
               <View style={styles.inviteButtons}>
-                <SkiaButton
+                <Button
                   label="Accept"
                   onPress={() => app.respondToGroupInvite(inviteId, true)}
                   variant="primary"
                   style={styles.inviteBtn}
                 />
-                <SkiaButton
+                <Button
                   label="Decline"
                   onPress={() => app.respondToGroupInvite(inviteId, false)}
                   variant="secondary"
@@ -206,7 +206,7 @@ export function ChatViewScreen(): React.JSX.Element {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <SkiaButton
+        <Button
           label="Back"
           onPress={() => navigation.goBack()}
           variant="secondary"
@@ -257,7 +257,7 @@ export function ChatViewScreen(): React.JSX.Element {
             onSubmitEditing={onSend}
             returnKeyType="send"
           />
-          <SkiaButton
+          <Button
             label={sending ? '…' : 'Send'}
             onPress={onSend}
             variant="primary"

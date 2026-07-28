@@ -37,6 +37,7 @@ import {
 } from '../crypto/keypackage';
 import type { KeyPackagePair } from '../crypto/keypackage';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
+import { encryptBackup, decryptBackup, type FullBackupData } from '../crypto/backup';
 import { bytesToBase64url, base64urlToBytes } from '../crypto/utils';
 import { DME_SERVER_URL, PDS_URL } from '../config';
 import type { DmeEnvelope } from '../protocol/types';
@@ -143,6 +144,9 @@ interface AppActions {
   restoreSession: () => Promise<boolean>;
   setupIdentity: () => Promise<void>;
   declareKeys: (plcToken: string) => Promise<void>;
+  backupIdentity: (password: string) => Promise<void>;
+  restoreIdentityFromBackup: (password: string) => Promise<boolean>;
+  hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
   deleteFriend: (groupId: string) => Promise<void>;
   generateInviteQr: (bobDid: string) => Promise<{ qrString: string; keyPackageInitKey: Uint8Array }>;
@@ -477,6 +481,86 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     await declareKeys(session.did, identityKeys, session.agent, plcToken);
   }, [identityKeys, session]);
+
+  // -------------------------------------------------------------------------
+  // Identity backup
+  // -------------------------------------------------------------------------
+
+  const backupIdentity = useCallback(async (password: string): Promise<void> => {
+    if (!identityKeys) throw new Error('backupIdentity: identity keys not available');
+    if (!pds) throw new Error('backupIdentity: pds not initialized');
+    if (!storage) throw new Error('backupIdentity: storage not initialized');
+
+    const groupIds = await storage.listGroups();
+    const mlsSessions: Record<string, string> = {};
+    for (const gid of groupIds) {
+      const serialized = await storage.getMlsSession(gid);
+      if (serialized) {
+        mlsSessions[gid] = serialized;
+      }
+    }
+    const keyPackagePool = await storage.getKeyPackagePool();
+    const groupInfos = await storage.listGroupInfos();
+
+    const data: FullBackupData = {
+      identity: identityKeys,
+      mlsSessions,
+      keyPackagePool,
+      groupInfos,
+    };
+
+    const encryptedData = encryptBackup(data, password);
+    await pds.putIdentityBackup(encryptedData);
+  }, [identityKeys, pds, storage]);
+
+  const restoreIdentityFromBackup = useCallback(async (password: string): Promise<boolean> => {
+    if (!pds) throw new Error('restoreIdentityFromBackup: pds not initialized');
+    if (!storage) throw new Error('restoreIdentityFromBackup: storage not initialized');
+    if (!poller) throw new Error('restoreIdentityFromBackup: poller not initialized');
+
+    const encryptedData = await pds.getIdentityBackup();
+    if (!encryptedData) return false;
+
+    const data = decryptBackup(encryptedData, password);
+
+    // 恢复身份密钥
+    await storage.putIdentityKeys(data.identity);
+    setIdentityKeys(data.identity);
+
+    // 恢复 MLS sessions 并加载到 poller
+    for (const [groupId, serialized] of Object.entries(data.mlsSessions)) {
+      await storage.putMlsSession(groupId, serialized);
+      try {
+        const impl = await getMlsImpl();
+        const mlsSession = await MlsSession.deserialize(serialized, impl);
+        poller.addSession(groupId, mlsSession);
+      } catch (err) {
+        console.error('restoreIdentityFromBackup: failed to load MLS session', groupId, err);
+      }
+    }
+
+    // 恢复 KeyPackage 池
+    await storage.putKeyPackagePool(data.keyPackagePool);
+    setKeyPackagePool(data.keyPackagePool);
+
+    // 恢复群聊元数据
+    for (const info of data.groupInfos) {
+      await storage.putGroupInfo(info);
+    }
+    setGroupInfos(data.groupInfos);
+
+    // 更新会话列表
+    setGroups(Object.keys(data.mlsSessions));
+    setChatListVersion((v) => v + 1);
+
+    return true;
+  }, [pds, storage, poller]);
+
+  const hasIdentityBackup = useCallback(async (): Promise<boolean> => {
+    if (!pds) return false;
+    const data = await pds.getIdentityBackup();
+    return data !== null;
+  }, [pds]);
 
   // -------------------------------------------------------------------------
   // Invite / Accept
@@ -1655,6 +1739,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       restoreSession,
       setupIdentity,
       declareKeys: declareKeysAction,
+      backupIdentity,
+      restoreIdentityFromBackup,
+      hasIdentityBackup,
       sendMessage,
       deleteFriend,
       generateInviteQr,
@@ -1676,6 +1763,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize,
       pendingInvites, groupInfos, receivedGroupInvites,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
+      backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, deleteFriend, generateInviteQr, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,

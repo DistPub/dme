@@ -17,7 +17,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import QRCode from 'react-native-qrcode-skia';
 
 import { theme } from './theme';
-import { SkiaButton } from './SkiaButton';
+import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import {
   checkBobDmeStatus,
@@ -152,13 +152,13 @@ export function QrDisplayScreen(): React.JSX.Element {
               autoCapitalize="none"
               autoCorrect={false}
             />
-            <SkiaButton
+            <Button
               label="Check & Generate"
               onPress={onCheckBob}
               variant="primary"
               style={styles.fullButton}
             />
-            <SkiaButton
+            <Button
               label="Back"
               onPress={onCancel}
               variant="secondary"
@@ -197,13 +197,13 @@ export function QrDisplayScreen(): React.JSX.Element {
               </View>
             ) : null}
 
-            <SkiaButton
+            <Button
               label="Publish to Bluesky"
               onPress={onPublish}
               variant="primary"
               style={styles.fullButton}
             />
-            <SkiaButton
+            <Button
               label="Cancel"
               onPress={onCancel}
               variant="secondary"
@@ -215,13 +215,13 @@ export function QrDisplayScreen(): React.JSX.Element {
         {phase === 'already_friend' && (
           <>
             <Text style={styles.hint}>{bobHandle} is already your DME friend!</Text>
-            <SkiaButton
+            <Button
               label="Go to Chat"
               onPress={onGoToChat}
               variant="primary"
               style={styles.fullButton}
             />
-            <SkiaButton
+            <Button
               label="Back"
               onPress={onCancel}
               variant="secondary"
@@ -237,7 +237,7 @@ export function QrDisplayScreen(): React.JSX.Element {
         {phase === 'published' && (
           <>
             <Text style={styles.hint}>Invite published!</Text>
-            <SkiaButton
+            <Button
               label="Back to Chats"
               onPress={() => navigation.goBack()}
               variant="primary"
@@ -249,13 +249,13 @@ export function QrDisplayScreen(): React.JSX.Element {
         {phase === 'error' && (
           <>
             <Text style={[styles.hint, { color: theme.colors.error }]}>{errorMsg}</Text>
-            <SkiaButton
+            <Button
               label="Try Again"
               onPress={onRetry}
               variant="primary"
               style={styles.fullButton}
             />
-            <SkiaButton
+            <Button
               label="Back"
               onPress={onCancel}
               variant="secondary"

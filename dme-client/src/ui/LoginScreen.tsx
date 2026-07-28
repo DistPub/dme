@@ -10,7 +10,7 @@ import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 
 import { theme } from './theme';
-import { SkiaButton } from './SkiaButton';
+import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import { PDS_URL } from '../config';
 
@@ -86,7 +86,7 @@ export function LoginScreen(): React.JSX.Element {
           returnKeyType="send"
         />
 
-        <SkiaButton
+        <Button
           label={app.loading ? 'Logging in...' : 'Login'}
           onPress={onLogin}
           variant="primary"

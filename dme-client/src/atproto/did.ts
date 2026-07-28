@@ -203,3 +203,83 @@ async function resolveDidDocument(
   const resolver = new DidResolver({});
   return (await resolver.resolve(did)) as DidDocumentLike | null;
 }
+
+export function getDidMethod(did: string): 'plc' | 'web' | 'other' {
+  if (did.startsWith('did:plc:')) return 'plc';
+  if (did.startsWith('did:web:')) return 'web';
+  return 'other';
+}
+
+async function fetchFullDidDocument(
+  did: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    if (did.startsWith('did:web:')) {
+      const path = did.slice('did:web:'.length).replace(/:/g, '/');
+      const url = `https://${path}/.well-known/did.json`;
+      const resp = await fetch(url);
+      if (!resp.ok) return null;
+      return (await resp.json()) as Record<string, unknown>;
+    }
+    if (did.startsWith('did:plc:')) {
+      const resp = await fetch(
+        `${PLC_DIRECTORY_URL}/${encodeURIComponent(did)}`,
+      );
+      if (!resp.ok) return null;
+      return (await resp.json()) as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export interface DidWebEntry {
+  id: string;
+  type: string;
+  controller: string;
+  publicKeyMultibase: string;
+}
+
+/**
+ * 为 did:web 用户生成需要更新的 DID 文档内容。
+ *
+ * 尝试获取当前 DID 文档并合并 DME 公钥。成功则返回完整 did.json
+ * （用户直接复制替换）；失败则返回 null，调用方应显示 newEntries
+ * 让用户手动添加到现有文档。
+ *
+ * @param did  - 用户的 did:web DID。
+ * @param keys - 身份密钥对。
+ * @returns didJson: 修改后的完整 did.json（或 null）；newEntries: 需要添加的两个条目。
+ */
+export async function generateDidWebUpdate(
+  did: string,
+  keys: IdentityKeys,
+): Promise<{ didJson: string | null; newEntries: DidWebEntry[] }> {
+  const encEntry: DidWebEntry = {
+    id: `${did}${DME_ENCRYPTION_KEY_ID}`,
+    type: 'Multikey',
+    controller: did,
+    publicKeyMultibase: encodeX25519DidKey(keys.encryption.publicKey).replace(DID_KEY_PREFIX, ''),
+  };
+  const sigEntry: DidWebEntry = {
+    id: `${did}${DME_SIGNING_KEY_ID}`,
+    type: 'Multikey',
+    controller: did,
+    publicKeyMultibase: encodeEd25519DidKey(keys.signing.publicKey).replace(DID_KEY_PREFIX, ''),
+  };
+  const newEntries = [encEntry, sigEntry];
+
+  const doc = await fetchFullDidDocument(did);
+  if (!doc) {
+    return { didJson: null, newEntries };
+  }
+
+  const existingVMs = (doc.verificationMethod as DidVerificationMethod[]) ?? [];
+  const filtered = existingVMs.filter(
+    (vm) => !vm.id.endsWith(DME_ENCRYPTION_KEY_ID) && !vm.id.endsWith(DME_SIGNING_KEY_ID),
+  );
+
+  const updatedDoc = { ...doc, verificationMethod: [...filtered, encEntry, sigEntry] };
+  return { didJson: JSON.stringify(updatedDoc, null, 2), newEntries };
+}

@@ -22,7 +22,7 @@ import { DidResolver } from '@atproto/identity';
 import { Swipeable } from 'react-native-gesture-handler';
 
 import { theme } from './theme';
-import { SkiaButton } from './SkiaButton';
+import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import type { StoredMessage } from '../storage/db';
 import type { PendingWelcome } from '../storage/db';
@@ -296,31 +296,31 @@ export function ChatListScreen(): React.JSX.Element {
       <View style={styles.topBar}>
         <Text style={styles.title}>Chats</Text>
         <View style={styles.topButtons}>
-          <SkiaButton
+          <Button
             label="+ Group"
             onPress={navigateToCreateGroup}
             variant="secondary"
             style={styles.iconBtn}
           />
-          <SkiaButton
+          <Button
             label="QR"
             onPress={navigateToQrDisplay}
             variant="secondary"
             style={styles.iconBtn}
           />
-          <SkiaButton
+          <Button
             label="Scan"
             onPress={navigateToQrScan}
             variant="secondary"
             style={styles.iconBtn}
           />
-          <SkiaButton
+          <Button
             label="Settings"
             onPress={navigateToSettings}
             variant="secondary"
             style={styles.iconBtn}
           />
-          <SkiaButton
+          <Button
             label="Logout"
             onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
             variant="secondary"
@@ -348,13 +348,13 @@ export function ChatListScreen(): React.JSX.Element {
                         <Text style={styles.inviteHandle} numberOfLines={1}>{invite.groupName}</Text>
                         <Text style={styles.inviteStatus}>From {inviterHandles[invite.inviterDid] ?? invite.inviterDid}</Text>
                       </View>
-                      <SkiaButton
+                      <Button
                         label="Accept"
                         onPress={() => app.respondToGroupInvite(invite.inviteId, true)}
                         variant="primary"
                         style={styles.inviteBtn}
                       />
-                      <SkiaButton
+                      <Button
                         label="Decline"
                         onPress={() => app.respondToGroupInvite(invite.inviteId, false)}
                         variant="secondary"
@@ -393,7 +393,7 @@ export function ChatListScreen(): React.JSX.Element {
                           </Text>
                         </View>
                         {acceptedCount > 0 && (
-                          <SkiaButton
+                          <Button
                             label={isExistingGroup ? 'Add' : 'Create'}
                             onPress={() =>
                               isExistingGroup
@@ -404,7 +404,7 @@ export function ChatListScreen(): React.JSX.Element {
                             style={styles.inviteBtn}
                           />
                         )}
-                        <SkiaButton
+                        <Button
                           label="Cancel"
                           onPress={() => {
                             for (const inv of invites) {

@@ -14,7 +14,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
-import { SkiaButton } from './SkiaButton';
+import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import type { GroupMember } from '../protocol/group-message';
 import type { RootStackParamList } from '../types/navigation';
@@ -96,7 +96,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
 
       <View style={styles.content}>
         <View style={styles.header}>
-          <SkiaButton
+          <Button
             label="Back"
             onPress={() => navigation.goBack()}
             variant="secondary"
@@ -110,7 +110,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
             <Text style={styles.dissolvedHint}>
               {dissolved ? '群聊已解散' : removed ? '你已被移出群聊' : '你已离开群聊'}
             </Text>
-            <SkiaButton
+            <Button
               label="Delete Conversation"
               onPress={() => {
                 app.deleteFriend(groupId);
@@ -135,7 +135,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
                     {item.role === 'creator' ? ' (Creator)' : ''}
                   </Text>
                   {isCreator && item.role !== 'creator' && (
-                    <SkiaButton
+                    <Button
                       label="Remove"
                       onPress={() => handleRemoveMember(item.did)}
                       variant="secondary"
@@ -147,7 +147,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
             />
 
             {isCreator && (
-              <SkiaButton
+              <Button
                 label="Invite New Member"
                 onPress={() => navigation.navigate('CreateGroup', { groupId })}
                 variant="primary"
@@ -156,7 +156,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
             )}
 
             {isCreator ? (
-              <SkiaButton
+              <Button
                 label="Dissolve Group"
                 onPress={() => {
                   app.dissolveGroup(groupId);
@@ -166,7 +166,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
                 style={styles.fullButton}
               />
             ) : (
-              <SkiaButton
+              <Button
                 label="Leave Group"
                 onPress={() => {
                   app.leaveGroup(groupId);

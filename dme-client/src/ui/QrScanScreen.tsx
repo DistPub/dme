@@ -17,7 +17,7 @@ import * as ImagePicker from 'expo-image-picker';
 import jsQR from 'jsqr';
 
 import { theme } from './theme';
-import { SkiaButton } from './SkiaButton';
+import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import { decodeQrPayload } from '../handshake/qr-encode';
 import { DidResolver } from '@atproto/identity';
@@ -154,7 +154,7 @@ export function QrScanScreen(): React.JSX.Element {
         )}
 
         {status !== 'processing' && status !== 'confirm' && (
-          <SkiaButton
+          <Button
             label={status === 'scanning' ? 'Scanning...' : 'Scan QR from Gallery'}
             onPress={onScan}
             variant="primary"
@@ -164,13 +164,13 @@ export function QrScanScreen(): React.JSX.Element {
 
         {status === 'confirm' && (
           <>
-            <SkiaButton
+            <Button
               label="Accept"
               onPress={onAccept}
               variant="primary"
               style={styles.fullButton}
             />
-            <SkiaButton
+            <Button
               label="Decline"
               onPress={() => {
                 setQrString(null);
@@ -184,7 +184,7 @@ export function QrScanScreen(): React.JSX.Element {
         )}
 
         {status === 'error' && (
-          <SkiaButton
+          <Button
             label="Try Again"
             onPress={() => setStatus('idle')}
             variant="secondary"
@@ -192,7 +192,7 @@ export function QrScanScreen(): React.JSX.Element {
           />
         )}
 
-        <SkiaButton
+        <Button
           label="Back"
           onPress={() => navigation.goBack()}
           variant="secondary"

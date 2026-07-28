@@ -7,7 +7,7 @@
 
 # dme-client/src/crypto
 
-MLS (RFC 9420) 加密模块。8 个文件。使用 ts-mls + @noble 库（非 WebCrypto，因 Safari < 17 不支持 X25519）。
+MLS (RFC 9420) 加密模块。9 个文件。使用 ts-mls + @noble 库（非 WebCrypto，因 Safari < 17 不支持 X25519）。
 
 ## 快速定位
 
@@ -19,6 +19,7 @@ MLS (RFC 9420) 加密模块。8 个文件。使用 ts-mls + @noble 库（非 Web
 | 改 MLS 凭证 | `mls-credential.ts`（DID 凭证 + AuthenticationService） |
 | 改 KeyPackage 管理 | `keypackage.ts`（生成/加密/解密/序列化） |
 | 改身份密钥管理 | `identity.ts`（Ed25519 签名 + X25519 加密双密钥对） |
+| 改身份备份 | `backup.ts`（PBKDF2+AES-GCM 加密/解密 FullBackupData） |
 | 改 did:key 编码 | `did-key.ts`（Ed25519 + X25519 编解码） |
 
 ## 文件清单
@@ -31,6 +32,7 @@ MLS (RFC 9420) 加密模块。8 个文件。使用 ts-mls + @noble 库（非 Web
 | `mls-session.ts` | 255 | MlsSession 类：createAsFounder / joinViaWelcome / addMember / removeMember / updateOwnLeaf / encrypt / decrypt / serialize / deserialize |
 | `keypackage.ts` | 196 | KeyPackage 生成、X25519+AES-256-GCM 加密/解密、MLS wire 编解码、QR 序列化 |
 | `identity.ts` | 131 | IdentityKeys（Ed25519 + X25519 双密钥对）+ 导出/导入 |
+| `backup.ts` | ~120 | FullBackupData 加密/解密：PBKDF2-SHA256(100k iter)+AES-256-GCM，备份范围含身份密钥+MLS会话+KeyPackage池+群聊元数据 |
 | `did-key.ts` | 150 | Ed25519 / X25519 did:key 编解码 |
 | `utils.ts` | 26 | bytesToHex / bytesToBase64url / base64urlToBytes |
 
@@ -52,5 +54,5 @@ MLS (RFC 9420) 加密模块。8 个文件。使用 ts-mls + @noble 库（非 Web
 - **ts-mls**: RFC 9420 TypeScript 实现，提供 createGroup / joinGroup / createCommit / processPrivateMessage / createApplicationMessage 等
 - **Uint8Array**: 所有密钥/密文载体，非 Buffer
 - **序列化**: `serialize()`/`deserialize()` 用 `encodeGroupState`/`decodeGroupState` 转 base64url 存 AsyncStorage
-- **私钥明文存储**: X25519/Ed25519 私钥以 base64 存在 AsyncStorage，无 Secure Enclave（已知限制）
+- **私钥明文存储**: X25519/Ed25519 私钥以 base64 存在 AsyncStorage，无 Secure Enclave（已知限制）。支持密码加密备份到 PDS（`backup.ts`）
 - **generation 编码**: QueueID 派生时 generation 用 4 字节 uint32 大端编码

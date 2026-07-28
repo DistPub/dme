@@ -13,6 +13,8 @@
 import type { Agent } from '@atproto/api';
 import type { DmeEnvelope } from '../protocol/index';
 import { DME_ENVELOPE_NSID } from '../protocol/index';
+import { DME_BACKUP_NSID } from '../protocol/types';
+import type { IdentityBackupRecord } from '../protocol/types';
 
 interface CreateRecordResult {
   uri: string;
@@ -74,5 +76,38 @@ export class DmePds {
 
     const data = (await response.json()) as BatchGetResponse;
     return data.envelopes;
+  }
+
+  /**
+   * 将加密的身份私钥备份写入 PDS（upsert，rkey 固定为 "self"）。
+   */
+  async putIdentityBackup(encryptedData: string): Promise<void> {
+    await this.agent.com.atproto.repo.putRecord({
+      repo: this.agent.assertDid,
+      collection: DME_BACKUP_NSID,
+      rkey: 'self',
+      record: {
+        $type: DME_BACKUP_NSID,
+        encryptedData,
+        createdAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  /**
+   * 从 PDS 读取身份私钥备份。不存在时返回 null。
+   */
+  async getIdentityBackup(): Promise<string | null> {
+    try {
+      const result = await this.agent.com.atproto.repo.getRecord({
+        repo: this.agent.assertDid,
+        collection: DME_BACKUP_NSID,
+        rkey: 'self',
+      });
+      const record = result.data.value as IdentityBackupRecord;
+      return record.encryptedData;
+    } catch {
+      return null;
+    }
   }
 }

@@ -26,6 +26,7 @@ export interface SkiaButtonProps {
   label: string;
   onPress: () => void;
   variant?: 'primary' | 'secondary';
+  disabled?: boolean;
   style?: ViewStyle;
   /** @deprecated Absolute positioning - prefer flex via style prop */
   x?: number;
@@ -38,6 +39,7 @@ export function SkiaButton({
   label,
   onPress,
   variant = 'primary',
+  disabled = false,
   style,
   x,
   y,
@@ -46,19 +48,22 @@ export function SkiaButton({
 }: SkiaButtonProps): React.JSX.Element {
   const font = useAppFont(theme.typography.body);
 
-  const bgColor =
+  const activeBg =
     variant === 'primary' ? theme.colors.accent : theme.colors.surface;
-  const textColor = theme.colors.textPrimary;
+  const bgColor = disabled ? theme.colors.border : activeBg;
+  const textColor = disabled ? theme.colors.placeholder : theme.colors.textPrimary;
 
   const tap = useMemo(
     () =>
-      Gesture.Tap()
-        .maxDuration(250)
-        .onEnd(() => {
-          'worklet';
-          onPress();
-        }),
-    [onPress],
+      disabled
+        ? Gesture.Tap()
+        : Gesture.Tap()
+            .maxDuration(250)
+            .onEnd(() => {
+              'worklet';
+              onPress();
+            }),
+    [onPress, disabled],
   );
 
   const isAbsolute = x !== undefined && y !== undefined && w !== undefined && h !== undefined;

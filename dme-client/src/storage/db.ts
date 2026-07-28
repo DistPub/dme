@@ -15,6 +15,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { IdentityKeys } from '../crypto/identity';
+import type { GroupInfo, PendingInvite } from '../protocol/group-message';
+
+export type MessageKind = 'text' | 'group_invite' | 'group_system';
 
 /** 存储的消息记录。 */
 export interface StoredMessage {
@@ -24,6 +27,8 @@ export interface StoredMessage {
   plaintext: string;
   createdAt: string;
   sent: boolean;
+  kind?: MessageKind;
+  conversationId?: string;
 }
 
 /** 等待接收 Welcome 的记录。 */
@@ -124,8 +129,8 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async putMessage(msg: StoredMessage): Promise<void> {
-    const friendDid = msg.fromDid === this.userDid ? msg.toDid : msg.fromDid;
-    const key = this.prefix + `messages:${friendDid}`;
+    const storageKey = msg.conversationId ?? (msg.fromDid === this.userDid ? msg.toDid : msg.fromDid);
+    const key = this.prefix + `messages:${storageKey}`;
     const raw = await AsyncStorage.getItem(key);
     const messages: StoredMessage[] = raw ? JSON.parse(raw) : [];
     messages.push(msg);
@@ -253,6 +258,77 @@ export class DmeStorage {
 
   async deletePendingWelcome(queueId: string): Promise<void> {
     await AsyncStorage.removeItem(this.prefix + `pendingWelcome:${queueId}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // 群组元数据
+  // -----------------------------------------------------------------------
+
+  async putGroupInfo(info: GroupInfo): Promise<void> {
+    const key = this.prefix + `groupInfo:${info.groupId}`;
+    await AsyncStorage.setItem(key, JSON.stringify(info));
+  }
+
+  async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
+    const raw = await AsyncStorage.getItem(this.prefix + `groupInfo:${groupId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as GroupInfo;
+  }
+
+  async deleteGroupInfo(groupId: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + `groupInfo:${groupId}`);
+  }
+
+  async listGroupInfos(): Promise<GroupInfo[]> {
+    const keys = await AsyncStorage.getAllKeys();
+    const prefix = this.prefix + 'groupInfo:';
+    const groupKeys = keys.filter((k) => k.startsWith(prefix));
+    const results: GroupInfo[] = [];
+    for (const k of groupKeys) {
+      const raw = await AsyncStorage.getItem(k);
+      if (raw) results.push(JSON.parse(raw) as GroupInfo);
+    }
+    return results;
+  }
+
+  // -----------------------------------------------------------------------
+  // 群聊邀请记录
+  // -----------------------------------------------------------------------
+
+  async putPendingInvite(invite: PendingInvite): Promise<void> {
+    const key = this.prefix + `pendingInvite:${invite.inviteId}`;
+    await AsyncStorage.setItem(key, JSON.stringify(invite));
+  }
+
+  async getPendingInvite(inviteId: string): Promise<PendingInvite | null> {
+    const raw = await AsyncStorage.getItem(this.prefix + `pendingInvite:${inviteId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as PendingInvite;
+  }
+
+  async updatePendingInviteStatus(
+    inviteId: string,
+    status: PendingInvite['status'],
+  ): Promise<void> {
+    const invite = await this.getPendingInvite(inviteId);
+    if (!invite) return;
+    await this.putPendingInvite({ ...invite, status });
+  }
+
+  async getPendingInvites(): Promise<PendingInvite[]> {
+    const keys = await AsyncStorage.getAllKeys();
+    const prefix = this.prefix + 'pendingInvite:';
+    const inviteKeys = keys.filter((k) => k.startsWith(prefix));
+    const results: PendingInvite[] = [];
+    for (const k of inviteKeys) {
+      const raw = await AsyncStorage.getItem(k);
+      if (raw) results.push(JSON.parse(raw) as PendingInvite);
+    }
+    return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async deletePendingInvite(inviteId: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + `pendingInvite:${inviteId}`);
   }
 
   // -----------------------------------------------------------------------

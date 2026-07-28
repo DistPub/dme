@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -18,6 +19,7 @@ import { SkiaButton } from './SkiaButton';
 import { MessageBubble } from './MessageBubble';
 import { useApp } from '../state/AppContext';
 import type { StoredMessage } from '../storage/db';
+import type { GroupInviteRequest } from '../protocol/group-message';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
@@ -27,20 +29,26 @@ export function ChatViewScreen(): React.JSX.Element {
   const app = useApp();
   const route = useRoute<ChatViewRouteProp>();
   const navigation = useNavigation<Navigation>();
-  const { friendDid } = route.params;
+
+  const conversationId = 'groupId' in route.params ? route.params.groupId : route.params.friendDid;
+  const isGroup = 'groupId' in route.params;
 
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [friendHandle, setFriendHandle] = useState(friendDid);
+  const [displayName, setDisplayName] = useState(isGroup ? 'Loading...' : conversationId);
+  const [senderHandles, setSenderHandles] = useState<Record<string, string>>({});
+  const [dissolved, setDissolved] = useState(false);
+  const [removed, setRemoved] = useState(false);
+  const [left, setLeft] = useState(false);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
 
   const loadMessages = useCallback(async (): Promise<void> => {
     if (!app.storage) return;
-    const msgs = await app.storage.getMessages(friendDid);
+    const msgs = await app.storage.getMessages(conversationId);
     setMessages(msgs);
-  }, [app.storage, friendDid]);
+  }, [app.storage, conversationId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -53,28 +61,72 @@ export function ChatViewScreen(): React.JSX.Element {
   }, [app.chatListVersion, loadMessages]);
 
   useEffect(() => {
+    if (!isGroup || !app.storage) return;
+    const unresolvedDids = [...new Set(messages.map((m) => m.fromDid))]
+      .filter((did) => did !== app.session?.did && !senderHandles[did]);
+    if (unresolvedDids.length === 0) return;
+
     let cancelled = false;
     (async () => {
-      try {
-        const { DidResolver } = await import('@atproto/identity');
-        const resolver = new DidResolver({});
-        const doc = (await resolver.resolve(friendDid)) as DidDocWithHandle | null;
-        if (!cancelled && doc?.alsoKnownAs?.[0]) {
-          setFriendHandle(doc.alsoKnownAs[0].replace(/^at:\/\//, ''));
+      const { DidResolver } = await import('@atproto/identity');
+      const resolver = new DidResolver({});
+      const resolved: Record<string, string> = {};
+      for (const did of unresolvedDids) {
+        try {
+          const doc = (await resolver.resolve(did)) as DidDocWithHandle | null;
+          if (doc?.alsoKnownAs?.[0]) {
+            resolved[did] = doc.alsoKnownAs[0].replace(/^at:\/\//, '');
+          } else {
+            resolved[did] = did;
+          }
+        } catch {
+          resolved[did] = did;
         }
-      } catch (err) {
-        console.error('Failed to resolve handle for', friendDid, err);
+      }
+      if (!cancelled) {
+        setSenderHandles((prev) => ({ ...prev, ...resolved }));
       }
     })();
     return () => { cancelled = true; };
-  }, [friendDid]);
+  }, [messages, isGroup, app.storage, app.session?.did, senderHandles]);
+
+  useEffect(() => {
+    if (isGroup) {
+      const loadGroupName = async (): Promise<void> => {
+        if (!app.storage) return;
+        const info = await app.storage.getGroupInfo(conversationId);
+        if (info) {
+          setDisplayName(info.groupName);
+        setDissolved(info.dissolved ?? false);
+        setRemoved(info.removed ?? false);
+        setLeft(info.left ?? false);
+        }
+      };
+      loadGroupName().catch((err: unknown) => console.error('loadGroupName failed:', err));
+    } else {
+      let cancelled = false;
+      (async () => {
+        try {
+          const { DidResolver } = await import('@atproto/identity');
+          const resolver = new DidResolver({});
+          const doc = (await resolver.resolve(conversationId)) as DidDocWithHandle | null;
+          if (!cancelled && doc?.alsoKnownAs?.[0]) {
+            setDisplayName(doc.alsoKnownAs[0].replace(/^at:\/\//, ''));
+          }
+        } catch (err) {
+          console.error('Failed to resolve handle for', conversationId, err);
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+  }, [conversationId, isGroup, app.storage, app.chatListVersion]);
 
   const onSend = useCallback(async (): Promise<void> => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     setSending(true);
     try {
-      await app.sendMessage(friendDid, trimmed);
+      await app.sendMessage(conversationId, trimmed);
       setText('');
       await loadMessages();
       inputRef.current?.focus();
@@ -83,16 +135,67 @@ export function ChatViewScreen(): React.JSX.Element {
     } finally {
       setSending(false);
     }
-  }, [text, sending, app, friendDid, loadMessages]);
+  }, [text, sending, app, conversationId, loadMessages]);
 
   const renderItem = useCallback(
-    ({ item }: { item: StoredMessage }): React.JSX.Element => (
-      <MessageBubble
-        text={item.plaintext}
-        isOutgoing={item.fromDid === app.session?.did}
-      />
-    ),
-    [app.session?.did],
+    ({ item }: { item: StoredMessage }): React.JSX.Element => {
+      if (item.kind === 'group_system') {
+        return (
+          <View style={styles.systemMsgWrap}>
+            <Text style={styles.systemMsgText}>{item.plaintext}</Text>
+          </View>
+        );
+      }
+
+      if (item.kind === 'group_invite') {
+        let groupName = 'Group';
+        let inviteId = '';
+        try {
+          const parsed = JSON.parse(item.plaintext) as GroupInviteRequest;
+          groupName = parsed.groupName;
+          inviteId = parsed.inviteId;
+        } catch {
+        }
+
+        const alreadyResponded = app.receivedGroupInvites.some(
+          (i) => i.inviteId === inviteId && i.status !== 'pending',
+        );
+
+        return (
+          <View style={styles.inviteCard}>
+            <Text style={styles.inviteTitle}>{groupName}</Text>
+            <Text style={styles.inviteSubtitle}>Group invitation</Text>
+            {alreadyResponded ? (
+              <Text style={styles.inviteResponded}>Responded</Text>
+            ) : (
+              <View style={styles.inviteButtons}>
+                <SkiaButton
+                  label="Accept"
+                  onPress={() => app.respondToGroupInvite(inviteId, true)}
+                  variant="primary"
+                  style={styles.inviteBtn}
+                />
+                <SkiaButton
+                  label="Decline"
+                  onPress={() => app.respondToGroupInvite(inviteId, false)}
+                  variant="secondary"
+                  style={styles.inviteBtn}
+                />
+              </View>
+            )}
+          </View>
+        );
+      }
+
+      return (
+        <MessageBubble
+          text={item.plaintext}
+          isOutgoing={item.fromDid === app.session?.did}
+          senderName={isGroup ? (senderHandles[item.fromDid] ?? item.fromDid) : undefined}
+        />
+      );
+    },
+    [app.session?.did, app.receivedGroupInvites, app.respondToGroupInvite, isGroup, senderHandles],
   );
 
   const keyExtractor = useCallback(
@@ -110,8 +213,17 @@ export function ChatViewScreen(): React.JSX.Element {
           style={styles.backBtn}
         />
         <Text style={styles.headerTitle} numberOfLines={1}>
-          {friendHandle}
+          {displayName}
         </Text>
+        {isGroup && (
+          <TouchableOpacity
+            onPress={() => navigation.navigate('GroupSettings', { groupId: conversationId })}
+            style={styles.settingsBtn}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.settingsIcon}>⋮</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <FlatList
@@ -125,26 +237,34 @@ export function ChatViewScreen(): React.JSX.Element {
         onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
       />
 
-      <View style={styles.inputBar}>
-        <TextInput
-          ref={inputRef}
-          style={styles.input}
-          value={text}
-          onChangeText={setText}
-          placeholder="Type a message..."
-          placeholderTextColor={theme.colors.placeholder}
-          autoCapitalize="none"
-          autoCorrect={false}
-          onSubmitEditing={onSend}
-          returnKeyType="send"
-        />
-        <SkiaButton
-          label={sending ? '…' : 'Send'}
-          onPress={onSend}
-          variant="primary"
-          style={styles.sendBtn}
-        />
-      </View>
+      {dissolved || removed || left ? (
+        <View style={styles.inputBar}>
+          <Text style={styles.dissolvedText}>
+            {dissolved ? '群聊已解散，无法发送消息' : removed ? '你已被移出群聊，无法发送消息' : '你已离开群聊，无法发送消息'}
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.inputBar}>
+          <TextInput
+            ref={inputRef}
+            style={styles.input}
+            value={text}
+            onChangeText={setText}
+            placeholder="Type a message..."
+            placeholderTextColor={theme.colors.placeholder}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onSubmitEditing={onSend}
+            returnKeyType="send"
+          />
+          <SkiaButton
+            label={sending ? '…' : 'Send'}
+            onPress={onSend}
+            variant="primary"
+            style={styles.sendBtn}
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -164,6 +284,17 @@ const styles = StyleSheet.create({
   backBtn: {
     width: 60,
     height: 40,
+  },
+  settingsBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  settingsIcon: {
+    color: theme.colors.textPrimary,
+    fontSize: 24,
+    fontWeight: '700',
   },
   headerTitle: {
     flex: 1,
@@ -199,5 +330,53 @@ const styles = StyleSheet.create({
   sendBtn: {
     width: 72,
     height: 48,
+  },
+  systemMsgWrap: {
+    alignItems: 'center',
+    paddingVertical: theme.spacing.md,
+    marginHorizontal: theme.spacing.xl,
+  },
+  systemMsgText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.caption,
+    textAlign: 'center',
+  },
+  inviteCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing.md,
+    marginVertical: theme.spacing.sm,
+    marginHorizontal: theme.spacing.md,
+  },
+  inviteTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+  },
+  inviteSubtitle: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.caption,
+    marginTop: 2,
+    marginBottom: theme.spacing.sm,
+  },
+  inviteResponded: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.caption,
+    textAlign: 'center',
+    paddingVertical: theme.spacing.sm,
+  },
+  inviteButtons: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  inviteBtn: {
+    flex: 1,
+    height: 40,
+  },
+  dissolvedText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.caption,
+    textAlign: 'center',
+    paddingVertical: theme.spacing.md,
   },
 });

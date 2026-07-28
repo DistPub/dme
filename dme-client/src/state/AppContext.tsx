@@ -37,9 +37,31 @@ import {
 } from '../crypto/keypackage';
 import type { KeyPackagePair } from '../crypto/keypackage';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
-import { bytesToBase64url } from '../crypto/utils';
+import { bytesToBase64url, base64urlToBytes } from '../crypto/utils';
 import { DME_SERVER_URL, PDS_URL } from '../config';
 import type { DmeEnvelope } from '../protocol/types';
+import type {
+  GroupInfo,
+  GroupMember,
+  PendingInvite,
+  GroupMessage,
+  GroupInviteRequest,
+  GroupInviteResponse,
+  GroupWelcome,
+  GroupMetadataUpdate,
+  GroupDissolved,
+  GroupMemberRemoved,
+  GroupMemberLeft,
+} from '../protocol/group-message';
+import {
+  createInviteRequest,
+  createAcceptResponse,
+  createRejectResponse,
+  createGroupWelcome,
+  createMetadataUpdate,
+  generateEncryptedKeyPackageForInvite,
+  deserializeAcceptedKeyPackage,
+} from '../handshake/group-invite';
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (Uint8Array <-> base64 via JSON replacer)
@@ -79,6 +101,20 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+async function resolveDidToHandle(did: string): Promise<string> {
+  try {
+    const { DidResolver } = await import('@atproto/identity');
+    const resolver = new DidResolver({});
+    const doc = (await resolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
+    if (doc?.alsoKnownAs?.[0]) {
+      return doc.alsoKnownAs[0].replace(/^at:\/\//, '');
+    }
+  } catch (err) {
+    console.error('resolveDidToHandle failed for', did, err);
+  }
+  return did;
+}
+
 // ---------------------------------------------------------------------------
 // Context types
 // ---------------------------------------------------------------------------
@@ -96,6 +132,9 @@ interface AppState {
   keyPackagePool: KeyPackagePoolEntry[];
   chatListVersion: number;
   pollBatchSize: number;
+  pendingInvites: PendingInvite[];
+  groupInfos: GroupInfo[];
+  receivedGroupInvites: PendingInvite[];
 }
 
 interface AppActions {
@@ -110,6 +149,15 @@ interface AppActions {
   acceptInviteQr: (qrString: string) => Promise<void>;
   refreshKeyPackagePool: () => Promise<void>;
   setPollBatchSize: (size: number) => Promise<void>;
+  sendGroupInvites: (groupName: string, friendDids: readonly string[]) => Promise<string>;
+  respondToGroupInvite: (inviteId: string, accepted: boolean) => Promise<void>;
+  createGroupFromPendingInvites: (groupId: string) => Promise<void>;
+  cancelGroupInvite: (inviteId: string) => Promise<void>;
+  addMemberToGroup: (groupId: string, friendDid: string) => Promise<void>;
+  addAcceptedMembersToGroup: (groupId: string) => Promise<void>;
+  dissolveGroup: (groupId: string) => Promise<void>;
+  removeMemberFromGroup: (groupId: string, memberDid: string) => Promise<void>;
+  leaveGroup: (groupId: string) => Promise<void>;
 }
 
 interface AppContextValue extends AppState, AppActions {}
@@ -133,8 +181,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [keyPackagePool, setKeyPackagePool] = useState<KeyPackagePoolEntry[]>([]);
   const [chatListVersion, setChatListVersion] = useState(0);
   const [pollBatchSize, setPollBatchSizeState] = useState(3);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [groupInfos, setGroupInfos] = useState<GroupInfo[]>([]);
+  const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
+  const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
 
   // -------------------------------------------------------------------------
   // KeyPackage pool
@@ -224,15 +276,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       newPoller.start(
         async (msg: IncomingMessage) => {
-          await correctStorage.putMessage({
-            id: msg.envelope.queueId,
-            fromDid: msg.senderDid,
-            toDid: userDid,
-            plaintext: msg.plaintext,
-            createdAt: msg.envelope.createdAt,
-            sent: false,
-          });
-          setChatListVersion((v) => v + 1);
+          await handleIncomingMessageRef.current(msg, userDid, correctStorage);
         },
         async (welcome: IncomingWelcome) => {
           await processWelcomeRef.current(welcome);
@@ -263,6 +307,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // Restore KeyPackage pool
       const pool = await correctStorage.getKeyPackagePool();
 
+      // Restore group invites and group infos
+      const allInvites = await correctStorage.getPendingInvites();
+      const sentInvites = allInvites.filter((i) => i.inviterDid === userDid);
+      const recvInvites = allInvites.filter((i) => i.inviteeDid === userDid);
+      const storedGroupInfos = await correctStorage.listGroupInfos();
+
       setSession(newSession);
       setStorage(correctStorage);
       setIdentityKeys(keys);
@@ -272,6 +322,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingWelcomes(welcomes);
       setKeyPackagePool(pool);
       setPollBatchSizeState(batchSize);
+      setPendingInvites(sentInvites);
+      setReceivedGroupInvites(recvInvites);
+      setGroupInfos(storedGroupInfos);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
       throw err;
@@ -299,6 +352,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroups([]);
       setPendingWelcomes([]);
       setKeyPackagePool([]);
+      setPendingInvites([]);
+      setReceivedGroupInvites([]);
+      setGroupInfos([]);
       setPollBatchSizeState(3);
       setLoading(false);
     }
@@ -338,15 +394,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         newPoller.start(
           async (msg: IncomingMessage) => {
-            await tempStorage.putMessage({
-              id: msg.envelope.queueId,
-              fromDid: msg.senderDid,
-              toDid: did,
-              plaintext: msg.plaintext,
-              createdAt: msg.envelope.createdAt,
-              sent: false,
-            });
-            setChatListVersion((v) => v + 1);
+            await handleIncomingMessageRef.current(msg, did, tempStorage);
           },
           async (welcome: IncomingWelcome) => {
             await processWelcomeRef.current(welcome);
@@ -375,6 +423,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         const pool = await tempStorage.getKeyPackagePool();
 
+        const allInvites = await tempStorage.getPendingInvites();
+        const sentInvites = allInvites.filter((i) => i.inviterDid === did);
+        const recvInvites = allInvites.filter((i) => i.inviteeDid === did);
+        const storedGroupInfos = await tempStorage.listGroupInfos();
+
         setSession(tempSession);
         setStorage(tempStorage);
         setIdentityKeys(idKeys);
@@ -384,6 +437,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         setPendingWelcomes(welcomes);
         setKeyPackagePool(pool);
         setPollBatchSizeState(batchSize);
+        setPendingInvites(sentInvites);
+        setReceivedGroupInvites(recvInvites);
+        setGroupInfos(storedGroupInfos);
         return true;
       }
 
@@ -543,6 +599,331 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   processWelcomeRef.current = processReceivedWelcome;
 
   // -------------------------------------------------------------------------
+  // Incoming message handler (group message parsing)
+  // -------------------------------------------------------------------------
+
+  const handleIncomingMessage = useCallback(async (
+    msg: IncomingMessage,
+    userDid: string,
+    msgStorage: DmeStorage,
+  ): Promise<void> => {
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(msg.plaintext) as Record<string, unknown>;
+    } catch {
+    }
+
+    const msgType = parsed?.['type'] as string | undefined;
+
+    if (msgType && msgType.startsWith('group_')) {
+      switch (msgType) {
+        case 'group_invite_request': {
+          const req = parsed as unknown as GroupInviteRequest;
+          const invite: PendingInvite = {
+            inviteId: req.inviteId,
+            groupId: req.groupId,
+            groupName: req.groupName,
+            inviterDid: msg.senderDid,
+            inviteeDid: userDid,
+            status: 'pending',
+            createdAt: msg.envelope.createdAt,
+          };
+          await msgStorage.putPendingInvite(invite);
+          setReceivedGroupInvites((prev) => [...prev, invite]);
+
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: msg.plaintext,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'group_invite',
+          });
+          break;
+        }
+        case 'group_invite_response': {
+          const resp = parsed as unknown as GroupInviteResponse;
+          const existing = await msgStorage.getPendingInvite(resp.inviteId);
+          if (existing) {
+            const updated: PendingInvite = resp.accepted
+              ? { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized }
+              : { ...existing, status: 'rejected' };
+            await msgStorage.putPendingInvite(updated);
+            setPendingInvites((prev) =>
+              prev.map((i) => i.inviteId === resp.inviteId ? updated : i),
+            );
+          }
+          const senderHandle = await resolveDidToHandle(msg.senderDid);
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: resp.accepted
+              ? `${senderHandle} 接受了群聊邀请`
+              : `${senderHandle} 拒绝了群聊邀请`,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'group_system',
+          });
+          break;
+        }
+        case 'group_welcome': {
+          const welcome = parsed as unknown as GroupWelcome;
+
+          if (identityKeys && poller) {
+            try {
+              const allInvites = await msgStorage.getPendingInvites();
+              const matchingInvites = allInvites.filter(
+                (i) => i.groupId === welcome.groupId && i.inviteeDid === userDid && i.ownKeyPackagePairSerialized,
+              );
+              const ownInvite = matchingInvites.length > 0
+                ? matchingInvites[matchingInvites.length - 1]
+                : null;
+
+              if (ownInvite?.ownKeyPackagePairSerialized) {
+                const { deserializeOwnKeyPackagePair } = await import('../handshake/group-invite');
+                const pair = deserializeOwnKeyPackagePair(ownInvite.ownKeyPackagePairSerialized);
+
+                const { decodeMlsMessage } = await import('ts-mls');
+                const { MlsSession } = await import('../crypto/mls-session');
+                const impl = await getMlsImpl();
+                const welcomeBytes = base64urlToBytes(welcome.welcomePayload);
+                const decoded = decodeMlsMessage(welcomeBytes, 0);
+                if (!decoded) throw new Error('failed to decode welcome');
+                const msg = decoded[0]!;
+                if (msg.wireformat !== 'mls_welcome') {
+                  throw new Error(`expected mls_welcome, got ${msg.wireformat}`);
+                }
+                const mlsWelcome = msg.welcome;
+
+                const newSession = await MlsSession.joinViaWelcome(
+                  mlsWelcome,
+                  pair,
+                  impl,
+                );
+
+                await msgStorage.putMlsSession(welcome.groupId, newSession.serialize());
+                poller.addSession(welcome.groupId, newSession);
+                await msgStorage.deletePendingInvite(ownInvite.inviteId);
+              }
+            } catch (err) {
+              console.error('handleIncomingMessage: failed to join group via welcome:', err);
+            }
+          }
+
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: `你已加入群聊：${welcome.groupName}`,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'group_system',
+            conversationId: welcome.groupId,
+          });
+
+          const groupInfo: GroupInfo = {
+            groupId: welcome.groupId,
+            groupName: welcome.groupName,
+            creatorDid: msg.senderDid,
+            members: welcome.members,
+            createdAt: msg.envelope.createdAt,
+          };
+          await msgStorage.putGroupInfo(groupInfo);
+          setGroupInfos((prev) => prev.some((g) => g.groupId === welcome.groupId) ? prev : [...prev, groupInfo]);
+          setGroups((prev) => prev.includes(welcome.groupId) ? prev : [...prev, welcome.groupId]);
+          break;
+        }
+        case 'group_metadata_update': {
+          const update = parsed as unknown as GroupMetadataUpdate;
+          const existing = await msgStorage.getGroupInfo(update.groupId);
+          if (existing) {
+            const updated: GroupInfo = { ...existing, members: update.members, groupName: update.groupName };
+            await msgStorage.putGroupInfo(updated);
+            setGroupInfos((prev) =>
+              prev.map((g) => g.groupId === update.groupId ? updated : g),
+            );
+          }
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: '群成员已更新',
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'group_system',
+            conversationId: update.groupId,
+          });
+          break;
+        }
+        case 'group_commit': {
+          const commit = parsed as unknown as { type: string; groupId: string; commitPayload: string };
+
+          if (poller) {
+            const groupSession = poller.getSession(commit.groupId);
+            if (groupSession) {
+              try {
+                const commitBytes = base64urlToBytes(commit.commitPayload);
+                await groupSession.decrypt(commitBytes);
+                await msgStorage.putMlsSession(commit.groupId, groupSession.serialize());
+              } catch (err) {
+                console.error('handleIncomingMessage: failed to process group commit:', err);
+              }
+            }
+          }
+          break;
+        }
+        case 'group_dissolved': {
+          const dissolved = parsed as unknown as GroupDissolved;
+
+          if (poller) {
+            poller.removeSession(dissolved.groupId);
+          }
+          await msgStorage.deleteMlsSession(dissolved.groupId);
+
+          const existing = await msgStorage.getGroupInfo(dissolved.groupId);
+          if (existing) {
+            const dissolvedInfo: GroupInfo = { ...existing, dissolved: true };
+            await msgStorage.putGroupInfo(dissolvedInfo);
+            setGroupInfos((prev) => prev.map((g) => g.groupId === dissolved.groupId ? dissolvedInfo : g));
+          }
+
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: `群聊已解散：${dissolved.groupName}`,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'group_system',
+            conversationId: dissolved.groupId,
+          });
+          break;
+        }
+        case 'group_member_removed': {
+          const removed = parsed as unknown as GroupMemberRemoved;
+
+          if (poller) {
+            poller.removeSession(removed.groupId);
+          }
+          await msgStorage.deleteMlsSession(removed.groupId);
+
+          const existing = await msgStorage.getGroupInfo(removed.groupId);
+          if (existing) {
+            const removedInfo: GroupInfo = { ...existing, removed: true };
+            await msgStorage.putGroupInfo(removedInfo);
+            setGroupInfos((prev) => prev.map((g) => g.groupId === removed.groupId ? removedInfo : g));
+          }
+
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: `你已被移出群聊：${removed.groupName}`,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'group_system',
+            conversationId: removed.groupId,
+          });
+          break;
+        }
+        case 'group_member_left': {
+          const left = parsed as unknown as GroupMemberLeft;
+
+          const existing = await msgStorage.getGroupInfo(left.groupId);
+          if (!existing) break;
+
+          const isCreator = existing.creatorDid === userDid;
+
+          if (isCreator && poller && pds) {
+            const groupSession = poller.getSession(left.groupId);
+            if (groupSession) {
+              try {
+                const leafIndex = groupSession.getMemberDids().indexOf(left.memberDid);
+                if (leafIndex >= 0) {
+                  const { commitMessage } = await groupSession.removeMember(leafIndex);
+                  await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
+
+                  const commitMsg = {
+                    type: 'group_commit' as const,
+                    groupId: left.groupId,
+                    commitPayload: bytesToBase64url(commitMessage),
+                  };
+
+                  for (const member of existing.members) {
+                    if (member.did === userDid || member.did === left.memberDid) continue;
+                    const memberSession = poller.getSession(member.did);
+                    if (!memberSession) continue;
+
+                    const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
+                    const encResult = await memberSession.encrypt(plaintextBytes);
+                    await msgStorage.putMlsSession(member.did, memberSession.serialize());
+
+                    const envelope: DmeEnvelope = {
+                      $type: 'dme.queue.envelope',
+                      queueId: encResult.queueId,
+                      payload: bytesToBase64url(encResult.ciphertext),
+                      createdAt: new Date().toISOString(),
+                      messageType: 'application',
+                    };
+                    await pds.createEnvelope(envelope);
+                  }
+                }
+              } catch (err) {
+                console.error('handleIncomingMessage: failed to remove leaving member:', err);
+              }
+            }
+          }
+
+          const updatedMembers = existing.members.filter((m) => m.did !== left.memberDid);
+          const updatedInfo: GroupInfo = { ...existing, members: updatedMembers };
+          await msgStorage.putGroupInfo(updatedInfo);
+          setGroupInfos((prev) => prev.map((g) => g.groupId === left.groupId ? updatedInfo : g));
+
+          const senderHandle = await resolveDidToHandle(left.memberDid);
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: `${senderHandle} 已离开群聊`,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'group_system',
+            conversationId: left.groupId,
+          });
+          break;
+        }
+        default:
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: msg.plaintext,
+            createdAt: msg.envelope.createdAt,
+            sent: false,
+            kind: 'text',
+            conversationId: msg.groupId,
+          });
+      }
+    } else {
+      await msgStorage.putMessage({
+        id: msg.envelope.queueId,
+        fromDid: msg.senderDid,
+        toDid: userDid,
+        plaintext: msg.plaintext,
+        createdAt: msg.envelope.createdAt,
+        sent: false,
+        kind: 'text',
+        conversationId: msg.groupId,
+      });
+    }
+    setChatListVersion((v) => v + 1);
+  }, [identityKeys, poller, pds]);
+
+  handleIncomingMessageRef.current = handleIncomingMessage;
+
+  // -------------------------------------------------------------------------
   // Messaging
   // -------------------------------------------------------------------------
 
@@ -596,6 +977,649 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, [storage, poller]);
 
   // -------------------------------------------------------------------------
+  // Group Chat Actions
+  // -------------------------------------------------------------------------
+
+  const sendGroupInvites = useCallback(async (
+    groupName: string,
+    friendDids: readonly string[],
+  ): Promise<string> => {
+    if (!session || !storage || !identityKeys || !pds || !poller) {
+      throw new Error('sendGroupInvites: not fully initialized');
+    }
+
+    const groupId = generateId();
+    const creatorMember: GroupMember = {
+      did: session.did,
+      displayName: session.did,
+      role: 'creator',
+    };
+
+    const newPending: PendingInvite[] = [];
+
+    for (const friendDid of friendDids) {
+      const inviteId = generateId();
+
+      const inviteRequest = createInviteRequest({
+        inviteId,
+        groupId,
+        groupName,
+        members: [creatorMember],
+      });
+
+      const mlsSession = poller.getSession(friendDid);
+      if (!mlsSession) {
+        console.error('sendGroupInvites: no MLS session for', friendDid);
+        continue;
+      }
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(inviteRequest));
+      const encResult = await mlsSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(friendDid, mlsSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+
+      const friendHandle = await resolveDidToHandle(friendDid);
+      await storage.putMessage({
+        id: `sys_invite_${inviteId}`,
+        fromDid: session.did,
+        toDid: friendDid,
+        plaintext: `你邀请了 ${friendHandle} 加入群聊：${groupName}`,
+        createdAt: new Date().toISOString(),
+        sent: true,
+        kind: 'group_system',
+      });
+
+      const invite: PendingInvite = {
+        inviteId,
+        groupId,
+        groupName,
+        inviterDid: session.did,
+        inviteeDid: friendDid,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+      await storage.putPendingInvite(invite);
+      newPending.push(invite);
+    }
+
+    setPendingInvites((prev) => [...prev, ...newPending]);
+    setChatListVersion((v) => v + 1);
+    return groupId;
+  }, [session, storage, identityKeys, pds, poller]);
+
+  const respondToGroupInvite = useCallback(async (
+    inviteId: string,
+    accepted: boolean,
+  ): Promise<void> => {
+    if (!session || !storage || !identityKeys || !pds || !poller) {
+      throw new Error('respondToGroupInvite: not fully initialized');
+    }
+
+    const invite = receivedGroupInvites.find((i) => i.inviteId === inviteId);
+    if (!invite) throw new Error('respondToGroupInvite: invite not found');
+
+    if (accepted) {
+      const inviterEncKey = await getRemoteEncryptionKey(invite.inviterDid);
+      if (!inviterEncKey) throw new Error('respondToGroupInvite: inviter has no encryption key');
+
+      const { encryptedKeyPackage, keyPackagePairSerialized } = await generateEncryptedKeyPackageForInvite({
+        ownDid: session.did,
+        ownIdentityKeys: identityKeys,
+        inviterEncryptionPublicKey: inviterEncKey,
+      });
+
+      const response = createAcceptResponse({
+        inviteId,
+        groupId: invite.groupId,
+        encryptedKeyPackage,
+      });
+
+      const mlsSession = poller.getSession(invite.inviterDid);
+      if (!mlsSession) throw new Error('respondToGroupInvite: no MLS session for inviter');
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(response));
+      const encResult = await mlsSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(invite.inviterDid, mlsSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+
+      const updatedInvite: PendingInvite = {
+        ...invite,
+        status: 'accepted',
+        ownKeyPackagePairSerialized: keyPackagePairSerialized,
+      };
+      await storage.putPendingInvite(updatedInvite);
+      setReceivedGroupInvites((prev) =>
+        prev.map((i) => i.inviteId === inviteId ? updatedInvite : i),
+      );
+    } else {
+      const response = createRejectResponse({ inviteId, groupId: invite.groupId });
+
+      const mlsSession = poller.getSession(invite.inviterDid);
+      if (!mlsSession) throw new Error('respondToGroupInvite: no MLS session for inviter');
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(response));
+      const encResult = await mlsSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(invite.inviterDid, mlsSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+
+      await storage.updatePendingInviteStatus(inviteId, 'rejected');
+    }
+
+    setReceivedGroupInvites((prev) =>
+      prev.map((i) => i.inviteId === inviteId ? { ...i, status: accepted ? 'accepted' : 'rejected' } : i),
+    );
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, identityKeys, pds, poller, receivedGroupInvites]);
+
+  const createGroupFromPendingInvites = useCallback(async (groupId: string): Promise<void> => {
+    if (!session || !storage || !identityKeys || !pds || !poller) {
+      throw new Error('createGroupFromPendingInvites: not fully initialized');
+    }
+
+    const accepted = pendingInvites.filter(
+      (i) => i.groupId === groupId && i.status === 'accepted',
+    );
+    if (accepted.length === 0) {
+      throw new Error('createGroupFromPendingInvites: no accepted members');
+    }
+
+    const { createGroupWithMembers } = await import('../handshake/group-invite');
+
+    const acceptedMembers: { did: string; keyPackage: KeyPackage }[] = [];
+    for (const invite of accepted) {
+      if (!invite.keyPackageSerialized) continue;
+      const keyPackage = await deserializeAcceptedKeyPackage({
+        keyPackageSerialized: invite.keyPackageSerialized,
+        ownEncryptionPrivateKey: identityKeys.encryption.privateKey,
+      });
+      acceptedMembers.push({ did: invite.inviteeDid, keyPackage });
+    }
+
+    const { mlsSession: newSession, welcomes, commits } = await createGroupWithMembers({
+      groupId,
+      ownerDid: session.did,
+      ownerIdentityKeys: identityKeys,
+      acceptedMembers,
+    });
+
+    await storage.putMlsSession(groupId, newSession.serialize());
+    poller.addSession(groupId, newSession);
+
+    const creatorMember: GroupMember = {
+      did: session.did,
+      displayName: session.did,
+      role: 'creator',
+    };
+    const memberList: GroupMember[] = [
+      creatorMember,
+      ...accepted.map((i) => ({ did: i.inviteeDid, displayName: i.inviteeDid, role: 'member' as const })),
+    ];
+
+    const groupInfo: GroupInfo = {
+      groupId,
+      groupName: accepted[0]?.groupName ?? 'New Group',
+      creatorDid: session.did,
+      members: memberList,
+      createdAt: new Date().toISOString(),
+    };
+    await storage.putGroupInfo(groupInfo);
+    setGroupInfos((prev) => [...prev, groupInfo]);
+    setPendingInvites((prev) => prev.filter((i) => i.groupId !== groupId));
+
+    for (const invite of accepted) {
+      const welcomeBytes = welcomes.get(invite.inviteeDid);
+      if (!welcomeBytes) continue;
+
+      const welcomeMsg = createGroupWelcome({
+        groupId,
+        groupName: groupInfo.groupName,
+        welcomePayload: bytesToBase64url(welcomeBytes),
+        members: memberList,
+      });
+
+      const mlsSession = poller.getSession(invite.inviteeDid);
+      if (!mlsSession) continue;
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(welcomeMsg));
+      const encResult = await mlsSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(invite.inviteeDid, mlsSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+
+      await storage.updatePendingInviteStatus(invite.inviteId, 'cancelled');
+    }
+
+    const metadataMsg = createMetadataUpdate({
+      groupId,
+      groupName: groupInfo.groupName,
+      members: memberList,
+    });
+
+    for (const invite of accepted) {
+      const mlsSession = poller.getSession(invite.inviteeDid);
+      if (!mlsSession) continue;
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(metadataMsg));
+      const encResult = await mlsSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(invite.inviteeDid, mlsSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+    }
+
+    for (const { commitMessage, memberDids } of commits) {
+      const commitMsg = {
+        type: 'group_commit' as const,
+        groupId,
+        commitPayload: bytesToBase64url(commitMessage),
+      };
+
+      for (const memberDid of memberDids) {
+        const mlsSession = poller.getSession(memberDid);
+        if (!mlsSession) continue;
+
+        const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
+        const encResult = await mlsSession.encrypt(plaintextBytes);
+        await storage.putMlsSession(memberDid, mlsSession.serialize());
+
+        const envelope: DmeEnvelope = {
+          $type: 'dme.queue.envelope',
+          queueId: encResult.queueId,
+          payload: bytesToBase64url(encResult.ciphertext),
+          createdAt: new Date().toISOString(),
+          messageType: 'application',
+        };
+        await pds.createEnvelope(envelope);
+      }
+    }
+
+    setGroups((prev) => [...prev, groupId]);
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites]);
+
+  const cancelGroupInvite = useCallback(async (inviteId: string): Promise<void> => {
+    if (!storage) throw new Error('cancelGroupInvite: storage not initialized');
+
+    await storage.updatePendingInviteStatus(inviteId, 'cancelled');
+    setPendingInvites((prev) =>
+      prev.map((i) => i.inviteId === inviteId ? { ...i, status: 'cancelled' as const } : i),
+    );
+    setChatListVersion((v) => v + 1);
+  }, [storage]);
+
+  const addMemberToGroup = useCallback(async (
+    groupId: string,
+    friendDid: string,
+  ): Promise<void> => {
+    if (!session || !storage || !identityKeys || !pds || !poller) {
+      throw new Error('addMemberToGroup: not fully initialized');
+    }
+
+    const mlsSession = poller.getSession(groupId);
+    if (!mlsSession) throw new Error('addMemberToGroup: no MLS session for group');
+
+    const friendMlsSession = poller.getSession(friendDid);
+    if (!friendMlsSession) throw new Error('addMemberToGroup: no MLS session for friend');
+
+    const inviterEncKey = await getRemoteEncryptionKey(friendDid);
+    if (!inviterEncKey) throw new Error('addMemberToGroup: friend has no encryption key');
+
+    const keyPackageSerialized = await generateEncryptedKeyPackageForInvite({
+      ownDid: friendDid,
+      ownIdentityKeys: identityKeys,
+      inviterEncryptionPublicKey: inviterEncKey,
+    });
+
+    const groupInfo = await storage.getGroupInfo(groupId);
+    if (!groupInfo) throw new Error('addMemberToGroup: group info not found');
+
+    const inviteId = generateId();
+    const inviteRequest = createInviteRequest({
+      inviteId,
+      groupId,
+      groupName: groupInfo.groupName,
+      members: [...groupInfo.members],
+    });
+
+    const plaintextBytes = new TextEncoder().encode(JSON.stringify(inviteRequest));
+    const encResult = await friendMlsSession.encrypt(plaintextBytes);
+    await storage.putMlsSession(friendDid, friendMlsSession.serialize());
+
+    const envelope: DmeEnvelope = {
+      $type: 'dme.queue.envelope',
+      queueId: encResult.queueId,
+      payload: bytesToBase64url(encResult.ciphertext),
+      createdAt: new Date().toISOString(),
+      messageType: 'application',
+    };
+    await pds.createEnvelope(envelope);
+
+    const invite: PendingInvite = {
+      inviteId,
+      groupId,
+      groupName: groupInfo.groupName,
+      inviterDid: session.did,
+      inviteeDid: friendDid,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    await storage.putPendingInvite(invite);
+    setPendingInvites((prev) => [...prev, invite]);
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, identityKeys, pds, poller]);
+
+  const dissolveGroup = useCallback(async (groupId: string): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('dissolveGroup: not fully initialized');
+    }
+
+    const groupInfo = await storage.getGroupInfo(groupId);
+    if (!groupInfo) throw new Error('dissolveGroup: group info not found');
+
+    const dissolveMsg: GroupDissolved = {
+      type: 'group_dissolved',
+      groupId,
+      groupName: groupInfo.groupName,
+    };
+
+    for (const member of groupInfo.members) {
+      if (member.did === session.did) continue;
+      const mlsSession = poller.getSession(member.did);
+      if (!mlsSession) continue;
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(dissolveMsg));
+      const encResult = await mlsSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(member.did, mlsSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+    }
+
+    const dissolvedInfo: GroupInfo = { ...groupInfo, dissolved: true };
+    await storage.putGroupInfo(dissolvedInfo);
+    poller.removeSession(groupId);
+    await storage.deleteMlsSession(groupId);
+
+    setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? dissolvedInfo : g));
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  const removeMemberFromGroup = useCallback(async (
+    groupId: string,
+    memberDid: string,
+  ): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('removeMemberFromGroup: not fully initialized');
+    }
+
+    const groupInfo = await storage.getGroupInfo(groupId);
+    if (!groupInfo) throw new Error('removeMemberFromGroup: group info not found');
+
+    const mlsSession = poller.getSession(groupId);
+    if (!mlsSession) throw new Error('removeMemberFromGroup: no MLS session for group');
+
+    const leafIndex = mlsSession.getMemberDids().indexOf(memberDid);
+    if (leafIndex < 0) throw new Error('removeMemberFromGroup: member not in group');
+
+    const { commitMessage } = await mlsSession.removeMember(leafIndex);
+    await storage.putMlsSession(groupId, mlsSession.serialize());
+
+    const removedMsg: GroupMemberRemoved = {
+      type: 'group_member_removed',
+      groupId,
+      groupName: groupInfo.groupName,
+    };
+
+    const removedSession = poller.getSession(memberDid);
+    if (removedSession) {
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(removedMsg));
+      const encResult = await removedSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(memberDid, removedSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+    }
+
+    const commitMsg = {
+      type: 'group_commit' as const,
+      groupId,
+      commitPayload: bytesToBase64url(commitMessage),
+    };
+
+    for (const member of groupInfo.members) {
+      if (member.did === session.did || member.did === memberDid) continue;
+      const memberSession = poller.getSession(member.did);
+      if (!memberSession) continue;
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
+      const encResult = await memberSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(member.did, memberSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+    }
+
+    const updatedMembers = groupInfo.members.filter((m) => m.did !== memberDid);
+    const updatedInfo: GroupInfo = { ...groupInfo, members: updatedMembers };
+    await storage.putGroupInfo(updatedInfo);
+    setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? updatedInfo : g));
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  const addAcceptedMembersToGroup = useCallback(async (groupId: string): Promise<void> => {
+    if (!session || !storage || !identityKeys || !pds || !poller) {
+      throw new Error('addAcceptedMembersToGroup: not fully initialized');
+    }
+
+    const groupInfo = await storage.getGroupInfo(groupId);
+    if (!groupInfo) throw new Error('addAcceptedMembersToGroup: group info not found');
+
+    const mlsSession = poller.getSession(groupId);
+    if (!mlsSession) throw new Error('addAcceptedMembersToGroup: no MLS session for group');
+
+    const accepted = pendingInvites.filter(
+      (i) => i.groupId === groupId && i.status === 'accepted',
+    );
+    if (accepted.length === 0) {
+      throw new Error('addAcceptedMembersToGroup: no accepted members');
+    }
+
+    const newMembers: GroupMember[] = [];
+    const commitsWithTargets: { commitMessage: Uint8Array; targetDids: string[] }[] = [];
+    const existingDids = new Set(groupInfo.members.map((m) => m.did));
+
+    for (const invite of accepted) {
+      if (!invite.keyPackageSerialized) continue;
+      const keyPackage = await deserializeAcceptedKeyPackage({
+        keyPackageSerialized: invite.keyPackageSerialized,
+        ownEncryptionPrivateKey: identityKeys.encryption.privateKey,
+      });
+
+      const { welcome, commitMessage } = await mlsSession.addMember(keyPackage);
+
+      const welcomeMsg = createGroupWelcome({
+        groupId,
+        groupName: groupInfo.groupName,
+        welcomePayload: bytesToBase64url(welcome),
+        members: [...groupInfo.members, ...newMembers, { did: invite.inviteeDid, displayName: invite.inviteeDid, role: 'member' as const }],
+      });
+
+      const memberSession = poller.getSession(invite.inviteeDid);
+      if (memberSession) {
+        const plaintextBytes = new TextEncoder().encode(JSON.stringify(welcomeMsg));
+        const encResult = await memberSession.encrypt(plaintextBytes);
+        await storage.putMlsSession(invite.inviteeDid, memberSession.serialize());
+
+        const envelope: DmeEnvelope = {
+          $type: 'dme.queue.envelope',
+          queueId: encResult.queueId,
+          payload: bytesToBase64url(encResult.ciphertext),
+          createdAt: new Date().toISOString(),
+          messageType: 'application',
+        };
+        await pds.createEnvelope(envelope);
+      }
+
+      commitsWithTargets.push({
+        commitMessage,
+        targetDids: [...existingDids].filter((d) => d !== session.did),
+      });
+
+      newMembers.push({ did: invite.inviteeDid, displayName: invite.inviteeDid, role: 'member' as const });
+      existingDids.add(invite.inviteeDid);
+    }
+
+    await storage.putMlsSession(groupId, mlsSession.serialize());
+
+    for (const { commitMessage, targetDids } of commitsWithTargets) {
+      const commitMsg = {
+        type: 'group_commit' as const,
+        groupId,
+        commitPayload: bytesToBase64url(commitMessage),
+      };
+
+      for (const targetDid of targetDids) {
+        const memberSession = poller.getSession(targetDid);
+        if (!memberSession) continue;
+
+        const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
+        const encResult = await memberSession.encrypt(plaintextBytes);
+        await storage.putMlsSession(targetDid, memberSession.serialize());
+
+        const envelope: DmeEnvelope = {
+          $type: 'dme.queue.envelope',
+          queueId: encResult.queueId,
+          payload: bytesToBase64url(encResult.ciphertext),
+          createdAt: new Date().toISOString(),
+          messageType: 'application',
+        };
+        await pds.createEnvelope(envelope);
+      }
+    }
+
+    const updatedInfo: GroupInfo = { ...groupInfo, members: [...groupInfo.members, ...newMembers] };
+    await storage.putGroupInfo(updatedInfo);
+
+    for (const invite of accepted) {
+      await storage.updatePendingInviteStatus(invite.inviteId, 'cancelled');
+    }
+
+    setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? updatedInfo : g));
+    setPendingInvites((prev) => prev.filter((i) => i.groupId !== groupId));
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites]);
+
+  const leaveGroup = useCallback(async (groupId: string): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('leaveGroup: not fully initialized');
+    }
+
+    const groupInfo = await storage.getGroupInfo(groupId);
+    if (!groupInfo) throw new Error('leaveGroup: group info not found');
+
+    const leftMsg = {
+      type: 'group_member_left' as const,
+      groupId,
+      memberDid: session.did,
+      groupName: groupInfo.groupName,
+    };
+
+    for (const member of groupInfo.members) {
+      if (member.did === session.did) continue;
+      const memberSession = poller.getSession(member.did);
+      if (!memberSession) continue;
+
+      const plaintextBytes = new TextEncoder().encode(JSON.stringify(leftMsg));
+      const encResult = await memberSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(member.did, memberSession.serialize());
+
+      const envelope: DmeEnvelope = {
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      };
+      await pds.createEnvelope(envelope);
+    }
+
+    poller.removeSession(groupId);
+    await storage.deleteMlsSession(groupId);
+
+    const leftInfo: GroupInfo = { ...groupInfo, left: true };
+    await storage.putGroupInfo(leftInfo);
+
+    await storage.putMessage({
+      id: `sys_left_${groupId}_${Date.now()}`,
+      fromDid: session.did,
+      toDid: groupId,
+      plaintext: `你已离开群聊：${groupInfo.groupName}`,
+      createdAt: new Date().toISOString(),
+      sent: true,
+      kind: 'group_system',
+      conversationId: groupId,
+    });
+
+    setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? leftInfo : g));
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  // -------------------------------------------------------------------------
   // Cleanup
   // -------------------------------------------------------------------------
 
@@ -623,6 +1647,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       keyPackagePool,
       chatListVersion,
       pollBatchSize,
+      pendingInvites,
+      groupInfos,
+      receivedGroupInvites,
       login,
       logout,
       restoreSession,
@@ -634,13 +1661,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       acceptInviteQr,
       refreshKeyPackagePool,
       setPollBatchSize,
+      sendGroupInvites,
+      respondToGroupInvite,
+      createGroupFromPendingInvites,
+      cancelGroupInvite,
+      addMemberToGroup,
+      addAcceptedMembersToGroup,
+      dissolveGroup,
+      removeMemberFromGroup,
+      leaveGroup,
     }),
     [
       session, storage, identityKeys, poller, pds, loading, error,
       groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize,
+      pendingInvites, groupInfos, receivedGroupInvites,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       sendMessage, deleteFriend, generateInviteQr, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize,
+      sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
+      cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
+      leaveGroup,
     ],
   );
 

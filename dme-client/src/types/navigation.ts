@@ -4,10 +4,12 @@ export type RootStackParamList = {
   Login: undefined;
   Setup: undefined;
   ChatList: undefined;
-  ChatView: { friendDid: string };
+  ChatView: { friendDid: string } | { groupId: string };
   QrDisplay: undefined;
   QrScan: undefined;
   Settings: undefined;
+  CreateGroup: { groupId?: string } | undefined;
+  GroupSettings: { groupId: string };
 };
 
 /** DID 文档中用于 handle 解析的最小结构。 */

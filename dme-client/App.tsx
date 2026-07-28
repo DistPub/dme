@@ -33,6 +33,8 @@ import { ChatViewScreen } from './src/ui/ChatViewScreen';
 import { QrDisplayScreen } from './src/ui/QrDisplayScreen';
 import { QrScanScreen } from './src/ui/QrScanScreen';
 import { SettingsScreen } from './src/ui/SettingsScreen';
+import { CreateGroupScreen } from './src/ui/CreateGroupScreen';
+import { GroupSettingsScreen } from './src/ui/GroupSettingsScreen';
 import type { RootStackParamList } from './src/types/navigation';
 
 export type { RootStackParamList };
@@ -122,6 +124,8 @@ function NavigationRoot(): React.JSX.Element {
         <Stack.Screen name="QrDisplay" component={QrDisplayScreen} />
         <Stack.Screen name="QrScan" component={QrScanScreen} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
+        <Stack.Screen name="CreateGroup" component={CreateGroupScreen} />
+        <Stack.Screen name="GroupSettings" component={GroupSettingsScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -26,14 +26,16 @@ import { SkiaButton } from './SkiaButton';
 import { useApp } from '../state/AppContext';
 import type { StoredMessage } from '../storage/db';
 import type { PendingWelcome } from '../storage/db';
+import type { PendingInvite, GroupInfo } from '../protocol/group-message';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
 interface ConversationRow {
   groupId: string;
-  groupHandle: string;
+  displayName: string;
   lastMessage: StoredMessage | null;
+  isGroup: boolean;
 }
 
 interface SwipeableRowProps {
@@ -90,6 +92,7 @@ export function ChatListScreen(): React.JSX.Element {
 
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [inviterHandles, setInviterHandles] = useState<Record<string, string>>({});
   const handleCacheRef = useRef<Record<string, string>>({});
 
   const resolveHandle = useCallback(async (did: string): Promise<string> => {
@@ -111,6 +114,26 @@ export function ChatListScreen(): React.JSX.Element {
     return did;
   }, []);
 
+  useEffect(() => {
+    const pendingInviters = app.receivedGroupInvites
+      .filter((i) => i.status === 'pending' && !inviterHandles[i.inviterDid])
+      .map((i) => i.inviterDid);
+    const uniqueDids = [...new Set(pendingInviters)];
+    if (uniqueDids.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const resolved: Record<string, string> = {};
+      for (const did of uniqueDids) {
+        resolved[did] = await resolveHandle(did);
+      }
+      if (!cancelled) {
+        setInviterHandles((prev) => ({ ...prev, ...resolved }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [app.receivedGroupInvites, inviterHandles, resolveHandle]);
+
   const loadConversations = useCallback(async (): Promise<void> => {
     if (!app.storage) {
       setConversations([]);
@@ -119,13 +142,26 @@ export function ChatListScreen(): React.JSX.Element {
     }
 
     const groups = await app.storage.listGroups();
+    const groupInfos = await app.storage.listGroupInfos();
+    const groupInfoMap = new Map(groupInfos.map((g) => [g.groupId, g]));
+
     const rows: ConversationRow[] = [];
     for (const groupId of groups) {
       const messages = await app.storage.getMessages(groupId);
       const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-      const groupHandle = await resolveHandle(groupId);
 
-      rows.push({ groupId, groupHandle, lastMessage });
+      const info = groupInfoMap.get(groupId);
+      let displayName: string;
+      let isGroup = false;
+
+      if (info) {
+        displayName = info.groupName;
+        isGroup = true;
+      } else {
+        displayName = await resolveHandle(groupId);
+      }
+
+      rows.push({ groupId, displayName, lastMessage, isGroup });
     }
     setConversations(rows);
     setLoading(false);
@@ -145,8 +181,12 @@ export function ChatListScreen(): React.JSX.Element {
   }, [loadConversations]);
 
   const navigateToChat = useCallback(
-    (groupId: string): void => {
-      navigation.navigate('ChatView', { friendDid: groupId });
+    (groupId: string, isGroup: boolean): void => {
+      if (isGroup) {
+        navigation.navigate('ChatView', { groupId });
+      } else {
+        navigation.navigate('ChatView', { friendDid: groupId });
+      }
     },
     [navigation],
   );
@@ -161,6 +201,10 @@ export function ChatListScreen(): React.JSX.Element {
 
   const navigateToSettings = useCallback((): void => {
     navigation.navigate('Settings');
+  }, [navigation]);
+
+  const navigateToCreateGroup = useCallback((): void => {
+    navigation.navigate('CreateGroup');
   }, [navigation]);
 
   const onDeleteWelcome = useCallback((queueId: string) => {
@@ -221,13 +265,13 @@ export function ChatListScreen(): React.JSX.Element {
           onOpen={() => setOpenGroupId(item.groupId)}
           onClose={() => setOpenGroupId((prev) => (prev === item.groupId ? null : prev))}
           onDelete={() => app.deleteFriend(item.groupId)}
-          onTap={() => navigateToChat(item.groupId)}
+          onTap={() => navigateToChat(item.groupId, item.isGroup)}
           renderRightActions={renderRightActions}
         >
           <View style={styles.row}>
             <View style={styles.rowHeader}>
               <Text style={styles.rowTitle} numberOfLines={1}>
-                {item.groupHandle}
+                {item.isGroup ? '[Group] ' : ''}{item.displayName}
               </Text>
             </View>
             <Text
@@ -252,6 +296,12 @@ export function ChatListScreen(): React.JSX.Element {
       <View style={styles.topBar}>
         <Text style={styles.title}>Chats</Text>
         <View style={styles.topButtons}>
+          <SkiaButton
+            label="+ Group"
+            onPress={navigateToCreateGroup}
+            variant="secondary"
+            style={styles.iconBtn}
+          />
           <SkiaButton
             label="QR"
             onPress={navigateToQrDisplay}
@@ -286,14 +336,100 @@ export function ChatListScreen(): React.JSX.Element {
         keyExtractor={(item) => item.groupId}
         renderItem={renderItem}
         ListHeaderComponent={
-          app.pendingWelcomes.length > 0 ? (
-            <View style={styles.inviteSection}>
-              <Text style={styles.sectionTitle}>Pending Welcomes ({app.pendingWelcomes.length})</Text>
-              {app.pendingWelcomes.map((welcome) => (
-                <View key={welcome.queueId}>{renderWelcomeRow(welcome)}</View>
-              ))}
-            </View>
-          ) : null
+          <>
+            {app.receivedGroupInvites.filter((i) => i.status === 'pending').length > 0 && (
+              <View style={styles.inviteSection}>
+                <Text style={styles.sectionTitle}>Group Invitations</Text>
+                {app.receivedGroupInvites
+                  .filter((i) => i.status === 'pending')
+                  .map((invite) => (
+                    <View key={invite.inviteId} style={styles.inviteRow}>
+                      <View style={styles.inviteInfo}>
+                        <Text style={styles.inviteHandle} numberOfLines={1}>{invite.groupName}</Text>
+                        <Text style={styles.inviteStatus}>From {inviterHandles[invite.inviterDid] ?? invite.inviterDid}</Text>
+                      </View>
+                      <SkiaButton
+                        label="Accept"
+                        onPress={() => app.respondToGroupInvite(invite.inviteId, true)}
+                        variant="primary"
+                        style={styles.inviteBtn}
+                      />
+                      <SkiaButton
+                        label="Decline"
+                        onPress={() => app.respondToGroupInvite(invite.inviteId, false)}
+                        variant="secondary"
+                        style={styles.inviteBtn}
+                      />
+                    </View>
+                  ))}
+              </View>
+            )}
+
+            {app.pendingInvites.filter((i) => i.status === 'pending' || i.status === 'accepted').length > 0 && (
+              <View style={styles.inviteSection}>
+                <Text style={styles.sectionTitle}>
+                  Pending Group Invites
+                </Text>
+                {(() => {
+                  const active = app.pendingInvites.filter((i) => i.status === 'pending' || i.status === 'accepted');
+                  const grouped = new Map<string, typeof active>();
+                  for (const inv of active) {
+                    const arr = grouped.get(inv.groupId) ?? [];
+                    arr.push(inv);
+                    grouped.set(inv.groupId, arr);
+                  }
+                  return [...grouped.entries()].map(([gid, invites]) => {
+                    const acceptedCount = invites.filter((i) => i.status === 'accepted').length;
+                    const pendingCount = invites.filter((i) => i.status === 'pending').length;
+                    const isExistingGroup = app.groupInfos.some((g) => g.groupId === gid);
+                    return (
+                      <View key={gid} style={styles.inviteRow}>
+                        <View style={styles.inviteInfo}>
+                          <Text style={styles.inviteHandle} numberOfLines={1}>
+                            {invites[0]?.groupName}
+                          </Text>
+                          <Text style={styles.inviteStatus}>
+                            {acceptedCount} accepted, {pendingCount} pending
+                          </Text>
+                        </View>
+                        {acceptedCount > 0 && (
+                          <SkiaButton
+                            label={isExistingGroup ? 'Add' : 'Create'}
+                            onPress={() =>
+                              isExistingGroup
+                                ? app.addAcceptedMembersToGroup(gid)
+                                : app.createGroupFromPendingInvites(gid)
+                            }
+                            variant="primary"
+                            style={styles.inviteBtn}
+                          />
+                        )}
+                        <SkiaButton
+                          label="Cancel"
+                          onPress={() => {
+                            for (const inv of invites) {
+                              app.cancelGroupInvite(inv.inviteId);
+                            }
+                          }}
+                          variant="secondary"
+                          style={styles.inviteBtn}
+                        />
+                      </View>
+                    );
+                  });
+                })()}
+              </View>
+            )}
+
+            {app.pendingWelcomes.length > 0 ? (
+              <View style={styles.inviteSection}>
+                <Text style={styles.sectionTitle}>Pending Welcomes ({app.pendingWelcomes.length})</Text>
+                {app.pendingWelcomes.map((welcome) => (
+                  <View key={welcome.queueId}>{renderWelcomeRow(welcome)}</View>
+                ))}
+              </View>
+            ) : null}
+          </>
         }
         ListEmptyComponent={
           !loading ? (
@@ -428,8 +564,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   inviteBtn: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
+    width: 70,
+    height: 36,
+    marginLeft: theme.spacing.xs,
   },
   inviteBtnText: {
     color: theme.colors.accent,

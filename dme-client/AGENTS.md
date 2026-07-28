@@ -7,7 +7,7 @@
 
 # dme-client
 
-Expo ~52 + React Native + @shopify/react-native-skia 移动 App。TypeScript strict，Bun 管理。
+Expo ~52 + React Native + @shopify/react-native-skia 移动 App。TypeScript strict，Bun 管理。支持 1v1 和群组聊天。
 
 ## 结构
 
@@ -24,12 +24,12 @@ dme-client/
     ├── config.ts         # PDS_URL, DME_SERVER_URL, PLC_DIRECTORY_URL, 轮询间隔
     ├── crypto/           # MLS 加密模块（见 crypto/AGENTS.md）
     ├── atproto/          # session.ts / pds.ts / did.ts
-    ├── handshake/        # handshake.ts / invite.ts / qr-encode.ts / qr-decode.ts
+    ├── handshake/        # handshake.ts / invite.ts / qr-encode.ts / qr-decode.ts / group-invite.ts
     ├── poll/poller.ts    # 5-15s 随机间隔轮询 + LRU 去重 + 批量预计算 future queueId
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
-    ├── state/AppContext.tsx  # 全局状态（12 字段，11 action）
-    ├── protocol/         # types.ts + lexicons/ JSON
-    ├── ui/               # 11 个文件（7 屏幕 + 4 组件）
+    ├── state/AppContext.tsx  # 全局状态（15 字段，16 action）
+    ├── protocol/         # types.ts + group-message.ts + lexicons/ JSON
+    ├── ui/               # 13 个文件（9 屏幕 + 4 组件）
     └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
 
@@ -45,6 +45,10 @@ dme-client/
 | 改主题 | `src/ui/theme.ts` |
 | 加新加密操作 | `src/crypto/`（见 crypto/AGENTS.md） |
 | 改设置页 | `src/ui/SettingsScreen.tsx` |
+| 群聊消息类型 | `src/protocol/group-message.ts` |
+| 群聊邀请协议 | `src/handshake/group-invite.ts` |
+| 创建群聊 UI | `src/ui/CreateGroupScreen.tsx` |
+| 群管理 UI | `src/ui/GroupSettingsScreen.tsx` |
 
 ## 导航流程
 
@@ -52,6 +56,8 @@ dme-client/
 Login → (restoreSession) → Setup → ChatList ⇄ ChatView
                               ↘ QrDisplay（邀请）
                               ↘ QrScan（接受邀请）
+                              ↘ CreateGroup（建群 / 邀请新成员）
+                              ↘ GroupSettings（群管理）
                               ↘ Settings（选项）
 ```
 
@@ -62,9 +68,11 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **加密**: MLS (RFC 9420) 替换旧 Double Ratchet + X3DH。使用 ts-mls 库 + @noble 系列。
 - **身份密钥**: 每个用户拥有 Ed25519（签名/MLS 凭证）+ X25519（KeyPackage 加密）双密钥对
 - **DID 文档**: `#dme_encryption`(X25519) 加密 KeyPackage + `#dme_signing`(Ed25519) 验证 MLS 凭证
-- **KeyPackage**: 不上 PDS，通过 QR 点对点传递，用接收方 X25519 公钥加密
+- **KeyPackage**: 不上 PDS，通过 QR 或1:1通道点对点传递，用接收方 X25519 公钥加密
 - **握手**: Alice 加密 KeyPackage -> QR -> Bob 扫码 -> 创建 MLS 群组 -> Welcome 走盲查通道
-- **状态管理**: 每字段一个 `useState` 的 React Context（非 useReducer），11 个 `useCallback` action
+- **群聊邀请**: 通过已有1:1 MLS 通道传输 JSON 消息（group_invite_request/response/welcome/commit 等）
+- **群聊 Commit**: addMember 产生的 Commit 通过1:1通道发给已有成员（poller 只轮询 application 消息）
+- **状态管理**: 每字段一个 `useState` 的 React Context（非 useReducer），16 个 `useCallback` action
 - **chatListVersion**: 单调计数器，storage 变化时递增触发 UI 刷新
 - **屏幕模式**: `<View>` → 绝对定位 `<Canvas><Fill/></Canvas>` → flexbox 内容（RN Text/TextInput/SkiaButton）
 - **阶段机**: 每个屏幕用联合类型 `Phase` 控制条件渲染
@@ -73,6 +81,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **主题**: `theme.ts` 单一 `as const` 对象，暗色（#0a0a0a），无切换
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理
+- **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`；`conversationId` 指定存储到哪个会话
 
 ## 注意事项
 
@@ -80,3 +89,5 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **MessageBubble 非 Skia**: 实际用原生 RN View/Text，非 Skia Canvas 渲染
 - **RootStackParamList**: 集中定义在 `src/types/navigation.ts`，App.tsx 和各屏幕从此 import
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`
+- **群主不能离开**: MLS 禁止 removeMember 移除 committer，群主只能解散群组
+- **群组只读状态**: dissolved/removed/left 标记后群组变为只读，保留消息但禁止发送

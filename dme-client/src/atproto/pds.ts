@@ -28,14 +28,23 @@ interface BatchGetResponse {
 export class DmePds {
   private readonly agent: Agent;
   private readonly serverUrl: string;
+  private appViewProxy: string;
 
   /**
-   * @param agent     - @atproto/api Agent（来自 DmeSession）
-   * @param serverUrl - DME server 地址（如 https://dme.example.com）
+   * @param agent         - @atproto/api Agent（来自 DmeSession）
+   * @param serverUrl     - DME server 地址（如 https://dme.example.com）
+   * @param appViewProxy  - atproto-proxy header 值，用于 PDS AppView 路由
    */
-  constructor(agent: Agent, serverUrl: string) {
+  constructor(agent: Agent, serverUrl: string, appViewProxy: string) {
     this.agent = agent;
     this.serverUrl = serverUrl;
+    this.appViewProxy = appViewProxy;
+    agent.configureProxy(appViewProxy as `did:${string}#${string}`);
+  }
+
+  setAppViewProxy(proxy: string): void {
+    this.appViewProxy = proxy;
+    this.agent.configureProxy(proxy as `did:${string}#${string}`);
   }
 
   /**

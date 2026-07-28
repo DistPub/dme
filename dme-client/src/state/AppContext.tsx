@@ -39,7 +39,7 @@ import type { KeyPackagePair } from '../crypto/keypackage';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
 import { encryptBackup, decryptBackup, type FullBackupData } from '../crypto/backup';
 import { bytesToBase64url, base64urlToBytes } from '../crypto/utils';
-import { DME_SERVER_URL, PDS_URL } from '../config';
+import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY } from '../config';
 import type { DmeEnvelope } from '../protocol/types';
 import type {
   GroupInfo,
@@ -133,6 +133,7 @@ interface AppState {
   keyPackagePool: KeyPackagePoolEntry[];
   chatListVersion: number;
   pollBatchSize: number;
+  appViewProxy: string;
   pendingInvites: PendingInvite[];
   groupInfos: GroupInfo[];
   receivedGroupInvites: PendingInvite[];
@@ -153,6 +154,7 @@ interface AppActions {
   acceptInviteQr: (qrString: string) => Promise<void>;
   refreshKeyPackagePool: () => Promise<void>;
   setPollBatchSize: (size: number) => Promise<void>;
+  setAppViewProxy: (proxy: string) => Promise<void>;
   sendGroupInvites: (groupName: string, friendDids: readonly string[]) => Promise<string>;
   respondToGroupInvite: (inviteId: string, accepted: boolean) => Promise<void>;
   createGroupFromPendingInvites: (groupId: string) => Promise<void>;
@@ -185,6 +187,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [keyPackagePool, setKeyPackagePool] = useState<KeyPackagePoolEntry[]>([]);
   const [chatListVersion, setChatListVersion] = useState(0);
   const [pollBatchSize, setPollBatchSizeState] = useState(3);
+  const [appViewProxy, setAppViewProxyState] = useState<string>(DEFAULT_APPVIEW_PROXY);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [groupInfos, setGroupInfos] = useState<GroupInfo[]>([]);
   const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
@@ -231,6 +234,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setPollBatchSizeState(size);
   }, [storage, poller]);
 
+  const setAppViewProxy = useCallback(async (proxy: string): Promise<void> => {
+    if (!storage || !pds) return;
+    await storage.setAppViewProxy(proxy);
+    pds.setAppViewProxy(proxy);
+    setAppViewProxyState(proxy);
+  }, [storage, pds]);
+
   // -------------------------------------------------------------------------
   // Login / Logout / Restore
   // -------------------------------------------------------------------------
@@ -266,7 +276,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await Promise.all(placeholderKeys.map((key) => AsyncStorage.removeItem(key)));
       }
 
-      const newPds = new DmePds(newSession.agent, DME_SERVER_URL);
+      const appViewProxyValue = await correctStorage.getAppViewProxy();
+      const newPds = new DmePds(newSession.agent, DME_SERVER_URL, appViewProxyValue);
 
       // Load or generate identity keys
       const storedKeys = await correctStorage.getIdentityKeys();
@@ -326,6 +337,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingWelcomes(welcomes);
       setKeyPackagePool(pool);
       setPollBatchSizeState(batchSize);
+      setAppViewProxyState(appViewProxyValue);
       setPendingInvites(sentInvites);
       setReceivedGroupInvites(recvInvites);
       setGroupInfos(storedGroupInfos);
@@ -360,6 +372,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setReceivedGroupInvites([]);
       setGroupInfos([]);
       setPollBatchSizeState(3);
+      setAppViewProxyState(DEFAULT_APPVIEW_PROXY);
       setLoading(false);
     }
   }, [session, storage, poller]);
@@ -386,7 +399,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         tempSession.setStorage(tempStorage);
 
-        const newPds = new DmePds(tempSession.agent, DME_SERVER_URL);
+        const appViewProxyValue = await tempStorage.getAppViewProxy();
+        const newPds = new DmePds(tempSession.agent, DME_SERVER_URL, appViewProxyValue);
         const storedKeys = await tempStorage.getIdentityKeys();
         const idKeys = storedKeys ?? generateIdentityKeys();
         if (!storedKeys) {
@@ -441,6 +455,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         setPendingWelcomes(welcomes);
         setKeyPackagePool(pool);
         setPollBatchSizeState(batchSize);
+        setAppViewProxyState(appViewProxyValue);
         setPendingInvites(sentInvites);
         setReceivedGroupInvites(recvInvites);
         setGroupInfos(storedGroupInfos);
@@ -1731,6 +1746,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       keyPackagePool,
       chatListVersion,
       pollBatchSize,
+      appViewProxy,
       pendingInvites,
       groupInfos,
       receivedGroupInvites,
@@ -1748,6 +1764,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       acceptInviteQr,
       refreshKeyPackagePool,
       setPollBatchSize,
+      setAppViewProxy,
       sendGroupInvites,
       respondToGroupInvite,
       createGroupFromPendingInvites,
@@ -1760,12 +1777,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       session, storage, identityKeys, poller, pds, loading, error,
-      groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize,
+      groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy,
       pendingInvites, groupInfos, receivedGroupInvites,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, deleteFriend, generateInviteQr, acceptInviteQr,
-      refreshKeyPackagePool, setPollBatchSize,
+      refreshKeyPackagePool, setPollBatchSize, setAppViewProxy,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
       leaveGroup,

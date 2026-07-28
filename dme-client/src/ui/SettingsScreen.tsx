@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput } from 'react-native';
+import { StyleSheet, Text, View, TextInput, ScrollView } from 'react-native';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
+import { DEFAULT_APPVIEW_PROXY } from '../config';
 import type { RootStackParamList } from '../types/navigation';
 
 interface Props {
@@ -16,6 +17,9 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const app = useApp();
   const [draft, setDraft] = useState(String(app.pollBatchSize));
   const [saved, setSaved] = useState(false);
+
+  const [proxyDraft, setProxyDraft] = useState(app.appViewProxy);
+  const [proxySaved, setProxySaved] = useState(false);
 
   const [backupPwd, setBackupPwd] = useState('');
   const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
@@ -28,6 +32,19 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     await app.setPollBatchSize(n);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleSaveProxy = async (): Promise<void> => {
+    await app.setAppViewProxy(proxyDraft);
+    setProxySaved(true);
+    setTimeout(() => setProxySaved(false), 2000);
+  };
+
+  const handleResetProxy = async (): Promise<void> => {
+    setProxyDraft(DEFAULT_APPVIEW_PROXY);
+    await app.setAppViewProxy(DEFAULT_APPVIEW_PROXY);
+    setProxySaved(true);
+    setTimeout(() => setProxySaved(false), 2000);
   };
 
   const handleBackup = async (): Promise<void> => {
@@ -60,7 +77,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         <Fill color={theme.colors.background} />
       </Canvas>
 
-      <View style={styles.content}>
+      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Settings</Text>
 
         <Text style={styles.label}>Poll Batch Size</Text>
@@ -82,6 +99,34 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           variant="primary"
           style={styles.fullButton}
         />
+
+        <Text style={styles.title}>AppView Proxy</Text>
+        <Text style={styles.hint}>
+          atproto-proxy header sent to PDS when writing records.
+        </Text>
+        <TextInput
+          style={styles.input}
+          value={proxyDraft}
+          onChangeText={setProxyDraft}
+          placeholder={DEFAULT_APPVIEW_PROXY}
+          placeholderTextColor={theme.colors.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <View style={styles.rowButtons}>
+          <Button
+            label={proxySaved ? 'Saved!' : 'Save'}
+            onPress={handleSaveProxy}
+            variant="primary"
+            style={styles.halfButton}
+          />
+          <Button
+            label="Reset"
+            onPress={handleResetProxy}
+            variant="secondary"
+            style={styles.halfButton}
+          />
+        </View>
 
         <Text style={styles.title}>Identity Backup</Text>
         <Text style={styles.hint}>
@@ -132,7 +177,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           variant="secondary"
           style={styles.fullButton}
         />
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -144,8 +189,11 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentInner: {
     paddingHorizontal: theme.spacing.lg,
     paddingTop: theme.spacing.xl,
+    paddingBottom: theme.spacing.xl,
     gap: theme.spacing.md,
   },
   title: {
@@ -166,6 +214,7 @@ const styles = StyleSheet.create({
   input: {
     width: '100%',
     height: 48,
+    flexShrink: 0,
     backgroundColor: theme.colors.inputBackground,
     borderRadius: theme.borderRadius.sm,
     borderWidth: 1,
@@ -176,6 +225,16 @@ const styles = StyleSheet.create({
   },
   fullButton: {
     width: '100%',
+    height: 48,
+    flexShrink: 0,
+  },
+  rowButtons: {
+    flexDirection: 'row',
+    gap: theme.spacing.md,
+    flexShrink: 0,
+  },
+  halfButton: {
+    flex: 1,
     height: 48,
   },
   error: {

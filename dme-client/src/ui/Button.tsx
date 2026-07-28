@@ -45,6 +45,7 @@ export function Button({
               ? styles.labelPrimary
               : styles.labelSecondary,
         ]}
+        numberOfLines={1}
       >
         {label}
       </Text>

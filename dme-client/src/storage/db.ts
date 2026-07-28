@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { IdentityKeys } from '../crypto/identity';
 import type { GroupInfo, PendingInvite } from '../protocol/group-message';
+import { DEFAULT_APPVIEW_PROXY } from '../config';
 
 export type MessageKind = 'text' | 'group_invite' | 'group_system';
 
@@ -347,6 +348,21 @@ export class DmeStorage {
   async setPollBatchSize(size: number): Promise<void> {
     const clamped = Math.max(1, Math.min(20, size));
     await AsyncStorage.setItem(this.prefix + this.POLL_BATCH_SIZE_KEY, String(clamped));
+  }
+
+  private readonly APPVIEW_PROXY_KEY = 'appViewProxy';
+
+  async getAppViewProxy(): Promise<string> {
+    const raw = await AsyncStorage.getItem(this.prefix + this.APPVIEW_PROXY_KEY);
+    return raw ?? DEFAULT_APPVIEW_PROXY;
+  }
+
+  async setAppViewProxy(value: string): Promise<void> {
+    const trimmed = value.trim();
+    await AsyncStorage.setItem(
+      this.prefix + this.APPVIEW_PROXY_KEY,
+      trimmed || DEFAULT_APPVIEW_PROXY,
+    );
   }
 
   // -----------------------------------------------------------------------

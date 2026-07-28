@@ -1,9 +1,10 @@
 /**
- * ui/ChatListScreen.tsx - Conversation list with QR/Scan actions.
+ * ui/ChatListScreen.tsx - Conversation list with group/friend actions.
  *
  * Displays all friend DIDs that have message history. Tap a row to open
- * ChatView. Top bar has QR (show my QR) and Scan (scan someone else's QR)
- * buttons. Uses flexbox layout throughout.
+ * ChatView. Top bar keeps Group and +Friend buttons, plus a user avatar that
+ * opens a popup menu for Scan, Settings and Logout. Uses flexbox layout
+ * throughout.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -15,6 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -93,6 +95,9 @@ export function ChatListScreen(): React.JSX.Element {
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviterHandles, setInviterHandles] = useState<Record<string, string>>({});
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState(false);
   const handleCacheRef = useRef<Record<string, string>>({});
 
   const resolveHandle = useCallback(async (did: string): Promise<string> => {
@@ -133,6 +138,23 @@ export function ChatListScreen(): React.JSX.Element {
     })();
     return () => { cancelled = true; };
   }, [app.receivedGroupInvites, inviterHandles, resolveHandle]);
+
+  useEffect(() => {
+    const session = app.session;
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await session.agent.app.bsky.actor.getProfile({ actor: session.did });
+        if (!cancelled && profile.data.avatar) {
+          setAvatarUrl(profile.data.avatar);
+        }
+      } catch (err) {
+        console.error('Failed to fetch profile avatar:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [app.session]);
 
   const loadConversations = useCallback(async (): Promise<void> => {
     if (!app.storage) {
@@ -294,7 +316,7 @@ export function ChatListScreen(): React.JSX.Element {
       </Canvas>
 
       <View style={styles.topBar}>
-        <Text style={styles.title}>Chats</Text>
+        <Text style={styles.title}>隐世</Text>
         <View style={styles.topButtons}>
           <Button
             label="+ Group"
@@ -303,29 +325,32 @@ export function ChatListScreen(): React.JSX.Element {
             style={styles.iconBtn}
           />
           <Button
-            label="QR"
+            label="+ Friend"
             onPress={navigateToQrDisplay}
             variant="secondary"
             style={styles.iconBtn}
           />
-          <Button
-            label="Scan"
-            onPress={navigateToQrScan}
-            variant="secondary"
-            style={styles.iconBtn}
-          />
-          <Button
-            label="Settings"
-            onPress={navigateToSettings}
-            variant="secondary"
-            style={styles.iconBtn}
-          />
-          <Button
-            label="Logout"
-            onPress={() => app.logout().catch((err) => console.error('Logout failed:', err))}
-            variant="secondary"
-            style={styles.iconBtn}
-          />
+          <TouchableOpacity
+            onPress={() => setMenuVisible((v) => !v)}
+            activeOpacity={0.8}
+            style={styles.avatarBtn}
+          >
+            {avatarUrl && !avatarError ? (
+              <Image
+                source={{ uri: avatarUrl }}
+                style={styles.avatarImage}
+                contentFit="cover"
+                transition={300}
+                onError={() => setAvatarError(true)}
+              />
+            ) : (
+              <View style={[styles.avatarImage, styles.avatarFallback]}>
+                <Text style={styles.avatarFallbackText}>
+                  {(app.session?.handle[0] ?? '?').toUpperCase()}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -436,12 +461,54 @@ export function ChatListScreen(): React.JSX.Element {
             <View style={styles.empty}>
               <Text style={styles.emptyText}>No conversations yet</Text>
               <Text style={styles.emptySubtext}>
-                Tap QR to start a chat or Scan to accept one
+                Tap +Friend to add a friend, or open the profile menu to Scan
               </Text>
             </View>
           ) : null
         }
       />
+
+      {menuVisible && (
+        <>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setMenuVisible(false)}
+          />
+          <View style={styles.menuPopup}>
+            <TouchableOpacity
+              onPress={() => {
+                setMenuVisible(false);
+                navigateToQrScan();
+              }}
+              style={styles.menuItem}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.menuItemText}>Scan</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setMenuVisible(false);
+                navigateToSettings();
+              }}
+              style={styles.menuItem}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.menuItemText}>Settings</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setMenuVisible(false);
+                app.logout().catch((err: unknown) => console.error('Logout failed:', err));
+              }}
+              style={styles.menuItem}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.menuItemText, { color: theme.colors.error }]}>Logout</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -471,8 +538,54 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   iconBtn: {
-    width: 60,
+    minWidth: 44,
+    paddingHorizontal: theme.spacing.sm,
     height: 40,
+  },
+  avatarBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  avatarFallback: {
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+  },
+  menuPopup: {
+    position: 'absolute',
+    top: 60,
+    right: theme.spacing.md,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingVertical: theme.spacing.xs,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  menuItem: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  menuItemText: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.body,
   },
   list: {
     flex: 1,

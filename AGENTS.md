@@ -59,13 +59,15 @@ dme/
 | 握手流程 (1:1) | `dme-client/src/handshake/handshake.ts` |
 | 群聊邀请协议 | `dme-client/src/handshake/group-invite.ts` |
 | 群聊消息类型 | `dme-client/src/protocol/group-message.ts` |
-| 全局状态 | `dme-client/src/state/AppContext.tsx` (15 字段，19 action) |
+| 全局状态 | `dme-client/src/state/AppContext.tsx` (16 字段，24 action) |
 | 消息轮询 | `dme-client/src/poll/poller.ts` |
 | 存储 schema | `dme-client/src/storage/db.ts` |
 | DID 公钥读写 | `dme-client/src/atproto/did.ts` (declareKeys + getRemoteEncryptionKey + getRemoteSigningKey + getDidMethod + generateDidWebUpdate) |
-| PDS 记录写入 | `dme-client/src/atproto/pds.ts` (envelope + identity backup) |
-| 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，支持中文，替代 SkiaButton） |
-| 设置页面 | `dme-client/src/ui/SettingsScreen.tsx` |
+| PDS 记录写入 | `dme-client/src/atproto/pds.ts` (envelope + identity backup + AppView proxy) |
+| AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
+| 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton） |
+| 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题"隐世"，顶部栏 +Group/+Friend/头像菜单） |
+| 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Poll Batch Size + AppView Proxy + Identity Backup） |
 | 创建群聊 | `dme-client/src/ui/CreateGroupScreen.tsx` |
 | 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx` |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
@@ -85,7 +87,8 @@ dme/
 | `deriveWelcomeQueueId` | func | mls-queue-id.ts | SHA-256(initKey) 派生 Welcome queueId |
 | `createDidCredential` | func | mls-credential.ts | DID -> MLS BasicCredential |
 | `DmePoller` | class | poller.ts | 批量轮询 + LRU 去重 + 按 generation 排序 |
-| `DmeStorage` | class | db.ts | AsyncStorage 持久化 |
+| `DmePds` | class | pds.ts | PDS 记录操作 + AppView proxy（agent.configureProxy 设置 atproto-proxy header） |
+| `DmeStorage` | class | db.ts | AsyncStorage 持久化（含 appViewProxy 配置） |
 | `AppProvider` | component | AppContext.tsx | 全局状态中心 |
 | `declareKeys` | func | did.ts | PLC 操作发布 Ed25519 + X25519 到 DID 文档 |
 | `getDidMethod` | func | did.ts | 判断 DID 方法类型（plc/web/other） |
@@ -94,7 +97,8 @@ dme/
 | `decryptBackup` | func | backup.ts | 解密 base64url -> FullBackupData |
 | `backupIdentity` | action | AppContext.tsx | 密码加密身份+MLS会话+KeyPackage+群聊元数据，写入 PDS |
 | `restoreIdentityFromBackup` | action | AppContext.tsx | 从 PDS 解密恢复全部数据，reload poller sessions |
-| `Button` | component | Button.tsx | Pressable+Text 按钮（支持中文，替代 SkiaButton） |
+| `Button` | component | Button.tsx | Pressable+Text 按钮（numberOfLines=1，支持中文，替代 SkiaButton） |
+| `setAppViewProxy` | action | AppContext.tsx | 更新 atproto-proxy header 值（持久化 + 实时更新 DmePds） |
 | `sendGroupInvites` | action | AppContext.tsx | 通过1:1通道发送群聊邀请 |
 | `respondToGroupInvite` | action | AppContext.tsx | 接受/拒绝群聊邀请 |
 | `createGroupFromPendingInvites` | action | AppContext.tsx | 从接受的邀请创建 MLS 群组 |
@@ -139,7 +143,9 @@ dme/
 - **群聊 KeyPackage**: 接受邀请时生成，通过1:1通道发送给群主，群主用来 addMember
 - **群聊 Commit**: 每次 addMember 产生的 Commit 必须通过1:1通道发给已有成员（poller 只轮询 application 消息，不轮询 handshake Commit）
 - **成员离开**: MLS 禁止自身 removeMember，通过 `group_member_left` 通知其他成员，群主收到后执行 removeMember
-- **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）
+- **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`
+- **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
+- **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
 - **身份备份**: PBKDF2-SHA256(100k iter)+AES-256-GCM 加密，备份范围含身份密钥+MLS会话+KeyPackage池+群聊元数据，PDS `dme.backup.identity` record（rkey=self, putRecord upsert）
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后检测
 - **包管理器**: TS 侧统一 Bun，Go 侧标准 go 工具链
@@ -175,6 +181,8 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **Lexicon key**: envelope 用 `"key": "tid"`（AT Protocol 自动生成时间戳 rkey）；backup 用 `"key": "literal"`（rkey 固定 `"self"`，putRecord upsert）
 - **Gateway IP 剥离**: 未显式实现 header 剥离，靠 CF 边缘 IP 隐式隔离（`proxy()` 只转发 body + Content-Type）
 - **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text），`SkiaButton.tsx` 保留但无引用
+- **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Logout 收入头像弹出菜单
+- **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染
 - **备份恢复**: 恢复后 MLS 会话+KeyPackage池+群聊元数据完整恢复，无需重新握手；消息历史不备份
 - **Go 模块路径**: `dme/dme-server`（本地路径，非 GitHub）
 - **dme.db/**: 运行时自动创建的 BadgerDB 数据目录，已 gitignored

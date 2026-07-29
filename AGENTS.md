@@ -59,7 +59,7 @@ dme/
 | 握手流程 (1:1) | `dme-client/src/handshake/handshake.ts` |
 | 群聊邀请协议 | `dme-client/src/handshake/group-invite.ts` |
 | 群聊消息类型 | `dme-client/src/protocol/group-message.ts` |
-| 全局状态 | `dme-client/src/state/AppContext.tsx` (16 字段，24 action) |
+| 全局状态 | `dme-client/src/state/AppContext.tsx` (16 字段，25 action) |
 | 消息轮询 | `dme-client/src/poll/poller.ts` |
 | 存储 schema | `dme-client/src/storage/db.ts` |
 | DID 公钥读写 | `dme-client/src/atproto/did.ts` (`declareKeys` + `getRemoteEncryptionKey` + `getRemoteSigningKey` + `getDidMethod` + `generateDidWebUpdate` + `sharedDidResolver`) |
@@ -71,6 +71,10 @@ dme/
 | 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Poll Batch Size + AppView Proxy + Identity Backup） |
 | 创建群聊 | `dme-client/src/ui/CreateGroupScreen.tsx` |
 | 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx` |
+| 表情反应协议 | `dme-client/src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
+| 消息 reactions 存储 | `dme-client/src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
+| 消息气泡 + reactions | `dme-client/src/ui/MessageBubble.tsx` |
+| 表情选择器 | `dme-client/src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
@@ -110,6 +114,12 @@ dme/
 | `dissolveGroup` | action | AppContext.tsx | 群主解散群组 |
 | `leaveGroup` | action | AppContext.tsx | 成员主动离开群组 |
 | `removeMemberFromGroup` | action | AppContext.tsx | 群主移除成员 |
+| `Reaction` | interface | db.ts | 表情反应（emoji + did + createdAt），挂在 `StoredMessage.reactions` |
+| `ReactionMessage` | interface | reaction.ts | E2E 加密反应协议消息（add/remove，targetMessageId） |
+| `sendReaction` | action | AppContext.tsx | toggle 当前用户对某消息的 emoji 反应，MLS 加密发送 |
+| `addReaction`/`removeReaction` | method | db.ts | 更新某条消息的 reactions 列表 |
+| `MessageBubble` | component | MessageBubble.tsx | 气泡 + reactions pill（合并同 emoji + 计数）+ emoji 触发按钮 |
+| `EmojiPicker` | component | EmojiPicker.tsx | 锚定按钮的浮层表情选择器 |
 | `createGroupWithMembers` | func | group-invite.ts | 创建 MLS 群组并添加成员（返回 Welcome + Commit） |
 | `Store` | struct | store.go | BadgerDB Put/Get/GetBatch |
 | `Consumer` | struct | consumer.go | Jetstream WebSocket 消费 |
@@ -130,6 +140,21 @@ dme/
 | `group_member_removed` | 群主 | 被移除成员 | 移除通知 |
 | `group_member_left` | 离开成员 | 其他成员 | 离开通知 |
 
+## 消息反应
+
+表情反应通过已有 MLS session（1:1 或群聊）加密传输，`type: 'reaction'` JSON 消息：
+
+| 字段 | 说明 |
+|---|---|
+| `targetMessageId` | 被反应消息的 id（即 MLS queueId） |
+| `emoji` | 表情字符串 |
+| `action` | `add` / `remove` |
+| `conversationId` | 会话 ID（群聊 groupId 或好友 did） |
+
+- 本地先 toggle `StoredMessage.reactions`（`Reaction[]`）再发送，接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本
+- `MessageBubble` 按 emoji 聚合渲染 pill，相同 emoji 合并并显示计数（>1 时小字），当前用户参与的高亮
+- Web 无长按：每条文本气泡旁固定 emoji 按钮触发 `EmojiPicker`（`measureInWindow` 锚定浮层）
+
 ## 群组生命周期状态
 
 | 状态 | 含义 | 行为 |
@@ -146,6 +171,7 @@ dme/
 - **KeyPackage**: 不上 PDS，通过1:1通道或 QR 点对点传递（接收方 X25519 公钥加密）
 - **群聊 KeyPackage**: 接受邀请时生成，通过1:1通道发送给群主，群主用来 addMember
 - **群聊 Commit**: 每次 addMember 产生的 Commit 必须通过1:1通道发给已有成员（poller 只轮询 application 消息，不轮询 handshake Commit）
+- **表情反应**: `ReactionMessage`（`type: 'reaction'`）走 MLS session 加密，挂 `StoredMessage.reactions`，不存为文本消息
 - **成员离开**: MLS 禁止自身 removeMember，通过 `group_member_left` 通知其他成员，群主收到后执行 removeMember
 - **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
@@ -203,3 +229,4 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **浏览器调试现场保护**: 当用户要求「看控制台日志」时，直接使用 `browsermcp_browser_get_console_logs` 抓取当前页面日志，禁止 `browsermcp_browser_navigate` 刷新或跳转页面，避免破坏报错现场
 - **ChatViewScreen 依赖陷阱**: `useFocusEffect` 不可依赖整个 `AppContext` value 对象，否则 `chatListVersion` 递增会导致 effect 重新 fire → 再次触发 `markConversationAsRead` → 无限 `Maximum update depth exceeded` 循环
 - **DID 解析并发**: `ChatViewScreen`/`ChatListScreen`/`GroupSettingsScreen`/`CreateGroupScreen` 中批量解析 DID 时必须用 `Promise.all`，禁止 for 循环内串行 `await`
+- **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层

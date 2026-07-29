@@ -41,6 +41,7 @@ import { encryptBackup, decryptBackup, type FullBackupData } from '../crypto/bac
 import { bytesToBase64url, base64urlToBytes } from '../crypto/utils';
 import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY } from '../config';
 import type { DmeEnvelope } from '../protocol/types';
+import type { ReactionMessage } from '../protocol/reaction';
 import type {
   GroupInfo,
   GroupMember,
@@ -147,6 +148,7 @@ interface AppActions {
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
+  sendReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   deleteFriend: (groupId: string) => Promise<void>;
   markConversationAsRead: (groupId: string) => Promise<void>;
   generateInviteQr: (bobDid: string) => Promise<{ qrString: string; keyPackageInitKey: Uint8Array }>;
@@ -1004,6 +1006,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             conversationId: msg.groupId,
           });
       }
+    } else if (msgType === 'reaction') {
+      const r = parsed as unknown as ReactionMessage;
+      const reaction = {
+        emoji: r.emoji,
+        did: msg.senderDid,
+        createdAt: r.createdAt || msg.envelope.createdAt,
+      };
+      if (r.action === 'add') {
+        await msgStorage.addReaction(msg.groupId, r.targetMessageId, reaction);
+      } else {
+        await msgStorage.removeReaction(msg.groupId, r.targetMessageId, msg.senderDid, r.emoji);
+      }
     } else {
       await msgStorage.putMessage({
         id: msg.envelope.queueId,
@@ -1051,6 +1065,55 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.putMessage(msg);
 
     // Send via PDS
+    const envelope: DmeEnvelope = {
+      $type: 'dme.queue.envelope',
+      queueId: result.queueId,
+      payload: bytesToBase64url(result.ciphertext),
+      createdAt: new Date().toISOString(),
+      messageType: 'application',
+    };
+    await pds.createEnvelope(envelope);
+
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  const sendReaction = useCallback(async (conversationId: string, messageId: string, emoji: string): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('sendReaction: not fully initialized');
+    }
+
+    const mlsSession = poller.getSession(conversationId);
+    if (!mlsSession) throw new Error(`sendReaction: no MLS session for ${conversationId}`);
+
+    const msgs = await storage.getMessages(conversationId);
+    const target = msgs.find((m) => m.id === messageId);
+    const alreadyReacted = target?.reactions?.some((r) => r.did === session.did && r.emoji === emoji) ?? false;
+
+    const action: 'add' | 'remove' = alreadyReacted ? 'remove' : 'add';
+
+    if (action === 'remove') {
+      await storage.removeReaction(conversationId, messageId, session.did, emoji);
+    } else {
+      await storage.addReaction(conversationId, messageId, {
+        emoji,
+        did: session.did,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    const payload: ReactionMessage = {
+      type: 'reaction',
+      conversationId,
+      targetMessageId: messageId,
+      emoji,
+      action,
+      createdAt: new Date().toISOString(),
+    };
+
+    const plaintextBytes = new TextEncoder().encode(JSON.stringify(payload));
+    const result = await mlsSession.encrypt(plaintextBytes);
+    await storage.putMlsSession(conversationId, mlsSession.serialize());
+
     const envelope: DmeEnvelope = {
       $type: 'dme.queue.envelope',
       queueId: result.queueId,
@@ -1764,6 +1827,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,
+      sendReaction,
       deleteFriend,
       markConversationAsRead,
       generateInviteQr,
@@ -1787,7 +1851,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       pendingInvites, groupInfos, receivedGroupInvites,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
-      sendMessage, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
+      sendMessage, sendReaction, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,

@@ -17,6 +17,7 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-n
 import { theme } from './theme';
 import { Button } from './Button';
 import { MessageBubble } from './MessageBubble';
+import { EmojiPicker } from './EmojiPicker';
 import { useApp } from '../state/AppContext';
 import { sharedDidResolver } from '../atproto/did';
 import type { StoredMessage } from '../storage/db';
@@ -37,6 +38,7 @@ export function ChatViewScreen(): React.JSX.Element {
     storage,
     session,
     sendMessage,
+    sendReaction,
     receivedGroupInvites,
     respondToGroupInvite,
     markConversationAsRead,
@@ -51,6 +53,8 @@ export function ChatViewScreen(): React.JSX.Element {
   const [dissolved, setDissolved] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
+  const [pickerTarget, setPickerTarget] = useState<StoredMessage | null>(null);
+  const [pickerLayout, setPickerLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
   const resolvedDidsRef = useRef<Set<string>>(new Set());
@@ -159,6 +163,23 @@ export function ChatViewScreen(): React.JSX.Element {
     }
   }, [text, sending, app, conversationId, loadMessages]);
 
+  const handleReact = useCallback(async (msg: StoredMessage, emoji: string): Promise<void> => {
+    setPickerTarget(null);
+    setPickerLayout(null);
+    try {
+      await sendReaction(conversationId, msg.id, emoji);
+    } catch (err) {
+      console.error('sendReaction failed:', err);
+    }
+  }, [sendReaction, conversationId]);
+
+  const handleOpenPicker = useCallback((msg: StoredMessage, layout: { x: number; y: number; width: number; height: number }): void => {
+    setPickerTarget(msg);
+    setPickerLayout(layout);
+  }, []);
+
+  const canReact = !dissolved && !removed && !left;
+
   const renderItem = useCallback(
     ({ item }: { item: StoredMessage }): React.JSX.Element => {
       if (item.kind === 'group_system') {
@@ -214,10 +235,14 @@ export function ChatViewScreen(): React.JSX.Element {
           text={item.plaintext}
           isOutgoing={item.fromDid === session?.did}
           senderName={isGroup ? (senderHandles[item.fromDid] ?? item.fromDid) : undefined}
+          reactions={item.reactions}
+          currentDid={session?.did}
+          onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
+          onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
         />
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderHandles],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderHandles, canReact, handleReact, handleOpenPicker],
   );
 
   const keyExtractor = useCallback(
@@ -287,6 +312,12 @@ export function ChatViewScreen(): React.JSX.Element {
           />
         </View>
       )}
+      <EmojiPicker
+        visible={pickerTarget !== null}
+        layout={pickerLayout}
+        onSelect={(emoji) => { if (pickerTarget) void handleReact(pickerTarget, emoji); }}
+        onClose={() => { setPickerTarget(null); setPickerLayout(null); }}
+      />
     </View>
   );
 }

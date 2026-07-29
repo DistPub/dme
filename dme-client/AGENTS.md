@@ -28,8 +28,8 @@ dme-client/
     ├── poll/poller.ts    # 5-15s 随机间隔轮询 + LRU 去重 + 批量预计算 future queueId
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
     ├── state/AppContext.tsx  # 全局状态（15 字段，19 action）
-    ├── protocol/         # types.ts + group-message.ts + lexicons/ JSON
-    ├── ui/               # 14 个文件（9 屏幕 + 5 组件）
+    ├── protocol/         # types.ts + group-message.ts + reaction.ts + lexicons/ JSON
+    ├── ui/               # 15 个文件（9 屏幕 + 6 组件，含 MessageBubble + EmojiPicker）
     └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
 
@@ -51,6 +51,10 @@ dme-client/
 | 群聊邀请协议 | `src/handshake/group-invite.ts` |
 | 创建群聊 UI | `src/ui/CreateGroupScreen.tsx` |
 | 群管理 UI | `src/ui/GroupSettingsScreen.tsx` |
+| 表情反应协议 | `src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
+| 消息 reactions 存储 | `src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
+| 消息气泡 + reactions 渲染 | `src/ui/MessageBubble.tsx` |
+| 表情选择器 | `src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 
 ## 导航流程
 
@@ -74,7 +78,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **握手**: Alice 加密 KeyPackage -> QR -> Bob 扫码 -> 创建 MLS 群组 -> Welcome 走盲查通道
 - **群聊邀请**: 通过已有1:1 MLS 通道传输 JSON 消息（group_invite_request/response/welcome/commit 等）
 - **群聊 Commit**: addMember 产生的 Commit 通过1:1通道发给已有成员（poller 只轮询 application 消息）
-- **状态管理**: 每字段一个 `useState` 的 React Context（非 useReducer），19 个 `useCallback` action
+- **状态管理**: 每字段一个 `useState` 的 React Context（非 useReducer），20 个 `useCallback` action
 - **chatListVersion**: 单调计数器，storage 变化时递增触发 UI 刷新
 - **屏幕模式**: `<View>` -> 绝对定位 `<Canvas><Fill/></Canvas>` -> flexbox 内容（RN Text/TextInput/Button）
 - **阶段机**: 每个屏幕用联合类型 `Phase` 控制条件渲染
@@ -84,6 +88,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理
 - **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`；`conversationId` 指定存储到哪个会话
+- **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble` 按 emoji 合并并显示计数
 - **身份备份**: `backup.ts` 用 PBKDF2-SHA256(100k iter)+AES-256-GCM 加密 FullBackupData（身份密钥+MLS会话+KeyPackage池+群聊元数据），存 PDS `dme.backup.identity` record（rkey=self）。Settings 页设密码备份，Setup 页检测到 DID 有 key 但本地不匹配时提供恢复入口
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页 `web_instructions` step 提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后点「检测」验证
 - **AsyncStorage v3 web API**: `@react-native-async-storage/async-storage` v3 在 web 端只导出 `getItem`/`setItem`/`removeItem`/`getAllKeys`/`clear`/`getMany`/`setMany`/`removeMany`，**没有** v2 的 `multiRemove`/`multiGet`/`multiSet`。批量操作须用 `Promise.all(keys.map(k => AsyncStorage.removeItem(k)))` 等替代，禁止直接调 `AsyncStorage.multi*`（web 会抛 `TypeError: ... is not a function`，native 正常）
@@ -97,3 +102,4 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`
 - **群主不能离开**: MLS 禁止 removeMember 移除 committer，群主只能解散群组
 - **群组只读状态**: dissolved/removed/left 标记后群组变为只读，保留消息但禁止发送
+- **Web 长按缺失**: Web 无 `onLongPress`，每条文本消息气泡旁固定一个 emoji 按钮（incoming 右下/outgoing 左下）触发 `EmojiPicker`；`EmojiPicker` 用 `measureInWindow` 取按钮坐标做锚定浮层，上方优先、空间不足转下方，左右 clamp 防溢出

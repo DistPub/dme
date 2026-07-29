@@ -20,6 +20,13 @@ import { DEFAULT_APPVIEW_PROXY } from '../config';
 
 export type MessageKind = 'text' | 'group_invite' | 'group_system';
 
+/** 表情回应。 */
+export interface Reaction {
+  emoji: string;
+  did: string;
+  createdAt: string;
+}
+
 /** 存储的消息记录。 */
 export interface StoredMessage {
   id: string;
@@ -31,6 +38,7 @@ export interface StoredMessage {
   kind?: MessageKind;
   conversationId?: string;
   readAt?: string;
+  reactions?: Reaction[];
 }
 
 /** 等待接收 Welcome 的记录。 */
@@ -167,6 +175,39 @@ export class DmeStorage {
 
   async deleteMessages(groupId: string): Promise<void> {
     await AsyncStorage.removeItem(this.prefix + `messages:${groupId}`);
+  }
+
+  async addReaction(conversationId: string, messageId: string, reaction: Reaction): Promise<void> {
+    const key = this.prefix + `messages:${conversationId}`;
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return;
+    const messages: StoredMessage[] = JSON.parse(raw);
+    const index = messages.findIndex((msg) => msg.id === messageId);
+    if (index === -1) return;
+    const existing = messages[index].reactions?.some((r) => r.did === reaction.did && r.emoji === reaction.emoji);
+    if (existing) return;
+    messages[index] = {
+      ...messages[index],
+      reactions: [...(messages[index].reactions ?? []), reaction],
+    };
+    await AsyncStorage.setItem(key, JSON.stringify(messages));
+  }
+
+  async removeReaction(conversationId: string, messageId: string, did: string, emoji: string): Promise<void> {
+    const key = this.prefix + `messages:${conversationId}`;
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return;
+    const messages: StoredMessage[] = JSON.parse(raw);
+    const index = messages.findIndex((msg) => msg.id === messageId);
+    if (index === -1) return;
+    const current = messages[index].reactions ?? [];
+    const filtered = current.filter((r) => !(r.did === did && r.emoji === emoji));
+    if (filtered.length === current.length) return;
+    messages[index] = {
+      ...messages[index],
+      reactions: filtered,
+    };
+    await AsyncStorage.setItem(key, JSON.stringify(messages));
   }
 
   async listGroups(): Promise<string[]> {

@@ -7,7 +7,7 @@
 
 # DME 项目知识库
 
-**Generated:** 2026-07-28
+**Generated:** 2026-07-29
 
 ## 概述
 
@@ -62,7 +62,8 @@ dme/
 | 全局状态 | `dme-client/src/state/AppContext.tsx` (16 字段，24 action) |
 | 消息轮询 | `dme-client/src/poll/poller.ts` |
 | 存储 schema | `dme-client/src/storage/db.ts` |
-| DID 公钥读写 | `dme-client/src/atproto/did.ts` (declareKeys + getRemoteEncryptionKey + getRemoteSigningKey + getDidMethod + generateDidWebUpdate) |
+| DID 公钥读写 | `dme-client/src/atproto/did.ts` (`declareKeys` + `getRemoteEncryptionKey` + `getRemoteSigningKey` + `getDidMethod` + `generateDidWebUpdate` + `sharedDidResolver`) |
+| DID 解析缓存 | `dme-client/src/atproto/did.ts` (`sharedDidResolver`: 单例 `DidResolver` + `MemoryCache`) |
 | PDS 记录写入 | `dme-client/src/atproto/pds.ts` (envelope + identity backup + AppView proxy) |
 | AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
 | 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton） |
@@ -93,6 +94,9 @@ dme/
 | `declareKeys` | func | did.ts | PLC 操作发布 Ed25519 + X25519 到 DID 文档 |
 | `getDidMethod` | func | did.ts | 判断 DID 方法类型（plc/web/other） |
 | `generateDidWebUpdate` | func | did.ts | 为 did:web 用户生成 DID 文档更新内容（合并 DME 公钥） |
+| `sharedDidResolver` | const | did.ts | 单例 `DidResolver`（`plcUrl` + `MemoryCache`），所有 DID 解析统一入口 |
+| `markConversationAsRead` | action | AppContext.tsx | 标记某会话所有非自己发送的消息为已读，并递增 `chatListVersion` |
+| `resolvedDidsRef` | ref | ChatViewScreen.tsx | `useRef<Set<string>>`，防止群聊 sender handle 重复解析 |
 | `encryptBackup` | func | backup.ts | PBKDF2+AES-GCM 加密 FullBackupData -> base64url |
 | `decryptBackup` | func | backup.ts | 解密 base64url -> FullBackupData |
 | `backupIdentity` | action | AppContext.tsx | 密码加密身份+MLS会话+KeyPackage+群聊元数据，写入 PDS |
@@ -146,6 +150,11 @@ dme/
 - **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
 - **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
+- **DID 解析**: 统一使用 `atproto/did.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
+- **React hooks 依赖**: UI 屏幕严禁把整个 `AppContext` value 对象放入 `useEffect`/`useCallback`/`useFocusEffect` 依赖数组；必须在组件顶部解构 `storage`/`session`/`markConversationAsRead`/`chatListVersion` 等具体字段后再依赖
+- **会话列表加载**: `ChatListScreen.loadConversations` 用 `Promise.all` 并行解析各会话 handle，避免 for 循环串行 await 阻塞 JS 线程
+- **未读标记**: 进入 ChatView 时调用 `markConversationAsRead`；poller 推送新消息后，`chatListVersion` 变化触发的 `useEffect` 中会同步调用 `storage.markMessagesAsRead(conversationId)`，确保用户在 ChatView 已看到的消息返回列表时不显示未读
+- **未读 badge 布局**: 聊天列表行的未读 badge 紧跟 handle/groupName 文字，不靠右 `space-between` 推开
 - **身份备份**: PBKDF2-SHA256(100k iter)+AES-256-GCM 加密，备份范围含身份密钥+MLS会话+KeyPackage池+群聊元数据，PDS `dme.backup.identity` record（rkey=self, putRecord upsert）
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后检测
 - **包管理器**: TS 侧统一 Bun，Go 侧标准 go 工具链
@@ -192,3 +201,5 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **群主离线**: 只有群主能 addMember/removeMember，群主离线时无法管理成员
 - **群聊创建者**: 群主不能离开群组（MLS 限制 removeMember 不能移除 committer），只能解散
 - **浏览器调试现场保护**: 当用户要求「看控制台日志」时，直接使用 `browsermcp_browser_get_console_logs` 抓取当前页面日志，禁止 `browsermcp_browser_navigate` 刷新或跳转页面，避免破坏报错现场
+- **ChatViewScreen 依赖陷阱**: `useFocusEffect` 不可依赖整个 `AppContext` value 对象，否则 `chatListVersion` 递增会导致 effect 重新 fire → 再次触发 `markConversationAsRead` → 无限 `Maximum update depth exceeded` 循环
+- **DID 解析并发**: `ChatViewScreen`/`ChatListScreen`/`GroupSettingsScreen`/`CreateGroupScreen` 中批量解析 DID 时必须用 `Promise.all`，禁止 for 循环内串行 `await`

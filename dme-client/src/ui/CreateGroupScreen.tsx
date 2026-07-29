@@ -18,6 +18,7 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-n
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
+import { sharedDidResolver } from '../atproto/did';
 import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -62,21 +63,23 @@ export function CreateGroupScreen(): React.JSX.Element {
         (id) => !groupIds.has(id) && id.startsWith('did:') && !existingMemberDids.has(id),
       );
 
-      const { DidResolver } = await import('@atproto/identity');
-      const resolver = new DidResolver({});
-
-      const rows: FriendRow[] = [];
-      for (const did of friendDids) {
-        let handle = did;
-        try {
-          const doc = (await resolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
-          if (doc?.alsoKnownAs?.[0]) {
-            handle = doc.alsoKnownAs[0].replace(/^at:\/\//, '');
+      const results = await Promise.all(
+        friendDids.map(async (did) => {
+          try {
+            const doc = (await sharedDidResolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
+            if (doc?.alsoKnownAs?.[0]) {
+              return { did, handle: doc.alsoKnownAs[0].replace(/^at:\/\//, '') };
+            }
+          } catch {
           }
-        } catch {
-        }
-        rows.push({ did, handle, selected: false });
-      }
+          return { did, handle: did };
+        }),
+      );
+      const rows: FriendRow[] = results.map(({ did, handle }) => ({
+        did,
+        handle,
+        selected: false,
+      }));
       setFriends(rows);
     };
     loadFriends().catch((err: unknown) => console.error('loadFriends failed:', err));

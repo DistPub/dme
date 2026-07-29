@@ -16,6 +16,7 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-n
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
+import { sharedDidResolver } from '../atproto/did';
 import type { GroupMember } from '../protocol/group-message';
 import type { RootStackParamList } from '../types/navigation';
 
@@ -47,20 +48,21 @@ export function GroupSettingsScreen(): React.JSX.Element {
         setRemoved(info.removed ?? false);
         setLeft(info.left ?? false);
 
-        const { DidResolver } = await import('@atproto/identity');
-        const resolver = new DidResolver({});
-        const resolved: Record<string, string> = {};
-        for (const m of info.members) {
-          try {
-            const doc = (await resolver.resolve(m.did)) as { alsoKnownAs?: string[] } | null;
-            if (doc?.alsoKnownAs?.[0]) {
-              resolved[m.did] = doc.alsoKnownAs[0].replace(/^at:\/\//, '');
-            } else {
-              resolved[m.did] = m.did;
+        const results = await Promise.all(
+          info.members.map(async (m) => {
+            try {
+              const doc = (await sharedDidResolver.resolve(m.did)) as { alsoKnownAs?: string[] } | null;
+              if (doc?.alsoKnownAs?.[0]) {
+                return { did: m.did, handle: doc.alsoKnownAs[0].replace(/^at:\/\//, '') };
+              }
+            } catch {
             }
-          } catch {
-            resolved[m.did] = m.did;
-          }
+            return { did: m.did, handle: m.did };
+          }),
+        );
+        const resolved: Record<string, string> = {};
+        for (const { did, handle } of results) {
+          resolved[did] = handle;
         }
         setMemberHandles(resolved);
       }

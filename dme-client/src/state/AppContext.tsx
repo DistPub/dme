@@ -19,7 +19,7 @@ import type { KeyPackage, PrivateKeyPackage } from 'ts-mls';
 
 import { DmeSession } from '../atproto/session';
 import { DmePds } from '../atproto/pds';
-import { declareKeys, getRemoteEncryptionKey } from '../atproto/did';
+import { declareKeys, getRemoteEncryptionKey, sharedDidResolver } from '../atproto/did';
 import { acceptInvite, processWelcome } from '../handshake/handshake';
 import { encodeQrPayload } from '../handshake/qr-encode';
 import { DmePoller } from '../poll/poller';
@@ -104,9 +104,7 @@ function generateId(): string {
 
 async function resolveDidToHandle(did: string): Promise<string> {
   try {
-    const { DidResolver } = await import('@atproto/identity');
-    const resolver = new DidResolver({});
-    const doc = (await resolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
+    const doc = (await sharedDidResolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
     if (doc?.alsoKnownAs?.[0]) {
       return doc.alsoKnownAs[0].replace(/^at:\/\//, '');
     }

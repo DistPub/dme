@@ -20,7 +20,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import { decodeQrPayload } from '../handshake/qr-encode';
-import { DidResolver } from '@atproto/identity';
+import { sharedDidResolver } from '../atproto/did';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -38,8 +38,7 @@ export function QrScanScreen(): React.JSX.Element {
 
   const resolveHandle = async (did: string): Promise<string> => {
     try {
-      const resolver = new DidResolver({});
-      const doc = (await resolver.resolve(did)) as DidDocWithHandle | null;
+      const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
       const aka = doc?.alsoKnownAs;
       if (Array.isArray(aka) && aka.length > 0) {
         return aka[0].replace(/^at:\/\//, '');

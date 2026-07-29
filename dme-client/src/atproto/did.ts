@@ -19,7 +19,7 @@
  */
 
 import { Agent } from '@atproto/api';
-import { DidResolver } from '@atproto/identity';
+import { DidResolver, MemoryCache } from '@atproto/identity';
 
 import { PLC_DIRECTORY_URL } from '../config';
 import {
@@ -33,6 +33,18 @@ import {
   DME_SIGNING_KEY_ID,
   type IdentityKeys,
 } from '../crypto/identity';
+
+/**
+ * Shared DID resolver with in-memory caching.
+ *
+ * Using a single instance avoids creating a new resolver on every UI render and
+ * lets @atproto/identity cache DID documents across the app. did:plc DIDs are
+ * routed to PLC_DIRECTORY_URL automatically.
+ */
+export const sharedDidResolver = new DidResolver({
+  plcUrl: PLC_DIRECTORY_URL,
+  didCache: new MemoryCache(),
+});
 
 /** DID_KEY_PREFIX prepended to multibase values from PLC documents. */
 const DID_KEY_PREFIX = 'did:key:';
@@ -189,19 +201,7 @@ async function findVerificationMethod(
 async function resolveDidDocument(
   did: string,
 ): Promise<DidDocumentLike | null> {
-  if (did.startsWith('did:plc:')) {
-    const resp = await fetch(
-      `${PLC_DIRECTORY_URL}/${encodeURIComponent(did)}`,
-    );
-    if (!resp.ok) {
-      throw new Error(
-        `did: PLC resolution failed: ${resp.status} ${resp.statusText}`,
-      );
-    }
-    return (await resp.json()) as DidDocumentLike;
-  }
-  const resolver = new DidResolver({});
-  return (await resolver.resolve(did)) as DidDocumentLike | null;
+  return (await sharedDidResolver.resolve(did)) as DidDocumentLike | null;
 }
 
 export function getDidMethod(did: string): 'plc' | 'web' | 'other' {
@@ -214,21 +214,8 @@ async function fetchFullDidDocument(
   did: string,
 ): Promise<Record<string, unknown> | null> {
   try {
-    if (did.startsWith('did:web:')) {
-      const path = did.slice('did:web:'.length).replace(/:/g, '/');
-      const url = `https://${path}/.well-known/did.json`;
-      const resp = await fetch(url);
-      if (!resp.ok) return null;
-      return (await resp.json()) as Record<string, unknown>;
-    }
-    if (did.startsWith('did:plc:')) {
-      const resp = await fetch(
-        `${PLC_DIRECTORY_URL}/${encodeURIComponent(did)}`,
-      );
-      if (!resp.ok) return null;
-      return (await resp.json()) as Record<string, unknown>;
-    }
-    return null;
+    const doc = await sharedDidResolver.resolve(did);
+    return (doc as unknown as Record<string, unknown>) ?? null;
   } catch {
     return null;
   }

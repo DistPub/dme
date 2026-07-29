@@ -20,12 +20,12 @@ import { Image } from 'expo-image';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { DidResolver } from '@atproto/identity';
 import { Swipeable } from 'react-native-gesture-handler';
 
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
+import { sharedDidResolver } from '../atproto/did';
 import type { StoredMessage } from '../storage/db';
 import type { PendingWelcome } from '../storage/db';
 import type { PendingInvite, GroupInfo } from '../protocol/group-message';
@@ -105,8 +105,7 @@ export function ChatListScreen(): React.JSX.Element {
     const cached = handleCacheRef.current[did];
     if (cached) return cached;
     try {
-      const resolver = new DidResolver({});
-      const doc = (await resolver.resolve(did)) as DidDocWithHandle | null;
+      const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
       const aka = doc?.alsoKnownAs;
       if (Array.isArray(aka) && aka.length > 0) {
         const handle = aka[0].replace(/^at:\/\//, '');
@@ -129,11 +128,14 @@ export function ChatListScreen(): React.JSX.Element {
 
     let cancelled = false;
     (async () => {
-      const resolved: Record<string, string> = {};
-      for (const did of uniqueDids) {
-        resolved[did] = await resolveHandle(did);
-      }
+      const results = await Promise.all(
+        uniqueDids.map(async (did) => ({ did, handle: await resolveHandle(did) })),
+      );
       if (!cancelled) {
+        const resolved: Record<string, string> = {};
+        for (const { did, handle } of results) {
+          resolved[did] = handle;
+        }
         setInviterHandles((prev) => ({ ...prev, ...resolved }));
       }
     })();
@@ -164,31 +166,25 @@ export function ChatListScreen(): React.JSX.Element {
       return;
     }
 
-    const groups = await app.storage.listGroups();
-    const groupInfos = await app.storage.listGroupInfos();
+    const storage = app.storage;
+    const myDid = app.session?.did;
+    const groups = await storage.listGroups();
+    const groupInfos = await storage.listGroupInfos();
     const groupInfoMap = new Map(groupInfos.map((g) => [g.groupId, g]));
 
-    const rows: ConversationRow[] = [];
-    for (const groupId of groups) {
-      const messages = await app.storage.getMessages(groupId);
-      const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-      const unreadCount = messages.filter(
-        (m) => m.fromDid !== app.session?.did && !m.readAt,
-      ).length;
+    const rows = await Promise.all(
+      groups.map(async (groupId) => {
+        const messages = await storage.getMessages(groupId);
+        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+        const unreadCount = messages.filter(
+          (m) => m.fromDid !== myDid && !m.readAt,
+        ).length;
 
-      const info = groupInfoMap.get(groupId);
-      let displayName: string;
-      let isGroup = false;
-
-      if (info) {
-        displayName = info.groupName;
-        isGroup = true;
-      } else {
-        displayName = await resolveHandle(groupId);
-      }
-
-      rows.push({ groupId, displayName, lastMessage, isGroup, unreadCount });
-    }
+        const info = groupInfoMap.get(groupId);
+        const displayName = info ? info.groupName : await resolveHandle(groupId);
+        return { groupId, displayName, lastMessage, isGroup: !!info, unreadCount };
+      }),
+    );
     setConversations(rows);
     setLoading(false);
   }, [app.storage, resolveHandle, app.chatListVersion, app.session?.did]);
@@ -202,9 +198,7 @@ export function ChatListScreen(): React.JSX.Element {
     }, [loadConversations]),
   );
 
-  useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
+
 
   const navigateToChat = useCallback(
     (groupId: string, isGroup: boolean): void => {
@@ -613,13 +607,12 @@ const styles = StyleSheet.create({
   rowHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
   },
   rowTitle: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.body,
     fontWeight: '600',
-    flex: 1,
+    flexShrink: 1,
   },
   rowSubtitle: {
     color: theme.colors.textSecondary,

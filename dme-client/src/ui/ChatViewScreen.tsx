@@ -18,6 +18,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { MessageBubble } from './MessageBubble';
 import { useApp } from '../state/AppContext';
+import { sharedDidResolver } from '../atproto/did';
 import type { StoredMessage } from '../storage/db';
 import type { GroupInviteRequest } from '../protocol/group-message';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
@@ -32,6 +33,15 @@ export function ChatViewScreen(): React.JSX.Element {
 
   const conversationId = 'groupId' in route.params ? route.params.groupId : route.params.friendDid;
   const isGroup = 'groupId' in route.params;
+  const {
+    storage,
+    session,
+    sendMessage,
+    receivedGroupInvites,
+    respondToGroupInvite,
+    markConversationAsRead,
+    chatListVersion,
+  } = app;
 
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [text, setText] = useState('');
@@ -43,61 +53,72 @@ export function ChatViewScreen(): React.JSX.Element {
   const [left, setLeft] = useState(false);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
+  const resolvedDidsRef = useRef<Set<string>>(new Set());
 
   const loadMessages = useCallback(async (): Promise<void> => {
-    if (!app.storage) return;
-    const msgs = await app.storage.getMessages(conversationId);
+    if (!storage) return;
+    const msgs = await storage.getMessages(conversationId);
     setMessages(msgs);
-  }, [app.storage, conversationId]);
+  }, [storage, conversationId]);
 
   useFocusEffect(
     useCallback(() => {
       loadMessages();
-      app.markConversationAsRead(conversationId).catch((err: unknown) => {
+      markConversationAsRead(conversationId).catch((err: unknown) => {
         console.error('markConversationAsRead failed:', err);
       });
-    }, [loadMessages, app, conversationId]),
+    }, [loadMessages, markConversationAsRead, conversationId]),
   );
 
   useEffect(() => {
     loadMessages();
-  }, [app.chatListVersion, loadMessages]);
+    if (storage) {
+      storage.markMessagesAsRead(conversationId).catch((err: unknown) => {
+        console.error('markMessagesAsRead failed:', err);
+      });
+    }
+  }, [chatListVersion, loadMessages]);
 
   useEffect(() => {
-    if (!isGroup || !app.storage) return;
+    if (!isGroup || !storage) return;
     const unresolvedDids = [...new Set(messages.map((m) => m.fromDid))]
-      .filter((did) => did !== app.session?.did && !senderHandles[did]);
+      .filter((did) => did !== session?.did && !resolvedDidsRef.current.has(did));
     if (unresolvedDids.length === 0) return;
 
     let cancelled = false;
     (async () => {
-      const { DidResolver } = await import('@atproto/identity');
-      const resolver = new DidResolver({});
-      const resolved: Record<string, string> = {};
-      for (const did of unresolvedDids) {
-        try {
-          const doc = (await resolver.resolve(did)) as DidDocWithHandle | null;
-          if (doc?.alsoKnownAs?.[0]) {
-            resolved[did] = doc.alsoKnownAs[0].replace(/^at:\/\//, '');
-          } else {
-            resolved[did] = did;
+      const results = await Promise.all(
+        unresolvedDids.map(async (did) => {
+          resolvedDidsRef.current.add(did);
+          try {
+            const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
+            return {
+              did,
+              handle: doc?.alsoKnownAs?.[0]
+                ? doc.alsoKnownAs[0].replace(/^at:\/\//, '')
+                : did,
+            };
+          } catch {
+            return { did, handle: did };
           }
-        } catch {
-          resolved[did] = did;
-        }
-      }
+        }),
+      );
       if (!cancelled) {
+        const resolved: Record<string, string> = {};
+        for (const { did, handle } of results) {
+          resolved[did] = handle;
+        }
         setSenderHandles((prev) => ({ ...prev, ...resolved }));
       }
     })();
     return () => { cancelled = true; };
-  }, [messages, isGroup, app.storage, app.session?.did, senderHandles]);
+  }, [messages, isGroup, storage, session?.did]);
 
   useEffect(() => {
     if (isGroup) {
       const loadGroupName = async (): Promise<void> => {
-        if (!app.storage) return;
-        const info = await app.storage.getGroupInfo(conversationId);
+        if (!storage) return;
+        const info = await storage.getGroupInfo(conversationId);
         if (info) {
           setDisplayName(info.groupName);
         setDissolved(info.dissolved ?? false);
@@ -110,9 +131,7 @@ export function ChatViewScreen(): React.JSX.Element {
       let cancelled = false;
       (async () => {
         try {
-          const { DidResolver } = await import('@atproto/identity');
-          const resolver = new DidResolver({});
-          const doc = (await resolver.resolve(conversationId)) as DidDocWithHandle | null;
+          const doc = (await sharedDidResolver.resolve(conversationId)) as DidDocWithHandle | null;
           if (!cancelled && doc?.alsoKnownAs?.[0]) {
             setDisplayName(doc.alsoKnownAs[0].replace(/^at:\/\//, ''));
           }
@@ -122,14 +141,14 @@ export function ChatViewScreen(): React.JSX.Element {
       })();
       return () => { cancelled = true; };
     }
-  }, [conversationId, isGroup, app.storage, app.chatListVersion]);
+  }, [conversationId, isGroup, storage, chatListVersion]);
 
   const onSend = useCallback(async (): Promise<void> => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     setSending(true);
     try {
-      await app.sendMessage(conversationId, trimmed);
+      await sendMessage(conversationId, trimmed);
       setText('');
       await loadMessages();
       inputRef.current?.focus();
@@ -160,7 +179,7 @@ export function ChatViewScreen(): React.JSX.Element {
         } catch {
         }
 
-        const alreadyResponded = app.receivedGroupInvites.some(
+        const alreadyResponded = receivedGroupInvites.some(
           (i) => i.inviteId === inviteId && i.status !== 'pending',
         );
 
@@ -174,13 +193,13 @@ export function ChatViewScreen(): React.JSX.Element {
               <View style={styles.inviteButtons}>
                 <Button
                   label="Accept"
-                  onPress={() => app.respondToGroupInvite(inviteId, true)}
+                  onPress={() => respondToGroupInvite(inviteId, true)}
                   variant="primary"
                   style={styles.inviteBtn}
                 />
                 <Button
                   label="Decline"
-                  onPress={() => app.respondToGroupInvite(inviteId, false)}
+                  onPress={() => respondToGroupInvite(inviteId, false)}
                   variant="secondary"
                   style={styles.inviteBtn}
                 />
@@ -193,12 +212,12 @@ export function ChatViewScreen(): React.JSX.Element {
       return (
         <MessageBubble
           text={item.plaintext}
-          isOutgoing={item.fromDid === app.session?.did}
+          isOutgoing={item.fromDid === session?.did}
           senderName={isGroup ? (senderHandles[item.fromDid] ?? item.fromDid) : undefined}
         />
       );
     },
-    [app.session?.did, app.receivedGroupInvites, app.respondToGroupInvite, isGroup, senderHandles],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderHandles],
   );
 
   const keyExtractor = useCallback(

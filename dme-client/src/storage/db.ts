@@ -30,6 +30,7 @@ export interface StoredMessage {
   sent: boolean;
   kind?: MessageKind;
   conversationId?: string;
+  readAt?: string;
 }
 
 /** 等待接收 Welcome 的记录。 */
@@ -143,6 +144,25 @@ export class DmeStorage {
     if (!raw) return [];
     const messages = JSON.parse(raw) as StoredMessage[];
     return messages;
+  }
+
+  async markMessagesAsRead(groupId: string): Promise<void> {
+    const key = this.prefix + `messages:${groupId}`;
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return;
+    const messages = JSON.parse(raw) as StoredMessage[];
+    let changed = false;
+    const now = new Date().toISOString();
+    const updated = messages.map((msg) => {
+      if (msg.fromDid !== this.userDid && !msg.readAt) {
+        changed = true;
+        return { ...msg, readAt: now };
+      }
+      return msg;
+    });
+    if (changed) {
+      await AsyncStorage.setItem(key, JSON.stringify(updated));
+    }
   }
 
   async deleteMessages(groupId: string): Promise<void> {

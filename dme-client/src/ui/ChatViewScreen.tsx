@@ -53,7 +53,10 @@ export function ChatViewScreen(): React.JSX.Element {
   useFocusEffect(
     useCallback(() => {
       loadMessages();
-    }, [loadMessages]),
+      app.markConversationAsRead(conversationId).catch((err: unknown) => {
+        console.error('markConversationAsRead failed:', err);
+      });
+    }, [loadMessages, app, conversationId]),
   );
 
   useEffect(() => {

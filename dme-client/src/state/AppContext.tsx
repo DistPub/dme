@@ -150,6 +150,7 @@ interface AppActions {
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
   deleteFriend: (groupId: string) => Promise<void>;
+  markConversationAsRead: (groupId: string) => Promise<void>;
   generateInviteQr: (bobDid: string) => Promise<{ qrString: string; keyPackageInitKey: Uint8Array }>;
   acceptInviteQr: (qrString: string) => Promise<void>;
   refreshKeyPackagePool: () => Promise<void>;
@@ -1075,6 +1076,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setChatListVersion((v) => v + 1);
   }, [storage, poller]);
 
+  const markConversationAsRead = useCallback(async (groupId: string): Promise<void> => {
+    if (!storage) return;
+    await storage.markMessagesAsRead(groupId);
+    setChatListVersion((v) => v + 1);
+  }, [storage]);
+
   // -------------------------------------------------------------------------
   // Group Chat Actions
   // -------------------------------------------------------------------------
@@ -1760,6 +1767,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       hasIdentityBackup,
       sendMessage,
       deleteFriend,
+      markConversationAsRead,
       generateInviteQr,
       acceptInviteQr,
       refreshKeyPackagePool,
@@ -1781,7 +1789,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       pendingInvites, groupInfos, receivedGroupInvites,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
-      sendMessage, deleteFriend, generateInviteQr, acceptInviteQr,
+      sendMessage, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,

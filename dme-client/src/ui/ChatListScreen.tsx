@@ -38,6 +38,7 @@ interface ConversationRow {
   displayName: string;
   lastMessage: StoredMessage | null;
   isGroup: boolean;
+  unreadCount: number;
 }
 
 interface SwipeableRowProps {
@@ -171,6 +172,9 @@ export function ChatListScreen(): React.JSX.Element {
     for (const groupId of groups) {
       const messages = await app.storage.getMessages(groupId);
       const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+      const unreadCount = messages.filter(
+        (m) => m.fromDid !== app.session?.did && !m.readAt,
+      ).length;
 
       const info = groupInfoMap.get(groupId);
       let displayName: string;
@@ -183,11 +187,11 @@ export function ChatListScreen(): React.JSX.Element {
         displayName = await resolveHandle(groupId);
       }
 
-      rows.push({ groupId, displayName, lastMessage, isGroup });
+      rows.push({ groupId, displayName, lastMessage, isGroup, unreadCount });
     }
     setConversations(rows);
     setLoading(false);
-  }, [app.storage, resolveHandle, app.chatListVersion]);
+  }, [app.storage, resolveHandle, app.chatListVersion, app.session?.did]);
 
   useFocusEffect(
     useCallback(() => {
@@ -295,6 +299,13 @@ export function ChatListScreen(): React.JSX.Element {
               <Text style={styles.rowTitle} numberOfLines={1}>
                 {item.isGroup ? '[Group] ' : ''}{item.displayName}
               </Text>
+              {item.unreadCount > 0 && (
+                <View style={styles.unreadBadge}>
+                  <Text style={styles.unreadBadgeText}>
+                    {item.unreadCount > 99 ? '99+' : item.unreadCount}
+                  </Text>
+                </View>
+              )}
             </View>
             <Text
               style={styles.rowSubtitle}
@@ -614,6 +625,21 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: theme.typography.caption,
     marginTop: theme.spacing.xs,
+  },
+  unreadBadge: {
+    backgroundColor: theme.colors.accent,
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    marginLeft: theme.spacing.sm,
+  },
+  unreadBadgeText: {
+    color: '#FFFFFF',
+    fontSize: theme.typography.small,
+    fontWeight: '700',
   },
   deleteBtnContainer: {
     width: DELETE_BTN_WIDTH,

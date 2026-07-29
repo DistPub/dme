@@ -75,6 +75,7 @@ dme/
 | 消息 reactions 存储 | `dme-client/src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions | `dme-client/src/ui/MessageBubble.tsx` |
 | 表情选择器 | `dme-client/src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
+| 消息操作菜单 | `dme-client/src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
@@ -120,6 +121,9 @@ dme/
 | `addReaction`/`removeReaction` | method | db.ts | 更新某条消息的 reactions 列表 |
 | `MessageBubble` | component | MessageBubble.tsx | 气泡 + reactions pill（合并同 emoji + 计数）+ emoji 触发按钮 |
 | `EmojiPicker` | component | EmojiPicker.tsx | 锚定按钮的浮层表情选择器 |
+| `MessageActionMenu` | component | MessageActionMenu.tsx | 消息长按/右键浮层菜单（复制/转发/删除） |
+| `deleteMessage` | action | AppContext.tsx | 本地删除单条消息，递增 chatListVersion 刷新 |
+| `deleteMessage` | method | db.ts | 从 AsyncStorage 过滤删除指定 messageId |
 | `createGroupWithMembers` | func | group-invite.ts | 创建 MLS 群组并添加成员（返回 Welcome + Commit） |
 | `Store` | struct | store.go | BadgerDB Put/Get/GetBatch |
 | `Consumer` | struct | consumer.go | Jetstream WebSocket 消费 |
@@ -172,6 +176,7 @@ dme/
 - **群聊 KeyPackage**: 接受邀请时生成，通过1:1通道发送给群主，群主用来 addMember
 - **群聊 Commit**: 每次 addMember 产生的 Commit 必须通过1:1通道发给已有成员（poller 只轮询 application 消息，不轮询 handshake Commit）
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`）走 MLS session 加密，挂 `StoredMessage.reactions`，不存为文本消息
+- **消息操作菜单**: 长按（原生）/右键（web）消息气泡弹出 `MessageActionMenu`（复制/转发/删除）；复制走 `expo-clipboard`，转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，删除仅本地删除（PDS 密文不变）
 - **成员离开**: MLS 禁止自身 removeMember，通过 `group_member_left` 通知其他成员，群主收到后执行 removeMember
 - **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
@@ -230,3 +235,4 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **ChatViewScreen 依赖陷阱**: `useFocusEffect` 不可依赖整个 `AppContext` value 对象，否则 `chatListVersion` 递增会导致 effect 重新 fire → 再次触发 `markConversationAsRead` → 无限 `Maximum update depth exceeded` 循环
 - **DID 解析并发**: `ChatViewScreen`/`ChatListScreen`/`GroupSettingsScreen`/`CreateGroupScreen` 中批量解析 DID 时必须用 `Promise.all`，禁止 for 循环内串行 `await`
 - **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
+- **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径

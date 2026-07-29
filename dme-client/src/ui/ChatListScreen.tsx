@@ -18,8 +18,8 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Canvas, Fill } from '@shopify/react-native-skia';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
+import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Swipeable } from 'react-native-gesture-handler';
 
 import { theme } from './theme';
@@ -32,6 +32,7 @@ import type { PendingInvite, GroupInfo } from '../protocol/group-message';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
+type ChatListRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatList'>['route'];
 
 interface ConversationRow {
   groupId: string;
@@ -92,6 +93,8 @@ const SwipeableRow = React.memo(function SwipeableRow({
 export function ChatListScreen(): React.JSX.Element {
   const app = useApp();
   const navigation = useNavigation<Navigation>();
+  const route = useRoute<ChatListRouteProp>();
+  const forwardText = route.params?.forwardText;
 
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -201,14 +204,27 @@ export function ChatListScreen(): React.JSX.Element {
 
 
   const navigateToChat = useCallback(
-    (groupId: string, isGroup: boolean): void => {
+    async (groupId: string, isGroup: boolean): Promise<void> => {
+      if (forwardText) {
+        try {
+          await app.sendMessage(groupId, forwardText);
+        } catch (err) {
+          console.error('Forward sendMessage failed:', err);
+        }
+        if (isGroup) {
+          navigation.replace('ChatView', { groupId });
+        } else {
+          navigation.replace('ChatView', { friendDid: groupId });
+        }
+        return;
+      }
       if (isGroup) {
         navigation.navigate('ChatView', { groupId });
       } else {
         navigation.navigate('ChatView', { friendDid: groupId });
       }
     },
-    [navigation],
+    [navigation, forwardText, app],
   );
 
   const navigateToQrDisplay = useCallback((): void => {
@@ -321,42 +337,57 @@ export function ChatListScreen(): React.JSX.Element {
       </Canvas>
 
       <View style={styles.topBar}>
-        <Text style={styles.title}>隐世</Text>
-        <View style={styles.topButtons}>
-          <Button
-            label="+ Group"
-            onPress={navigateToCreateGroup}
-            variant="secondary"
-            style={styles.iconBtn}
-          />
-          <Button
-            label="+ Friend"
-            onPress={navigateToQrDisplay}
-            variant="secondary"
-            style={styles.iconBtn}
-          />
-          <TouchableOpacity
-            onPress={() => setMenuVisible((v) => !v)}
-            activeOpacity={0.8}
-            style={styles.avatarBtn}
-          >
-            {avatarUrl && !avatarError ? (
-              <Image
-                source={{ uri: avatarUrl }}
-                style={styles.avatarImage}
-                contentFit="cover"
-                transition={300}
-                onError={() => setAvatarError(true)}
+        {forwardText ? (
+          <>
+            <Button
+              label="取消"
+              onPress={() => navigation.goBack()}
+              variant="secondary"
+              style={styles.iconBtn}
+            />
+            <Text style={styles.title}>选择转发目标</Text>
+            <View style={styles.topButtons} />
+          </>
+        ) : (
+          <>
+            <Text style={styles.title}>隐世</Text>
+            <View style={styles.topButtons}>
+              <Button
+                label="+ Group"
+                onPress={navigateToCreateGroup}
+                variant="secondary"
+                style={styles.iconBtn}
               />
-            ) : (
-              <View style={[styles.avatarImage, styles.avatarFallback]}>
-                <Text style={styles.avatarFallbackText}>
-                  {(app.session?.handle[0] ?? '?').toUpperCase()}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
+              <Button
+                label="+ Friend"
+                onPress={navigateToQrDisplay}
+                variant="secondary"
+                style={styles.iconBtn}
+              />
+              <TouchableOpacity
+                onPress={() => setMenuVisible((v) => !v)}
+                activeOpacity={0.8}
+                style={styles.avatarBtn}
+              >
+                {avatarUrl && !avatarError ? (
+                  <Image
+                    source={{ uri: avatarUrl }}
+                    style={styles.avatarImage}
+                    contentFit="cover"
+                    transition={300}
+                    onError={() => setAvatarError(true)}
+                  />
+                ) : (
+                  <View style={[styles.avatarImage, styles.avatarFallback]}>
+                    <Text style={styles.avatarFallbackText}>
+                      {(app.session?.handle[0] ?? '?').toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </View>
 
       <FlatList

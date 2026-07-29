@@ -177,6 +177,16 @@ export class DmeStorage {
     await AsyncStorage.removeItem(this.prefix + `messages:${groupId}`);
   }
 
+  async deleteMessage(conversationId: string, messageId: string): Promise<void> {
+    const key = this.prefix + `messages:${conversationId}`;
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return;
+    const messages = JSON.parse(raw) as StoredMessage[];
+    const filtered = messages.filter((msg) => msg.id !== messageId);
+    if (filtered.length === messages.length) return;
+    await AsyncStorage.setItem(key, JSON.stringify(filtered));
+  }
+
   async addReaction(conversationId: string, messageId: string, reaction: Reaction): Promise<void> {
     const key = this.prefix + `messages:${conversationId}`;
     const raw = await AsyncStorage.getItem(key);

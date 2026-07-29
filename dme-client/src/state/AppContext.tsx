@@ -149,6 +149,7 @@ interface AppActions {
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
   sendReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
+  deleteMessage: (conversationId: string, messageId: string) => Promise<void>;
   deleteFriend: (groupId: string) => Promise<void>;
   markConversationAsRead: (groupId: string) => Promise<void>;
   generateInviteQr: (bobDid: string) => Promise<{ qrString: string; keyPackageInitKey: Uint8Array }>;
@@ -1143,6 +1144,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setChatListVersion((v) => v + 1);
   }, [storage]);
 
+  const deleteMessage = useCallback(async (conversationId: string, messageId: string): Promise<void> => {
+    if (!storage) throw new Error('deleteMessage: not initialized');
+    await storage.deleteMessage(conversationId, messageId);
+    setChatListVersion((v) => v + 1);
+  }, [storage]);
+
   // -------------------------------------------------------------------------
   // Group Chat Actions
   // -------------------------------------------------------------------------
@@ -1828,6 +1835,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       hasIdentityBackup,
       sendMessage,
       sendReaction,
+      deleteMessage,
       deleteFriend,
       markConversationAsRead,
       generateInviteQr,

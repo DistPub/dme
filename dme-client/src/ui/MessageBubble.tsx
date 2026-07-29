@@ -2,8 +2,8 @@
  * ui/MessageBubble.tsx - RN native message bubble.
  */
 
-import React, { useCallback, useMemo, useRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from './theme';
 import type { Reaction } from '../storage/db';
@@ -16,6 +16,7 @@ export interface MessageBubbleProps {
   currentDid?: string;
   onReactionPress?: (emoji: string) => void;
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
+  onShowActionMenu?: (layout: { x: number; y: number; width: number; height: number }) => void;
 }
 
 const BUBBLE_PADDING = 12;
@@ -30,9 +31,28 @@ export function MessageBubble({
   currentDid,
   onReactionPress,
   onOpenPicker,
+  onShowActionMenu,
 }: MessageBubbleProps): React.JSX.Element {
   const emojiBtnRef = useRef<View>(null);
   const bubbleRef = useRef<View>(null);
+
+  // Web: right-click (contextmenu) on the bubble opens the action menu.
+  // Native: onLongPress below handles it.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !onShowActionMenu) return;
+    const node = bubbleRef.current as unknown as HTMLElement | null;
+    if (!node) return;
+
+    const handleContextMenu = (e: MouseEvent): void => {
+      e.preventDefault();
+      bubbleRef.current?.measureInWindow((x, y, width, height) => {
+        onShowActionMenu({ x, y, width, height });
+      });
+    };
+
+    node.addEventListener('contextmenu', handleContextMenu);
+    return () => node.removeEventListener('contextmenu', handleContextMenu);
+  }, [onShowActionMenu]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, { emoji: string; count: number; includesMe: boolean }>();
@@ -51,11 +71,11 @@ export function MessageBubble({
     });
   }, [onOpenPicker]);
 
-  const openPickerFromBubble = useCallback(() => {
+  const showActionMenu = useCallback(() => {
     bubbleRef.current?.measureInWindow((x, y, width, height) => {
-      onOpenPicker?.({ x, y, width, height });
+      onShowActionMenu?.({ x, y, width, height });
     });
-  }, [onOpenPicker]);
+  }, [onShowActionMenu]);
 
   return (
     <View style={styles.container}>
@@ -75,7 +95,7 @@ export function MessageBubble({
         )}
         <Pressable
           ref={bubbleRef}
-          onLongPress={onOpenPicker ? openPickerFromBubble : undefined}
+          onLongPress={onShowActionMenu ? showActionMenu : undefined}
           delayLongPress={300}
           style={[
             styles.bubble,

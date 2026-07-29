@@ -18,11 +18,13 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { MessageBubble } from './MessageBubble';
 import { EmojiPicker } from './EmojiPicker';
+import { MessageActionMenu } from './MessageActionMenu';
 import { useApp } from '../state/AppContext';
 import { sharedDidResolver } from '../atproto/did';
 import type { StoredMessage } from '../storage/db';
 import type { GroupInviteRequest } from '../protocol/group-message';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
+import * as Clipboard from 'expo-clipboard';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -39,6 +41,7 @@ export function ChatViewScreen(): React.JSX.Element {
     session,
     sendMessage,
     sendReaction,
+    deleteMessage,
     receivedGroupInvites,
     respondToGroupInvite,
     markConversationAsRead,
@@ -55,6 +58,8 @@ export function ChatViewScreen(): React.JSX.Element {
   const [left, setLeft] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<StoredMessage | null>(null);
   const [pickerLayout, setPickerLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [actionMenuTarget, setActionMenuTarget] = useState<StoredMessage | null>(null);
+  const [actionMenuLayout, setActionMenuLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
   const resolvedDidsRef = useRef<Set<string>>(new Set());
@@ -178,6 +183,33 @@ export function ChatViewScreen(): React.JSX.Element {
     setPickerLayout(layout);
   }, []);
 
+  const handleShowActionMenu = useCallback((msg: StoredMessage, layout: { x: number; y: number; width: number; height: number }): void => {
+    setActionMenuTarget(msg);
+    setActionMenuLayout(layout);
+  }, []);
+
+  const closeActionMenu = useCallback((): void => {
+    setActionMenuTarget(null);
+    setActionMenuLayout(null);
+  }, []);
+
+  const handleCopy = useCallback(async (msg: StoredMessage): Promise<void> => {
+    await Clipboard.setStringAsync(msg.plaintext);
+  }, []);
+
+  const handleForward = useCallback((msg: StoredMessage): void => {
+    navigation.navigate('ChatList', { forwardText: msg.plaintext });
+  }, [navigation]);
+
+  const handleDeleteMessage = useCallback(async (msg: StoredMessage): Promise<void> => {
+    try {
+      await deleteMessage(conversationId, msg.id);
+      await loadMessages();
+    } catch (err) {
+      console.error('deleteMessage failed:', err);
+    }
+  }, [deleteMessage, conversationId, loadMessages]);
+
   const canReact = !dissolved && !removed && !left;
 
   const renderItem = useCallback(
@@ -239,10 +271,11 @@ export function ChatViewScreen(): React.JSX.Element {
           currentDid={session?.did}
           onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
           onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
+          onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
         />
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderHandles, canReact, handleReact, handleOpenPicker],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderHandles, canReact, handleReact, handleOpenPicker, handleShowActionMenu],
   );
 
   const keyExtractor = useCallback(
@@ -317,6 +350,15 @@ export function ChatViewScreen(): React.JSX.Element {
         layout={pickerLayout}
         onSelect={(emoji) => { if (pickerTarget) void handleReact(pickerTarget, emoji); }}
         onClose={() => { setPickerTarget(null); setPickerLayout(null); }}
+      />
+      <MessageActionMenu
+        visible={actionMenuTarget !== null}
+        layout={actionMenuLayout}
+        isOutgoing={actionMenuTarget ? actionMenuTarget.fromDid === session?.did : false}
+        onCopy={() => { if (actionMenuTarget) void handleCopy(actionMenuTarget); }}
+        onForward={() => { if (actionMenuTarget) void handleForward(actionMenuTarget); }}
+        onDelete={() => { if (actionMenuTarget) void handleDeleteMessage(actionMenuTarget); }}
+        onClose={closeActionMenu}
       />
     </View>
   );

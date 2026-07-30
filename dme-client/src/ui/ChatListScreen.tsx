@@ -261,13 +261,8 @@ const resolveProfiles = useCallback(async (
     const messagesMap = Object.fromEntries(messagesByGroup.map((x) => [x.groupId, x.messages]));
 
     const friendDids = groups.filter((gid) => !groupInfoMap.has(gid));
-    const profiles = friendDids.length > 0 ? await resolveProfiles(friendDids) : {};
-    const creatorHandles = creatorDids.length > 0
-      ? await Promise.all(creatorDids.map((did) => resolveHandle(did)))
-      : [];
-    const creatorHandleMap = new Map(creatorDids.map((did, i) => [did, creatorHandles[i] ?? '']));
 
-    const rows = groups.map((groupId) => {
+    const rows: ConversationRow[] = groups.map((groupId) => {
       const messages = messagesMap[groupId] ?? [];
       const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       const unreadCount = messages.filter(
@@ -283,22 +278,62 @@ const resolveProfiles = useCallback(async (
           isGroup: true,
           unreadCount,
           avatarUrl: null,
-          handle: creatorHandleMap.get(info.creatorDid) ?? '',
+          handle: handleCacheRef.current[info.creatorDid] ?? '',
         };
       }
-      const profile = profiles[groupId];
+      const cachedProfile = profileCacheRef.current[groupId];
       return {
         groupId,
-        displayName: profile.displayName || profile.handle || groupId,
+        displayName:
+          cachedProfile?.displayName || cachedProfile?.handle || (handleCacheRef.current[groupId] ?? groupId),
         lastMessage,
         isGroup: false,
         unreadCount,
-        avatarUrl: profile.avatar,
-        handle: profile.handle,
+        avatarUrl: cachedProfile?.avatar ?? null,
+        handle: cachedProfile?.handle ?? (handleCacheRef.current[groupId] ?? groupId),
       };
     });
     setConversations(rows);
     setLoading(false);
+
+    const needsRefresh =
+      friendDids.some((did) => !profileCacheRef.current[did]) ||
+      creatorDids.some((did) => !handleCacheRef.current[did]);
+    if (!needsRefresh) return;
+
+    void (async () => {
+      const refreshedProfiles = friendDids.length > 0 ? await resolveProfiles(friendDids) : {};
+      const refreshedCreatorHandles = creatorDids.length > 0
+        ? await Promise.all(creatorDids.map((did) => resolveHandle(did)))
+        : [];
+      const creatorHandleMap = new Map(
+        creatorDids.map((did, i) => [did, refreshedCreatorHandles[i] ?? '']),
+      );
+
+      setConversations((prev) =>
+        prev.map((row) => {
+          if (row.isGroup) {
+            const info = groupInfoMap.get(row.groupId);
+            if (!info) return row;
+            const handle = creatorHandleMap.get(info.creatorDid) ?? row.handle;
+            return handle !== row.handle ? { ...row, handle } : row;
+          }
+          const profile = refreshedProfiles[row.groupId];
+          if (!profile) return row;
+          const newDisplayName = profile.displayName || profile.handle || row.displayName;
+          const newAvatar = profile.avatar ?? row.avatarUrl;
+          const newHandle = profile.handle ?? row.handle;
+          if (
+            newDisplayName === row.displayName &&
+            newAvatar === row.avatarUrl &&
+            newHandle === row.handle
+          ) {
+            return row;
+          }
+          return { ...row, displayName: newDisplayName, avatarUrl: newAvatar, handle: newHandle };
+        }),
+      );
+    })();
   }, [app.storage, resolveHandle, resolveProfiles, app.chatListVersion, app.session?.did, app.blockList]);
 
   useFocusEffect(

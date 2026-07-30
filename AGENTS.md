@@ -230,7 +230,7 @@ dme/
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
 - **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
 - **DID 解析**: 统一使用 `atproto/did.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
-- **Profile 批量获取**: 多个 DID 的 profile（avatar + displayName + handle）必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，禁止 `Promise.all(dids.map(d => getProfile(d)))` 逐个请求；`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；每个屏幕用 `useRef` 缓存已解析的 profile，跨 focus 保留
+- **Profile 批量获取**: 多个 DID 的 profile（avatar + displayName + handle）必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，禁止 `Promise.all(dids.map(d => getProfile(d)))` 逐个请求；`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；每个屏幕用 `useRef` 缓存已解析的 profile，跨 focus 保留；**首屏加载**（ChatListScreen 等）须先读本地缓存同步构造 rows 立即渲染，再异步调 `getProfiles`/handle 解析，拿到后用 `setX(prev => prev.map(...))` 函数式更新，禁止同步 `await` 网络请求阻塞首屏渲染
 - **群聊消息布局**: 群聊消息行采用双列布局：头像列（40px 圆形 `expo-image`，加载失败回退首字母）单独成列，内容列（昵称+@handle+消息气泡+reactions）单独成列；收到的消息头像在左、内容在右，自己发的消息内容在左、头像在右；1:1 聊天不渲染头像列
 - **React hooks 依赖**: UI 屏幕严禁把整个 `AppContext` value 对象放入 `useEffect`/`useCallback`/`useFocusEffect` 依赖数组；必须在组件顶部解构 `storage`/`session`/`markConversationAsRead`/`chatListVersion` 等具体字段后再依赖
 - **会话列表加载**: `ChatListScreen.loadConversations` 用 `Promise.all` 并行解析各会话 handle，避免 for 循环串行 await 阻塞 JS 线程

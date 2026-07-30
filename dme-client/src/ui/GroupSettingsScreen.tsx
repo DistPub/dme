@@ -102,11 +102,24 @@ export function GroupSettingsScreen(): React.JSX.Element {
         setRemoved(info.removed ?? false);
         setLeft(info.left ?? false);
 
-        const memberDids = info.members.map((m) => m.did);
-        const resolved = await resolveProfiles(memberDids);
-        setMemberProfiles(resolved);
+        const cached: Record<string, MemberProfile> = {};
+        for (const m of info.members) {
+          const entry = profileCacheRef.current[m.did];
+          if (entry) cached[m.did] = entry;
+        }
+        setMemberProfiles(cached);
       }
       setLoading(false);
+
+      if (info) {
+        const memberDids = info.members.map((m) => m.did);
+        const missing = memberDids.filter((did) => !profileCacheRef.current[did]);
+        if (missing.length === 0) return;
+        void (async () => {
+          const resolved = await resolveProfiles(memberDids);
+          setMemberProfiles(resolved);
+        })();
+      }
     };
     loadGroupInfo().catch((err: unknown) => console.error('loadGroupInfo failed:', err));
   }, [app.storage, groupId, app.chatListVersion, resolveProfiles]);

@@ -2,7 +2,7 @@
  * ui/CreateGroupScreen.tsx - Group creation UI with friend selection.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
   StyleSheet,
@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -28,7 +29,15 @@ type Phase = 'select' | 'sending' | 'done';
 interface FriendRow {
   readonly did: string;
   readonly handle: string;
+  readonly displayName: string;
+  readonly avatarUrl: string | null;
   readonly selected: boolean;
+}
+
+interface ProfileEntry {
+  handle: string;
+  displayName: string;
+  avatar: string | null;
 }
 
 export function CreateGroupScreen(): React.JSX.Element {
@@ -42,6 +51,50 @@ export function CreateGroupScreen(): React.JSX.Element {
   const [friends, setFriends] = useState<FriendRow[]>([]);
   const [phase, setPhase] = useState<Phase>('select');
   const [errorMsg, setErrorMsg] = useState('');
+  const profileCacheRef = useRef<Record<string, ProfileEntry>>({});
+
+  const resolveProfiles = useCallback(async (
+    dids: string[],
+  ): Promise<Record<string, ProfileEntry>> => {
+    const result: Record<string, ProfileEntry> = {};
+    const missing = dids.filter((did) => !profileCacheRef.current[did]);
+
+    if (missing.length > 0 && app.session) {
+      try {
+        const response = await app.session.agent.app.bsky.actor.getProfiles({ actors: missing });
+        for (const profile of response.data.profiles) {
+          const entry: ProfileEntry = {
+            handle: profile.handle ?? profile.did,
+            displayName: profile.displayName ?? '',
+            avatar: profile.avatar ?? null,
+          };
+          profileCacheRef.current[profile.did] = entry;
+        }
+      } catch (err) {
+        console.error('resolveProfiles: getProfiles failed', missing, err);
+      }
+    }
+
+    const stillMissing = dids.filter((did) => !profileCacheRef.current[did]);
+    if (stillMissing.length > 0) {
+      await Promise.all(
+        stillMissing.map(async (did) => {
+          try {
+            const doc = (await sharedDidResolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
+            const handle = doc?.alsoKnownAs?.[0]?.replace(/^at:\/\//, '') ?? did;
+            profileCacheRef.current[did] = { handle, displayName: '', avatar: null };
+          } catch {
+            profileCacheRef.current[did] = { handle: did, displayName: '', avatar: null };
+          }
+        }),
+      );
+    }
+
+    for (const did of dids) {
+      result[did] = profileCacheRef.current[did];
+    }
+    return result;
+  }, [app.session]);
 
   useEffect(() => {
     const loadFriends = async (): Promise<void> => {
@@ -63,27 +116,38 @@ export function CreateGroupScreen(): React.JSX.Element {
         (id) => !groupIds.has(id) && id.startsWith('did:') && !existingMemberDids.has(id),
       );
 
-      const results = await Promise.all(
-        friendDids.map(async (did) => {
-          try {
-            const doc = (await sharedDidResolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
-            if (doc?.alsoKnownAs?.[0]) {
-              return { did, handle: doc.alsoKnownAs[0].replace(/^at:\/\//, '') };
-            }
-          } catch {
-          }
-          return { did, handle: did };
-        }),
-      );
-      const rows: FriendRow[] = results.map(({ did, handle }) => ({
-        did,
-        handle,
-        selected: false,
-      }));
+      const rows: FriendRow[] = friendDids.map((did) => {
+        const cached = profileCacheRef.current[did];
+        return {
+          did,
+          handle: cached?.handle ?? did,
+          displayName: cached?.displayName || cached?.handle || did,
+          avatarUrl: cached?.avatar ?? null,
+          selected: false,
+        };
+      });
       setFriends(rows);
+
+      const missing = friendDids.filter((did) => !profileCacheRef.current[did]);
+      if (missing.length === 0) return;
+      void (async () => {
+        const resolved = await resolveProfiles(friendDids);
+        setFriends((prev) =>
+          prev.map((row) => {
+            const profile = resolved[row.did];
+            if (!profile) return row;
+            return {
+              ...row,
+              handle: profile.handle ?? row.handle,
+              displayName: profile.displayName || profile.handle || row.displayName,
+              avatarUrl: profile.avatar ?? row.avatarUrl,
+            };
+          }),
+        );
+      })();
     };
     loadFriends().catch((err: unknown) => console.error('loadFriends failed:', err));
-  }, [app.storage]);
+  }, [app.storage, existingGroupId, resolveProfiles]);
 
   const toggleFriend = useCallback((did: string) => {
     setFriends((prev) =>
@@ -127,7 +191,32 @@ export function CreateGroupScreen(): React.JSX.Element {
         onPress={() => toggleFriend(item.did)}
         activeOpacity={0.7}
       >
-        <Text style={styles.friendHandle} numberOfLines={1}>{item.handle}</Text>
+        <View style={styles.friendAvatarWrap}>
+          {item.avatarUrl ? (
+            <Image
+              source={{ uri: item.avatarUrl }}
+              style={styles.friendAvatar}
+              contentFit="cover"
+              transition={300}
+            />
+          ) : (
+            <View style={[styles.friendAvatar, styles.friendAvatarFallback]}>
+              <Text style={styles.friendAvatarFallbackText}>
+                {(item.displayName[0] ?? '?').toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.friendTextStack}>
+          <Text style={styles.friendDisplayName} numberOfLines={1}>
+            {item.displayName}
+          </Text>
+          {item.handle ? (
+            <Text style={styles.friendHandle} numberOfLines={1}>
+              @{item.handle}
+            </Text>
+          ) : null}
+        </View>
         <Text style={[styles.checkmark, item.selected && styles.checkmarkActive]}>
           {item.selected ? '✓' : '○'}
         </Text>
@@ -249,7 +338,6 @@ const styles = StyleSheet.create({
   friendRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingVertical: theme.spacing.md,
     paddingHorizontal: theme.spacing.md,
     backgroundColor: theme.colors.surface,
@@ -259,10 +347,39 @@ const styles = StyleSheet.create({
   friendRowSelected: {
     backgroundColor: theme.colors.accent,
   },
-  friendHandle: {
+  friendAvatarWrap: {
+    position: 'relative',
+    marginRight: theme.spacing.sm,
+  },
+  friendAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  friendAvatarFallback: {
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  friendAvatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+  },
+  friendTextStack: {
     flex: 1,
+  },
+  friendDisplayName: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.body,
+    fontWeight: '600',
+  },
+  friendHandle: {
+    flex: 1,
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.small,
+    marginTop: 1,
   },
   checkmark: {
     color: theme.colors.textSecondary,

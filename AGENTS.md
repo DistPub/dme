@@ -280,7 +280,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **dme.db/**: 运行时自动创建的 BadgerDB 数据目录，已 gitignored
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`
 - **轮询批量预计算**: poller 默认预计算 3 个 future queueId，可在 Settings 页面调整（1-20）
-- **群聊消息存储**: 通过 `StoredMessage.conversationId` 指定存储到群聊而非1:1，`kind` 字段区分消息类型
+- **群聊消息存储**: 通过 `StoredMessage.conversationId` 指定存储到群聊而非1:1，`kind` 字段区分消息类型；`group_invite_request` 在 ChatListScreen 预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 ChatViewScreen 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
 - **群主离线**: 只有群主能 addMember/removeMember，群主离线时无法管理成员
 - **群聊创建者**: 群主不能离开群组（MLS 限制 removeMember 不能移除 committer），只能解散
 - **浏览器调试现场保护**: 当用户要求「看控制台日志」时，直接使用 `browsermcp_browser_get_console_logs` 抓取当前页面日志，禁止 `browsermcp_browser_navigate` 刷新或跳转页面，避免破坏报错现场

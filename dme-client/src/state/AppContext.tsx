@@ -804,8 +804,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             fromDid: msg.senderDid,
             toDid: userDid,
             plaintext: resp.accepted
-              ? `${senderHandle} 接受了群聊邀请`
-              : `${senderHandle} 拒绝了群聊邀请`,
+              ? `@${senderHandle} 接受了群聊邀请`
+              : `@${senderHandle} 拒绝了群聊邀请`,
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1030,7 +1030,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
             toDid: userDid,
-            plaintext: `${senderHandle} 已离开群聊`,
+            plaintext: `@${senderHandle} 已离开群聊`,
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1254,7 +1254,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         id: `sys_invite_${inviteId}`,
         fromDid: session.did,
         toDid: friendDid,
-        plaintext: `你邀请了 ${friendHandle} 加入群聊：${groupName}`,
+        plaintext: `你邀请了 @${friendHandle} 加入群聊：${groupName}`,
         createdAt: new Date().toISOString(),
         sent: true,
         kind: 'group_system',
@@ -1553,6 +1553,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       messageType: 'application',
     };
     await pds.createEnvelope(envelope);
+
+    const friendHandle = await resolveDidToHandle(friendDid);
+    await storage.putMessage({
+      id: `sys_invite_${inviteId}`,
+      fromDid: session.did,
+      toDid: friendDid,
+        plaintext: `你邀请了 @${friendHandle} 加入群聊：${groupInfo.groupName}`,
+      createdAt: new Date().toISOString(),
+      sent: true,
+      kind: 'group_system',
+    });
 
     const invite: PendingInvite = {
       inviteId,

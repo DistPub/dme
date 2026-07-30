@@ -92,7 +92,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **主题**: `theme.ts` 单一 `as const` 对象，暗色（#0a0a0a），无切换
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理
-- **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`；`conversationId` 指定存储到哪个会话
+- **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble` 按 emoji 合并并显示计数
 - **屏蔽列表**: `blockList: string[]` 存储在 `AsyncStorage`，入口为 ChatList 头像菜单；群管理成员行可 Block/Unblock；被 block 用户的消息不存储、不展示；不修改群成员关系
 - **Profile 批量获取**: 多个 DID 的 profile 必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；**ChatListScreen / GroupSettingsScreen 等首屏加载**须先读 `profileCacheRef`/`handleCacheRef` 本地缓存同步构造 rows 并立即 `setConversations`/`setLoading(false)`，有缺失时再异步调用 `resolveProfiles`/`resolveHandle`，拿到结果后用 `setMemberProfiles(resolved)` / `setConversations(prev => prev.map(...))` 更新，禁止同步 `await` 网络请求阻塞首屏

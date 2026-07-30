@@ -470,11 +470,31 @@ const resolveProfiles = useCallback(async (
       const lastFromBlocked = item.lastMessage
         ? app.blockList.includes(item.lastMessage.fromDid)
         : false;
+
+      const inviteGroupName =
+        item.lastMessage?.kind === 'group_invite'
+          ? (() => {
+              try {
+                const parsed = JSON.parse(item.lastMessage.plaintext) as {
+                  type?: string;
+                  groupName?: string;
+                };
+                if (parsed.type === 'group_invite_request' && parsed.groupName) {
+                  return parsed.groupName;
+                }
+              } catch {
+              }
+              return null;
+            })()
+          : null;
+
       const preview = lastFromBlocked
         ? '已屏蔽'
         : item.lastMessage
-          ? item.lastMessage.plaintext.slice(0, 40) +
-            (item.lastMessage.plaintext.length > 40 ? '…' : '')
+          ? inviteGroupName
+            ? `@${item.handle}邀请你加入群聊：${inviteGroupName}`
+            : item.lastMessage.plaintext.slice(0, 40) +
+              (item.lastMessage.plaintext.length > 40 ? '…' : '')
           : 'No messages yet';
       return (
         <SwipeableRow
@@ -625,7 +645,7 @@ const resolveProfiles = useCallback(async (
                     <View key={invite.inviteId} style={styles.inviteRow}>
                       <View style={styles.inviteInfo}>
                         <Text style={styles.inviteHandle} numberOfLines={1}>{invite.groupName}</Text>
-                        <Text style={styles.inviteStatus}>From {inviterHandles[invite.inviterDid] ?? invite.inviterDid}</Text>
+                        <Text style={styles.inviteStatus}>From @{inviterHandles[invite.inviterDid] ?? invite.inviterDid}</Text>
                       </View>
                       <Button
                         label="Accept"

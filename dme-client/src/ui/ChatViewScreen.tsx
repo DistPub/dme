@@ -314,8 +314,7 @@ export function ChatViewScreen(): React.JSX.Element {
 
         return (
           <View style={styles.inviteCard}>
-            <Text style={styles.inviteTitle}>{groupName}</Text>
-            <Text style={styles.inviteSubtitle}>Group invitation</Text>
+            <Text style={styles.inviteTitle} numberOfLines={1}>群聊邀请：{groupName}</Text>
             {alreadyResponded ? (
               <Text style={styles.inviteResponded}>Responded</Text>
             ) : (
@@ -601,31 +600,29 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     marginVertical: theme.spacing.sm,
     marginHorizontal: theme.spacing.md,
+    alignSelf: 'center',
+    width: '90%',
+    maxWidth: 360,
   },
   inviteTitle: {
     color: theme.colors.textPrimary,
-    fontSize: theme.typography.body,
-    fontWeight: '700',
-  },
-  inviteSubtitle: {
-    color: theme.colors.textSecondary,
     fontSize: theme.typography.caption,
-    marginTop: 2,
-    marginBottom: theme.spacing.sm,
+    fontWeight: '600',
   },
   inviteResponded: {
     color: theme.colors.textSecondary,
-    fontSize: theme.typography.caption,
+    fontSize: theme.typography.small,
     textAlign: 'center',
-    paddingVertical: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
   },
   inviteButtons: {
     flexDirection: 'row',
     gap: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
   },
   inviteBtn: {
     flex: 1,
-    height: 40,
+    height: 36,
   },
   dissolvedText: {
     color: theme.colors.textSecondary,

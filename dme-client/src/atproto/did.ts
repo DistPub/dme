@@ -44,6 +44,7 @@ import {
 export const sharedDidResolver = new DidResolver({
   plcUrl: PLC_DIRECTORY_URL,
   didCache: new MemoryCache(),
+  timeout: 20_000,
 });
 
 /** DID_KEY_PREFIX prepended to multibase values from PLC documents. */

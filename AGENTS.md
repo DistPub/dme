@@ -206,7 +206,7 @@ dme/
 - **未读 badge 布局**: 1:1 会话列表行未读 badge 浮在头像右上角（`position: absolute, top: -4, right: -4`，红底 + 白边分隔环）；群聊行 badge 紧跟群名文字（内联，不靠右推开）
 - **身份备份**: PBKDF2-SHA256(100k iter)+AES-256-GCM 加密，备份范围含身份密钥+MLS会话+KeyPackage池+群聊元数据+屏蔽列表，PDS `dme.backup.identity` record（rkey=self, putRecord upsert）
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后检测
-- **Web 模态对话框**: `Alert.alert` 在 Web 端无效（无 polyfill），确认弹窗用 React Native `Modal` 组件（`transparent` + `animationType="fade"`），跨平台统一
+- **Web 模态对话框**: `Alert.alert` 在 Web 端无效（无 polyfill），确认弹窗用 React Native `Modal` 组件（`transparent` + `animationType="fade"`），跨平台统一；模态遮罩用 `View` + `StyleSheet.absoluteFill` 的 `TouchableOpacity` 做背景层，卡片 `View` 独立放上层，避免 `TouchableOpacity` 包裹卡片导致 `TextInput` 点击冒泡关闭模态
 - **包管理器**: TS 侧统一 Bun，Go 侧标准 go 工具链
 - **TypeScript**: `strict: true`（两个 TS 项目都是）
 - **Go**: 1.22，仅 2 个直接依赖（badger/v4 + coder/websocket），无框架
@@ -243,6 +243,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Block List/Logout 收入头像弹出菜单
 - **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染
 - **备份恢复**: 恢复后 MLS 会话+KeyPackage池+群聊元数据+屏蔽列表完整恢复，无需重新握手；消息历史不备份
+- **退出登录**: ChatListScreen 头像菜单点击 Logout 弹模态对话框，要求用户输入密码先备份（`backupIdentity`）再退出；退出时 `storage.clear()` 删除设备上所有 `dme:<did>:` 前缀的 AsyncStorage 数据；不备份则取消留在当前会话
 - **Go 模块路径**: `dme/dme-server`（本地路径，非 GitHub）
 - **dme.db/**: 运行时自动创建的 BadgerDB 数据目录，已 gitignored
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`

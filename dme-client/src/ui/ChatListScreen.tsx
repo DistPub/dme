@@ -11,8 +11,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated as RNAnimated,
   FlatList,
+  Modal,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -123,6 +125,11 @@ export function ChatListScreen(): React.JSX.Element {
   const [avatarError, setAvatarError] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [userHandle, setUserHandle] = useState('');
+  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+  const [backupPwd, setBackupPwd] = useState('');
+  const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
+  const [logoutStatus, setLogoutStatus] = useState<'idle' | 'backing_up' | 'error'>('idle');
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 interface ProfileEntry {
   handle: string;
   displayName: string;
@@ -344,6 +351,38 @@ const resolveProfiles = useCallback(async (
   const navigateToCreateGroup = useCallback((): void => {
     navigation.navigate('CreateGroup');
   }, [navigation]);
+
+  const handleLogoutPress = useCallback((): void => {
+    setMenuVisible(false);
+    setBackupPwd('');
+    setBackupPwdConfirm('');
+    setLogoutError(null);
+    setLogoutStatus('idle');
+    setLogoutModalVisible(true);
+  }, []);
+
+  const handleLogoutConfirm = useCallback(async (): Promise<void> => {
+    if (!backupPwd) {
+      setLogoutError('请输入密码');
+      setLogoutStatus('error');
+      return;
+    }
+    if (backupPwd !== backupPwdConfirm) {
+      setLogoutError('两次密码不一致');
+      setLogoutStatus('error');
+      return;
+    }
+    setLogoutStatus('backing_up');
+    setLogoutError(null);
+    try {
+      await app.backupIdentity(backupPwd);
+      setLogoutModalVisible(false);
+      await app.logout();
+    } catch (err) {
+      setLogoutError(err instanceof Error ? err.message : '备份失败');
+      setLogoutStatus('error');
+    }
+  }, [app, backupPwd, backupPwdConfirm]);
 
   const onDeleteWelcome = useCallback((queueId: string) => {
     if (!app.storage) return;
@@ -687,10 +726,7 @@ const resolveProfiles = useCallback(async (
               <Text style={styles.menuItemText}>Block List</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => {
-                setMenuVisible(false);
-                app.logout().catch((err: unknown) => console.error('Logout failed:', err));
-              }}
+              onPress={handleLogoutPress}
               style={styles.menuItem}
               activeOpacity={0.7}
             >
@@ -699,6 +735,67 @@ const resolveProfiles = useCallback(async (
           </View>
         </>
       )}
+
+      <Modal
+        visible={logoutModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLogoutModalVisible(false)}
+      >
+        <View style={styles.logoutOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setLogoutModalVisible(false)}
+          />
+          <View style={styles.logoutCard}>
+            <Text style={styles.logoutTitle}>退出登录</Text>
+            <Text style={styles.logoutMessage}>
+              设备上的数据为了安全将会删除，是否备份私钥数据到 PDS？
+            </Text>
+            <TextInput
+              style={styles.logoutInput}
+              value={backupPwd}
+              onChangeText={setBackupPwd}
+              placeholder="密码"
+              placeholderTextColor={theme.colors.textSecondary}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={logoutStatus !== 'backing_up'}
+            />
+            <TextInput
+              style={styles.logoutInput}
+              value={backupPwdConfirm}
+              onChangeText={setBackupPwdConfirm}
+              placeholder="确认密码"
+              placeholderTextColor={theme.colors.textSecondary}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={logoutStatus !== 'backing_up'}
+            />
+            {logoutError ? (
+              <Text style={styles.logoutError}>{logoutError}</Text>
+            ) : null}
+            <View style={styles.logoutButtons}>
+              <Button
+                label="取消"
+                onPress={() => setLogoutModalVisible(false)}
+                variant="secondary"
+                style={styles.logoutBtn}
+              />
+              <Button
+                label={logoutStatus === 'backing_up' ? '备份中…' : '备份并退出'}
+                onPress={() => { void handleLogoutConfirm(); }}
+                variant="primary"
+                style={styles.logoutBtn}
+                disabled={logoutStatus === 'backing_up'}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -973,5 +1070,51 @@ const styles = StyleSheet.create({
   inviteBtnText: {
     color: theme.colors.accent,
     fontSize: theme.typography.caption,
+  },
+  logoutOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  logoutCard: {
+    width: 320,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing.md,
+  },
+  logoutTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.heading,
+    fontWeight: '700',
+    marginBottom: theme.spacing.sm,
+  },
+  logoutMessage: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.body,
+    marginBottom: theme.spacing.md,
+    lineHeight: 22,
+  },
+  logoutInput: {
+    backgroundColor: theme.colors.inputBackground,
+    color: theme.colors.textPrimary,
+    borderRadius: theme.borderRadius.sm,
+    paddingHorizontal: theme.spacing.md,
+    height: 44,
+    marginBottom: theme.spacing.sm,
+    fontSize: theme.typography.body,
+  },
+  logoutError: {
+    color: theme.colors.error,
+    fontSize: theme.typography.small,
+    marginBottom: theme.spacing.sm,
+  },
+  logoutButtons: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  logoutBtn: {
+    flex: 1,
+    height: 44,
   },
 });

@@ -97,7 +97,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **消息操作菜单**: 长按（原生）/右键（web）气泡弹出 `MessageActionMenu`（复制/转发/删除）；复制走 `expo-clipboard`，转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，删除仅本地删除（PDS 密文不变）
 - **身份备份**: `backup.ts` 用 PBKDF2-SHA256(100k iter)+AES-256-GCM 加密 FullBackupData（身份密钥+MLS会话+KeyPackage池+群聊元数据+屏蔽列表），存 PDS `dme.backup.identity` record（rkey=self）。Settings 页设密码备份，Setup 页检测到 DID 有 key 但本地不匹配时提供恢复入口
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页 `web_instructions` step 提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后点「检测」验证
-- **Web 模态对话框**: `Alert.alert` 在 Web 端无效（无 polyfill），确认弹窗用 React Native `Modal` 组件（`transparent` + `animationType="fade"`），跨平台统一
+- **Web 模态对话框**: `Alert.alert` 在 Web 端无效（无 polyfill），确认弹窗用 React Native `Modal` 组件（`transparent` + `animationType="fade"`），跨平台统一；模态遮罩用 `View` + `StyleSheet.absoluteFill` 的 `TouchableOpacity` 做背景层，卡片 `View` 独立放上层，避免 `TouchableOpacity` 包裹卡片导致 `TextInput` 点击冒泡关闭模态
 - **AsyncStorage v3 web API**: `@react-native-async-storage/async-storage` v3 在 web 端只导出 `getItem`/`setItem`/`removeItem`/`getAllKeys`/`clear`/`getMany`/`setMany`/`removeMany`，**没有** v2 的 `multiRemove`/`multiGet`/`multiSet`。批量操作须用 `Promise.all(keys.map(k => AsyncStorage.removeItem(k)))` 等替代，禁止直接调 `AsyncStorage.multi*`（web 会抛 `TypeError: ... is not a function`，native 正常）
 
 ## 注意事项

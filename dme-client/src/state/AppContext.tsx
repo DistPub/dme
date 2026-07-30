@@ -364,6 +364,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (session) {
         await session.logout(storage ?? undefined);
       }
+      if (storage) {
+        await storage.clear();
+      }
     } catch (err) {
       console.error('Logout error:', err);
     } finally {

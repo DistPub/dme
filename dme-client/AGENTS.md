@@ -27,8 +27,9 @@ dme-client/
     ├── handshake/        # handshake.ts / invite.ts / qr-encode.ts / qr-decode.ts / group-invite.ts
     ├── poll/poller.ts    # 5-15s 随机间隔轮询 + LRU 去重 + 批量预计算 future queueId
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
-    ├── state/AppContext.tsx  # 全局状态（16 字段，27 action）
+    ├── state/AppContext.tsx  # 全局状态（17 字段，28 action）
     ├── protocol/         # types.ts + group-message.ts + reaction.ts + lexicons/ JSON
+    ├── utils/            # sound.ts（消息提示音，运行时生成 WAV）
     ├── ui/               # 17 个文件（10 屏幕 + 7 组件，含 BlockListScreen + MessageBubble + EmojiPicker + MessageActionMenu）
     └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
@@ -47,6 +48,7 @@ dme-client/
 | 改身份备份 | `src/crypto/backup.ts`（PBKDF2+AES-GCM 加密/解密 FullBackupData） |
 | 改按钮组件 | `src/ui/Button.tsx`（Pressable+Text，支持中文） |
 | 改设置页 | `src/ui/SettingsScreen.tsx` |
+| 消息提示音 | `src/utils/sound.ts`（`playMessageSound()`，运行时生成 3 声 880Hz WAV；Web 用 Web Audio API，Native 用 expo-av） |
 | 群聊消息类型 | `src/protocol/group-message.ts` |
 | 群聊邀请协议 | `src/handshake/group-invite.ts` |
 | 创建群聊 UI | `src/ui/CreateGroupScreen.tsx` |
@@ -81,7 +83,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **握手**: Alice 加密 KeyPackage -> QR -> Bob 扫码 -> 创建 MLS 群组 -> Welcome 走盲查通道
 - **群聊邀请**: 通过已有1:1 MLS 通道传输 JSON 消息（group_invite_request/response/welcome/commit 等）
 - **群聊 Commit**: addMember 产生的 Commit 通过1:1通道发给已有成员（poller 只轮询 application 消息）
-- **状态管理**: 每字段一个 `useState` 的 React Context（非 useReducer），27 个 `useCallback` action
+- **状态管理**: 每字段一个 `useState` 的 React Context（非 useReducer），28 个 `useCallback` action
 - **chatListVersion**: 单调计数器，storage 变化时递增触发 UI 刷新
 - **屏幕模式**: `<View>` -> 绝对定位 `<Canvas><Fill/></Canvas>` -> flexbox 内容（RN Text/TextInput/Button）
 - **阶段机**: 每个屏幕用联合类型 `Phase` 控制条件渲染
@@ -95,6 +97,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **屏蔽列表**: `blockList: string[]` 存储在 `AsyncStorage`，入口为 ChatList 头像菜单；群管理成员行可 Block/Unblock；被 block 用户的消息不存储、不展示；不修改群成员关系
 - **Profile 批量获取**: 多个 DID 的 profile 必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）
 - **消息操作菜单**: 长按（原生）/右键（web）气泡弹出 `MessageActionMenu`（复制/转发/删除）；复制走 `expo-clipboard`，转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，删除仅本地删除（PDS 密文不变）
+- **消息提示音**: `playMessageSound()`（`src/utils/sound.ts`）播放「嘀嘀嘀」3 声 880Hz；Web 用 Web Audio API 振荡器，Native 用 `expo-av` 播放运行时生成的 WAV（写入 `expo-file-system` 临时文件，首次生成后缓存）；`handleIncomingMessage` 对 `kind: 'text'` 和 `kind: 'group_invite'` 消息触发，`kind: 'group_system'` 和 `type: 'reaction'` 不触发；`activeConversationRef`（ref，不触发重渲染）追踪当前 ChatView 会话 ID 决定是否播放，`soundEnabled`（state）控制全局开关
 - **身份备份**: `backup.ts` 用 PBKDF2-SHA256(100k iter)+AES-256-GCM 加密 FullBackupData（身份密钥+MLS会话+KeyPackage池+群聊元数据+屏蔽列表），存 PDS `dme.backup.identity` record（rkey=self）。Settings 页设密码备份，Setup 页检测到 DID 有 key 但本地不匹配时提供恢复入口
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页 `web_instructions` step 提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后点「检测」验证
 - **Web 模态对话框**: `Alert.alert` 在 Web 端无效（无 polyfill），确认弹窗用 React Native `Modal` 组件（`transparent` + `animationType="fade"`），跨平台统一；模态遮罩用 `View` + `StyleSheet.absoluteFill` 的 `TouchableOpacity` 做背景层，卡片 `View` 独立放上层，避免 `TouchableOpacity` 包裹卡片导致 `TextInput` 点击冒泡关闭模态

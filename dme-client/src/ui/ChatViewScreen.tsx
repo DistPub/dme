@@ -48,6 +48,7 @@ export function ChatViewScreen(): React.JSX.Element {
     markConversationAsRead,
     chatListVersion,
     blockList,
+    setActiveConversation,
   } = app;
 
   const [messages, setMessages] = useState<StoredMessage[]>([]);
@@ -79,11 +80,15 @@ export function ChatViewScreen(): React.JSX.Element {
 
   useFocusEffect(
     useCallback(() => {
+      setActiveConversation(conversationId);
       loadMessages();
       markConversationAsRead(conversationId).catch((err: unknown) => {
         console.error('markConversationAsRead failed:', err);
       });
-    }, [loadMessages, markConversationAsRead, conversationId]),
+      return () => {
+        setActiveConversation(null);
+      };
+    }, [loadMessages, markConversationAsRead, conversationId, setActiveConversation]),
   );
 
   useEffect(() => {

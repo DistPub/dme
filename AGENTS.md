@@ -59,7 +59,7 @@ dme/
 | 握手流程 (1:1) | `dme-client/src/handshake/handshake.ts` |
 | 群聊邀请协议 | `dme-client/src/handshake/group-invite.ts` |
 | 群聊消息类型 | `dme-client/src/protocol/group-message.ts` |
-| 全局状态 | `dme-client/src/state/AppContext.tsx` (16 字段，25 action) |
+| 全局状态 | `dme-client/src/state/AppContext.tsx` (17 字段，28 action) |
 | 消息轮询 | `dme-client/src/poll/poller.ts` |
 | 存储 schema | `dme-client/src/storage/db.ts` |
 | DID 公钥读写 | `dme-client/src/atproto/did.ts` (`declareKeys` + `getRemoteEncryptionKey` + `getRemoteSigningKey` + `getDidMethod` + `generateDidWebUpdate` + `sharedDidResolver`) |
@@ -68,7 +68,8 @@ dme/
 | AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
 | 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton） |
 | 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题"隐世"，顶部栏用户头像右侧上下展示昵称+handle；列表行 1:1 头像+昵称+时间+@handle+预览，群聊同样布局 + 头像占位 + creator handle） |
-| 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Poll Batch Size + AppView Proxy + Identity Backup） |
+| 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Poll Batch Size + AppView Proxy + Sound 开关 + Identity Backup） |
+| 消息提示音 | `dme-client/src/utils/sound.ts`（运行时生成 3 声 880Hz WAV；Web 用 Web Audio API，Native 用 expo-av） |
 | 创建群聊 | `dme-client/src/ui/CreateGroupScreen.tsx` |
 | 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx`（成员行头像+昵称+@handle；Block 按钮弹模态确认；已 block 成员显示 Unblock） |
 | 屏蔽列表 | `dme-client/src/ui/BlockListScreen.tsx`（头像+昵称+@handle+Unblock） |
@@ -131,6 +132,12 @@ dme/
 | `MessageActionMenu` | component | MessageActionMenu.tsx | 消息长按/右键浮层菜单（复制/转发/删除） |
 | `deleteMessage` | action | AppContext.tsx | 本地删除单条消息，递增 chatListVersion 刷新 |
 | `deleteMessage` | method | db.ts | 从 AsyncStorage 过滤删除指定 messageId |
+| `playMessageSound` | func | sound.ts | 播放「嘀嘀嘀」提示音；Web 用 Web Audio API 振荡器，Native 用 expo-av 播放运行时生成的 WAV |
+| `setActiveConversation` | action | AppContext.tsx | 设置当前活跃会话 ID（ref，不触发重渲染）；ChatView focus 时设置，blur 时清空 |
+| `activeConversationRef` | ref | AppContext.tsx | `useRef<string \| null>`，当前 ChatView 的会话 ID，`handleIncomingMessage` 据此判断是否播放提示音 |
+| `soundEnabled` | state | AppContext.tsx | `boolean`，提示音开关；`handleIncomingMessage` 在播放前检查，Settings 页 Switch 控制 |
+| `setSoundEnabled` | action | AppContext.tsx | 切换提示音开关（持久化到 AsyncStorage + 更新 state） |
+| `getSoundEnabled`/`setSoundEnabled` | method | db.ts | AsyncStorage 提示音开关读写（key `soundEnabled`，默认 `true`） |
 | `createGroupWithMembers` | func | group-invite.ts | 创建 MLS 群组并添加成员（返回 Welcome + Commit） |
 | `Store` | struct | store.go | BadgerDB Put/Get/GetBatch |
 | `Consumer` | struct | consumer.go | Jetstream WebSocket 消费 |
@@ -176,6 +183,27 @@ dme/
 - `MessageBubble` 按 emoji 聚合渲染 pill，相同 emoji 合并并显示计数（>1 时小字），当前用户参与的高亮
 - Web 无长按：每条文本气泡旁固定 emoji 按钮触发 `EmojiPicker`（`measureInWindow` 锚定浮层）
 
+## 消息提示音
+
+新消息到达时播放「嘀嘀嘀」3 声 880Hz 提示音，声音由 `src/utils/sound.ts` 运行时生成（无音频文件依赖）。
+
+| 平台 | 实现 |
+|---|---|
+| Web | Web Audio API 振荡器（`AudioContext` + `OscillatorNode`），无文件 |
+| Native | 运行时生成 WAV base64 -> `expo-file-system` 写入临时文件 -> `expo-av` 播放 |
+
+触发逻辑（`handleIncomingMessage` 中，收到 `kind: 'text'` 或 `kind: 'group_invite'` 消息后）：
+
+| 用户状态 | 新消息来源 | 是否播放 |
+|---|---|---|
+| 不在任何聊天页面 | 任意会话 | ✅ 播放 |
+| 在会话 A 的聊天界面 | 会话 A | ✅ 播放 |
+| 在会话 A 的聊天界面 | 会话 B | ❌ 不播放 |
+
+- `activeConversationRef`（`useRef`）追踪当前 ChatView 的会话 ID，ChatView focus 时设置、blur 时清空，不触发重渲染
+- `soundEnabled`（`boolean` state）控制全局开关，Settings 页 Switch 切换，默认 `true`，持久化到 AsyncStorage
+- 系统消息（`kind: 'group_system'`）和表情反应（`type: 'reaction'`）不触发提示音
+
 ## 群组生命周期状态
 
 | 状态 | 含义 | 行为 |
@@ -194,6 +222,7 @@ dme/
 - **群聊 Commit**: 每次 addMember 产生的 Commit 必须通过1:1通道发给已有成员（poller 只轮询 application 消息，不轮询 handshake Commit）
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`）走 MLS session 加密，挂 `StoredMessage.reactions`，不存为文本消息
 - **消息操作菜单**: 长按（原生）/右键（web）消息气泡弹出 `MessageActionMenu`（复制/转发/删除）；复制走 `expo-clipboard`，转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，删除仅本地删除（PDS 密文不变）
+- **消息提示音**: `playMessageSound()`（`src/utils/sound.ts`）播放「嘀嘀嘀」3 声 880Hz；Web 用 Web Audio API 振荡器，Native 用 `expo-av` 播放运行时生成的 WAV（写入 `expo-file-system` 临时文件，首次生成后缓存）；`handleIncomingMessage` 对 `kind: 'text'` 和 `kind: 'group_invite'` 消息触发，`kind: 'group_system'` 和 `type: 'reaction'` 不触发；`activeConversationRef`（ref，不触发重渲染）追踪当前 ChatView 会话 ID 决定是否播放，`soundEnabled`（state）控制全局开关
 - **成员离开**: MLS 禁止自身 removeMember，通过 `group_member_left` 通知其他成员，群主收到后执行 removeMember
 - **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
@@ -255,4 +284,5 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **ChatViewScreen 依赖陷阱**: `useFocusEffect` 不可依赖整个 `AppContext` value 对象，否则 `chatListVersion` 递增会导致 effect 重新 fire -> 再次触发 `markConversationAsRead` -> 无限 `Maximum update depth exceeded` 循环
 - **DID 解析并发**: `ChatViewScreen`/`ChatListScreen`/`GroupSettingsScreen`/`CreateGroupScreen` 中批量解析 DID 时必须用 `Promise.all`，禁止 for 循环内串行 `await`
 - **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
+- **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径

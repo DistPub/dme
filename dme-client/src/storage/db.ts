@@ -469,6 +469,17 @@ export class DmeStorage {
     );
   }
 
+  private readonly SOUND_ENABLED_KEY = 'soundEnabled';
+
+  async getSoundEnabled(): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(this.prefix + this.SOUND_ENABLED_KEY);
+    return raw !== 'false';
+  }
+
+  async setSoundEnabled(enabled: boolean): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + this.SOUND_ENABLED_KEY, String(enabled));
+  }
+
   // -----------------------------------------------------------------------
   // 清除全部数据（切换账号 / 注销）
   // -----------------------------------------------------------------------

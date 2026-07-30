@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, ScrollView, Switch } from 'react-native';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
@@ -128,6 +128,17 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           />
         </View>
 
+        <Text style={styles.title}>Sound</Text>
+        <View style={styles.switchRow}>
+          <Text style={styles.label}>Message notifications</Text>
+          <Switch
+            value={app.soundEnabled}
+            onValueChange={(v) => { void app.setSoundEnabled(v); }}
+            trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+            thumbColor="#fff"
+          />
+        </View>
+
         <Text style={styles.title}>Identity Backup</Text>
         <Text style={styles.hint}>
           Backup your identity keys to PDS. Restore on other devices with the same password.
@@ -236,6 +247,11 @@ const styles = StyleSheet.create({
   halfButton: {
     flex: 1,
     height: 48,
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   error: {
     color: theme.colors.error,

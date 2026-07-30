@@ -64,6 +64,7 @@ import {
   generateEncryptedKeyPackageForInvite,
   deserializeAcceptedKeyPackage,
 } from '../handshake/group-invite';
+import { playMessageSound } from '../utils/sound';
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (Uint8Array <-> base64 via JSON replacer)
@@ -137,6 +138,7 @@ interface AppState {
   groupInfos: GroupInfo[];
   receivedGroupInvites: PendingInvite[];
   blockList: string[];
+  soundEnabled: boolean;
 }
 
 interface AppActions {
@@ -170,6 +172,8 @@ interface AppActions {
   refreshBlockList: () => Promise<void>;
   blockMember: (did: string) => Promise<void>;
   unblockMember: (did: string) => Promise<void>;
+  setActiveConversation: (conversationId: string | null) => void;
+  setSoundEnabled: (enabled: boolean) => Promise<void>;
 }
 
 interface AppContextValue extends AppState, AppActions {}
@@ -198,9 +202,22 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [groupInfos, setGroupInfos] = useState<GroupInfo[]>([]);
   const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
   const [blockList, setBlockList] = useState<string[]>([]);
+  const [soundEnabled, setSoundEnabledState] = useState(true);
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
+
+  const activeConversationRef = useRef<string | null>(null);
+
+  const setActiveConversation = useCallback((conversationId: string | null): void => {
+    activeConversationRef.current = conversationId;
+  }, []);
+
+  const setSoundEnabled = useCallback(async (enabled: boolean): Promise<void> => {
+    if (!storage) return;
+    await storage.setSoundEnabled(enabled);
+    setSoundEnabledState(enabled);
+  }, [storage]);
 
   // -------------------------------------------------------------------------
   // KeyPackage pool
@@ -349,6 +366,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setReceivedGroupInvites(recvInvites);
       setGroupInfos(storedGroupInfos);
       setBlockList(await correctStorage.getBlockList());
+      setSoundEnabledState(await correctStorage.getSoundEnabled());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
       throw err;
@@ -471,6 +489,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         setReceivedGroupInvites(recvInvites);
         setGroupInfos(storedGroupInfos);
         setBlockList(await tempStorage.getBlockList());
+        setSoundEnabledState(await tempStorage.getSoundEnabled());
         return true;
       }
 
@@ -762,6 +781,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             sent: false,
             kind: 'group_invite',
           });
+          if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+            void playMessageSound();
+          }
           break;
         }
         case 'group_invite_response': {
@@ -1027,6 +1049,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             kind: 'text',
             conversationId: msg.groupId,
           });
+          if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+            void playMessageSound();
+          }
       }
     } else if (msgType === 'reaction') {
       const r = parsed as unknown as ReactionMessage;
@@ -1051,9 +1076,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         kind: 'text',
         conversationId: msg.groupId,
       });
+      if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+        void playMessageSound();
+      }
     }
     setChatListVersion((v) => v + 1);
-  }, [identityKeys, poller, pds]);
+  }, [identityKeys, poller, pds, soundEnabled]);
 
   handleIncomingMessageRef.current = handleIncomingMessage;
 
@@ -1871,7 +1899,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       pendingInvites,
       groupInfos,
       receivedGroupInvites,
-      blockList,
+blockList,
+      soundEnabled,
       login,
       logout,
       restoreSession,
@@ -1902,18 +1931,20 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       refreshBlockList,
       blockMember,
       unblockMember,
+      setActiveConversation,
+      setSoundEnabled,
     }),
     [
       session, storage, identityKeys, poller, pds, loading, error,
       groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy,
-      pendingInvites, groupInfos, receivedGroupInvites, blockList,
+      pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, sendReaction, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
-      leaveGroup, refreshBlockList, blockMember, unblockMember,
+      leaveGroup, refreshBlockList, blockMember, unblockMember, setActiveConversation, setSoundEnabled,
     ],
   );
 

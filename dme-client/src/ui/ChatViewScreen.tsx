@@ -59,8 +59,9 @@ export function ChatViewScreen(): React.JSX.Element {
   const [friendAvatarUrl, setFriendAvatarUrl] = useState<string | null>(null);
   const [friendAvatarError, setFriendAvatarError] = useState(false);
   const [friendHandle, setFriendHandle] = useState('');
-  const [senderHandles, setSenderHandles] = useState<Record<string, string>>({});
-  const senderProfileCacheRef = useRef<Record<string, { displayName: string; handle: string }>>({});
+  const [senderProfiles, setSenderProfiles] = useState<Record<string, { displayName: string; handle: string; avatarUrl: string | null }>>({});
+  const senderProfileCacheRef = useRef<Record<string, { displayName: string; handle: string; avatarUrl: string | null }>>({});
+  const [ownProfile, setOwnProfile] = useState<{ displayName: string; handle: string; avatarUrl: string | null } | null>(null);
   const [dissolved, setDissolved] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
@@ -116,6 +117,7 @@ export function ChatViewScreen(): React.JSX.Element {
             senderProfileCacheRef.current[profile.did] = {
               displayName: profile.displayName ?? '',
               handle: profile.handle ?? profile.did,
+              avatarUrl: profile.avatar ?? null,
             };
           }
         } catch (err) {
@@ -130,25 +132,44 @@ export function ChatViewScreen(): React.JSX.Element {
             try {
               const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
               const handle = doc?.alsoKnownAs?.[0]?.replace(/^at:\/\//, '') ?? did;
-              senderProfileCacheRef.current[did] = { displayName: '', handle };
+              senderProfileCacheRef.current[did] = { displayName: '', handle, avatarUrl: null };
             } catch {
-              senderProfileCacheRef.current[did] = { displayName: '', handle: did };
+              senderProfileCacheRef.current[did] = { displayName: '', handle: did, avatarUrl: null };
             }
           }),
         );
       }
 
       if (!cancelled) {
-        const resolved: Record<string, string> = {};
+        const resolved: Record<string, { displayName: string; handle: string; avatarUrl: string | null }> = {};
         for (const did of unresolvedDids) {
           const p = senderProfileCacheRef.current[did];
-          resolved[did] = p.displayName || p.handle || did;
+          resolved[did] = { displayName: p.displayName, handle: p.handle, avatarUrl: p.avatarUrl };
         }
-        setSenderHandles((prev) => ({ ...prev, ...resolved }));
+        setSenderProfiles((prev) => ({ ...prev, ...resolved }));
       }
     })();
     return () => { cancelled = true; };
   }, [messages, isGroup, storage, session]);
+
+  useEffect(() => {
+    if (!isGroup || !session?.did) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await session.agent.app.bsky.actor.getProfile({ actor: session.did });
+        if (cancelled) return;
+        setOwnProfile({
+          displayName: profile.data.displayName ?? '',
+          handle: profile.data.handle ?? '',
+          avatarUrl: profile.data.avatar ?? null,
+        });
+      } catch (err) {
+        console.error('Failed to fetch own profile for avatar:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.did, isGroup, chatListVersion]);
 
   useEffect(() => {
     if (isGroup) {
@@ -321,16 +342,18 @@ export function ChatViewScreen(): React.JSX.Element {
         <MessageBubble
           text={item.plaintext}
           isOutgoing={item.fromDid === session?.did}
-          senderName={isGroup ? (senderHandles[item.fromDid] ?? item.fromDid) : undefined}
           reactions={item.reactions}
           currentDid={session?.did}
+          senderDisplayName={isGroup ? (item.fromDid === session?.did ? (ownProfile?.displayName || ownProfile?.handle || session?.did) : (senderProfiles[item.fromDid]?.displayName || senderProfiles[item.fromDid]?.handle || item.fromDid)) : undefined}
+          senderHandle={isGroup && item.fromDid !== session?.did ? senderProfiles[item.fromDid]?.handle : undefined}
+          senderAvatarUrl={isGroup ? (item.fromDid === session?.did ? (ownProfile?.avatarUrl ?? null) : (senderProfiles[item.fromDid]?.avatarUrl ?? null)) : undefined}
           onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
           onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
           onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
         />
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderHandles, canReact, handleReact, handleOpenPicker, handleShowActionMenu],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu],
   );
 
   const keyExtractor = useCallback(

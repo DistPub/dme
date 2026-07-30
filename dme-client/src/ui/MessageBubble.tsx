@@ -2,8 +2,9 @@
  * ui/MessageBubble.tsx - RN native message bubble.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
 
 import { theme } from './theme';
 import type { Reaction } from '../storage/db';
@@ -11,7 +12,10 @@ import type { Reaction } from '../storage/db';
 export interface MessageBubbleProps {
   text: string;
   isOutgoing: boolean;
-  senderName?: string;
+  senderDisplayName?: string;
+  senderHandle?: string;
+  senderAvatarUrl?: string | null;
+  senderAvatarError?: boolean;
   reactions?: Reaction[];
   currentDid?: string;
   onReactionPress?: (emoji: string) => void;
@@ -26,7 +30,10 @@ const BUBBLE_MAX_WIDTH_RATIO = 0.75;
 export function MessageBubble({
   text,
   isOutgoing,
-  senderName,
+  senderDisplayName,
+  senderHandle,
+  senderAvatarUrl,
+  senderAvatarError,
   reactions,
   currentDid,
   onReactionPress,
@@ -35,6 +42,11 @@ export function MessageBubble({
 }: MessageBubbleProps): React.JSX.Element {
   const emojiBtnRef = useRef<View>(null);
   const bubbleRef = useRef<View>(null);
+  const [avatarError, setAvatarError] = useState(false);
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [senderAvatarUrl]);
 
   // Web: right-click (contextmenu) on the bubble opens the action menu.
   // Native: onLongPress below handles it.
@@ -77,10 +89,37 @@ export function MessageBubble({
     });
   }, [onShowActionMenu]);
 
-  return (
-    <View style={styles.container}>
-      {senderName && !isOutgoing && (
-        <Text style={styles.senderName} numberOfLines={1}>{senderName}</Text>
+  const effectiveAvatarError = senderAvatarError || avatarError;
+
+  const renderAvatar = (): React.JSX.Element | null => {
+    if (senderAvatarUrl === undefined) return null;
+    const fallbackLetter = (senderDisplayName?.[0] ?? '?').toUpperCase();
+    return (
+      <View style={styles.avatarWrap}>
+        {senderAvatarUrl && !effectiveAvatarError ? (
+          <Image
+            source={{ uri: senderAvatarUrl }}
+            style={styles.avatarImage}
+            contentFit="cover"
+            transition={300}
+            onError={() => setAvatarError(true)}
+          />
+        ) : (
+          <Text style={styles.avatarFallbackText}>{fallbackLetter}</Text>
+        )}
+      </View>
+    );
+  };
+
+  const renderContent = (): React.JSX.Element => (
+    <View style={styles.contentCol}>
+      {senderDisplayName && !isOutgoing && (
+        <>
+          <Text style={styles.senderName} numberOfLines={1}>{senderDisplayName}</Text>
+          {senderHandle ? (
+            <Text style={styles.senderHandle} numberOfLines={1}>@{senderHandle}</Text>
+          ) : null}
+        </>
       )}
       <View style={[styles.bubbleRow, isOutgoing ? styles.bubbleRowOutgoing : styles.bubbleRowIncoming]}>
         {isOutgoing && (
@@ -136,22 +175,71 @@ export function MessageBubble({
       )}
     </View>
   );
+
+  return (
+    <View style={[
+      styles.row,
+      isOutgoing ? styles.rowOutgoing : styles.rowIncoming,
+    ]}>
+      {!isOutgoing && renderAvatar()}
+      {renderContent()}
+      {isOutgoing && renderAvatar()}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     marginHorizontal: BUBBLE_MARGIN,
     marginVertical: BUBBLE_MARGIN / 2,
   },
+  rowIncoming: {
+    justifyContent: 'flex-start',
+  },
+  rowOutgoing: {
+    justifyContent: 'flex-end',
+  },
+  avatarWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: theme.spacing.xs,
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+  },
+  avatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  contentCol: {
+    flex: 1,
+  },
   senderName: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 1,
+    includeFontPadding: false,
+  },
+  senderHandle: {
     color: theme.colors.textSecondary,
-    fontSize: 12,
-    marginLeft: 4,
-    marginBottom: 2,
+    fontSize: 11,
+    marginBottom: 4,
+    includeFontPadding: false,
   },
   bubbleRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
+    alignSelf: 'stretch',
   },
   bubbleRowIncoming: {
     justifyContent: 'flex-start',

@@ -75,10 +75,10 @@ dme/
 | 屏蔽列表 | `dme-client/src/ui/BlockListScreen.tsx`（头像+昵称+@handle+Unblock） |
 | 表情反应协议 | `dme-client/src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `dme-client/src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
-| 消息气泡 + reactions | `dme-client/src/ui/MessageBubble.tsx` |
+| 消息气泡 + reactions + 群聊头像 | `dme-client/src/ui/MessageBubble.tsx`（群聊消息双列布局：头像列 + 内容列(昵称+@handle+气泡+reactions)） |
 | 表情选择器 | `dme-client/src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 消息操作菜单 | `dme-client/src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
-| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle，群聊 头像占位+[Group] 群名+@creator handle + ⋮） |
+| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle，群聊 头像占位+[Group] 群名+@creator handle + ⋮；群聊消息行双列布局：发言人头像单独成列，收到的消息左侧头像+昵称+@handle，自己发的消息右侧头像） |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
@@ -104,7 +104,9 @@ dme/
 | `generateDidWebUpdate` | func | did.ts | 为 did:web 用户生成 DID 文档更新内容（合并 DME 公钥） |
 | `sharedDidResolver` | const | did.ts | 单例 `DidResolver`（`plcUrl` + `MemoryCache`），所有 DID 解析统一入口 |
 | `markConversationAsRead` | action | AppContext.tsx | 标记某会话所有非自己发送的消息为已读，并递增 `chatListVersion` |
-| `senderProfileCacheRef` | ref | ChatViewScreen.tsx | `useRef<Record<string, {displayName, handle}>>`，群聊 sender profile 缓存，`getProfiles` 批量获取 |
+| `senderProfileCacheRef` | ref | ChatViewScreen.tsx | `useRef<Record<string, {displayName, handle, avatarUrl}>>`，群聊 sender profile 缓存（含头像 URL），`getProfiles` 批量获取 |
+| `senderProfiles` | state | ChatViewScreen.tsx | `Record<string, {displayName, handle, avatarUrl}>`，群聊消息发送者的 profile（displayName+handle+avatar），从 cacheRef 同步到 state 驱动渲染 |
+| `ownProfile` | state | ChatViewScreen.tsx | `{displayName, handle, avatarUrl} \| null`，当前用户自身 profile，群聊中自己发消息的右侧头像来源，`getProfile({actor: session.did})` 获取 |
 | `encryptBackup` | func | backup.ts | PBKDF2+AES-GCM 加密 FullBackupData -> base64url |
 | `decryptBackup` | func | backup.ts | 解密 base64url -> FullBackupData |
 | `backupIdentity` | action | AppContext.tsx | 密码加密身份+MLS会话+KeyPackage+群聊元数据+屏蔽列表，写入 PDS |
@@ -127,7 +129,7 @@ dme/
 | `ReactionMessage` | interface | reaction.ts | E2E 加密反应协议消息（add/remove，targetMessageId） |
 | `sendReaction` | action | AppContext.tsx | toggle 当前用户对某消息的 emoji 反应，MLS 加密发送 |
 | `addReaction`/`removeReaction` | method | db.ts | 更新某条消息的 reactions 列表 |
-| `MessageBubble` | component | MessageBubble.tsx | 气泡 + reactions pill（合并同 emoji + 计数）+ emoji 触发按钮 |
+| `MessageBubble` | component | MessageBubble.tsx | 群聊双列布局：头像列(40px 圆形, expo-image+首字母 fallback) + 内容列(昵称+@handle+气泡+reactions pill)；incoming 头像左+内容右，outgoing 内容左+头像右；1:1 不渲染头像列 |
 | `EmojiPicker` | component | EmojiPicker.tsx | 锚定按钮的浮层表情选择器 |
 | `MessageActionMenu` | component | MessageActionMenu.tsx | 消息长按/右键浮层菜单（复制/转发/删除） |
 | `deleteMessage` | action | AppContext.tsx | 本地删除单条消息，递增 chatListVersion 刷新 |
@@ -229,6 +231,7 @@ dme/
 - **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
 - **DID 解析**: 统一使用 `atproto/did.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
 - **Profile 批量获取**: 多个 DID 的 profile（avatar + displayName + handle）必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，禁止 `Promise.all(dids.map(d => getProfile(d)))` 逐个请求；`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；每个屏幕用 `useRef` 缓存已解析的 profile，跨 focus 保留
+- **群聊消息布局**: 群聊消息行采用双列布局：头像列（40px 圆形 `expo-image`，加载失败回退首字母）单独成列，内容列（昵称+@handle+消息气泡+reactions）单独成列；收到的消息头像在左、内容在右，自己发的消息内容在左、头像在右；1:1 聊天不渲染头像列
 - **React hooks 依赖**: UI 屏幕严禁把整个 `AppContext` value 对象放入 `useEffect`/`useCallback`/`useFocusEffect` 依赖数组；必须在组件顶部解构 `storage`/`session`/`markConversationAsRead`/`chatListVersion` 等具体字段后再依赖
 - **会话列表加载**: `ChatListScreen.loadConversations` 用 `Promise.all` 并行解析各会话 handle，避免 for 循环串行 await 阻塞 JS 线程
 - **未读标记**: 进入 ChatView 时调用 `markConversationAsRead`；poller 推送新消息后，`chatListVersion` 变化触发的 `useEffect` 中会同步调用 `storage.markMessagesAsRead(conversationId)`，确保用户在 ChatView 已看到的消息返回列表时不显示未读

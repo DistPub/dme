@@ -1,0 +1,280 @@
+/**
+ * ui/BlockListScreen.tsx - Shows all DIDs the user has blocked.
+ *
+ * Mirrors SettingsScreen's container/skeleton. Resolves each blocked DID's
+ * handle via sharedDidResolver (in parallel) with a per-DID cache ref so
+ * re-renders don't re-resolve. Each row exposes an Unblock button that calls
+ * app.unblockMember; the context's blockList state auto-updates, which
+ * re-renders this screen via the focus effect.
+ */
+
+import React, { useCallback, useRef, useState } from 'react';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
+import { Canvas, Fill } from '@shopify/react-native-skia';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+
+import { theme } from './theme';
+import { Button } from './Button';
+import { useApp } from '../state/AppContext';
+import { sharedDidResolver } from '../atproto/did';
+import type { DidDocWithHandle, RootStackParamList } from '../types/navigation';
+
+type Navigation = NativeStackNavigationProp<RootStackParamList>;
+
+interface BlockedRow {
+  did: string;
+  handle: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+interface ProfileEntry {
+  handle: string;
+  displayName: string;
+  avatar: string | null;
+}
+
+export function BlockListScreen(): React.JSX.Element {
+  const app = useApp();
+  const navigation = useNavigation<Navigation>();
+  const [rows, setRows] = useState<readonly BlockedRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const profileCacheRef = useRef<Record<string, ProfileEntry>>({});
+
+  const resolveProfiles = useCallback(async (
+    dids: string[],
+  ): Promise<Record<string, ProfileEntry>> => {
+    const result: Record<string, ProfileEntry> = {};
+    const missing = dids.filter((did) => !profileCacheRef.current[did]);
+
+    if (missing.length > 0 && app.session) {
+      try {
+        const response = await app.session.agent.app.bsky.actor.getProfiles({ actors: missing });
+        for (const profile of response.data.profiles) {
+          const entry: ProfileEntry = {
+            handle: profile.handle ?? profile.did,
+            displayName: profile.displayName ?? '',
+            avatar: profile.avatar ?? null,
+          };
+          profileCacheRef.current[profile.did] = entry;
+        }
+      } catch (err) {
+        console.error('resolveProfiles: getProfiles failed', missing, err);
+      }
+    }
+
+    const stillMissing = dids.filter((did) => !profileCacheRef.current[did]);
+    if (stillMissing.length > 0) {
+      await Promise.all(
+        stillMissing.map(async (did) => {
+          try {
+            const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
+            const aka = doc?.alsoKnownAs;
+            if (Array.isArray(aka) && aka.length > 0) {
+              profileCacheRef.current[did] = {
+                handle: aka[0].replace(/^at:\/\//, ''),
+                displayName: '',
+                avatar: null,
+              };
+            } else {
+              profileCacheRef.current[did] = { handle: did, displayName: '', avatar: null };
+            }
+          } catch (err) {
+            console.error('resolveProfiles: DID doc resolve failed for', did, err);
+            profileCacheRef.current[did] = { handle: did, displayName: '', avatar: null };
+          }
+        }),
+      );
+    }
+
+    for (const did of dids) {
+      result[did] = profileCacheRef.current[did];
+    }
+    return result;
+  }, [app.session]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setLoading(true);
+      (async () => {
+        const list = [...app.blockList];
+        const profiles = list.length > 0 ? await resolveProfiles(list) : {};
+        const results = list.map((did) => {
+          const p = profiles[did];
+          return { did, handle: p.handle, displayName: p.displayName, avatarUrl: p.avatar };
+        });
+        if (!cancelled) {
+          setRows(results);
+          setLoading(false);
+        }
+      })().catch((err: unknown) => {
+        if (!cancelled) {
+          console.error('load block list failed:', err);
+          setLoading(false);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [app.blockList, resolveProfiles]),
+  );
+
+  const handleUnblock = useCallback((did: string): void => {
+    app.unblockMember(did).catch((err: unknown) => console.error('unblock failed:', err));
+  }, [app]);
+
+  return (
+    <View style={styles.container}>
+      <Canvas style={StyleSheet.absoluteFill}>
+        <Fill color={theme.colors.background} />
+      </Canvas>
+
+      <View style={styles.content}>
+        <View style={styles.header}>
+          <Button
+            label="Back"
+            onPress={() => navigation.goBack()}
+            variant="secondary"
+            style={styles.backBtn}
+          />
+          <Text style={styles.title} numberOfLines={1}>Block List</Text>
+        </View>
+
+        {loading ? (
+          <Text style={styles.statusText}>Loading...</Text>
+        ) : (
+          <FlatList
+            style={styles.list}
+            data={[...rows]}
+            keyExtractor={(item) => item.did}
+            ListEmptyComponent={
+              <Text style={styles.emptyText}>No blocked users</Text>
+            }
+            renderItem={({ item }) => (
+              <View style={styles.row}>
+                {item.avatarUrl ? (
+                  <Image
+                    source={{ uri: item.avatarUrl }}
+                    style={styles.avatar}
+                    contentFit="cover"
+                    transition={300}
+                  />
+                ) : (
+                  <View style={[styles.avatar, styles.avatarFallback]}>
+                    <Text style={styles.avatarFallbackText}>
+                      {(item.displayName[0] ?? item.handle[0] ?? '?').toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.textStack}>
+                  <Text style={styles.displayName} numberOfLines={1}>
+                    {item.displayName || item.handle || item.did}
+                  </Text>
+                  {item.handle ? (
+                    <Text style={styles.handle} numberOfLines={1}>
+                      @{item.handle}
+                    </Text>
+                  ) : null}
+                </View>
+                <Button
+                  label="Unblock"
+                  onPress={() => handleUnblock(item.did)}
+                  variant="secondary"
+                  style={styles.unblockBtn}
+                />
+              </View>
+            )}
+          />
+        )}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  content: {
+    flex: 1,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: theme.spacing.md,
+  },
+  backBtn: {
+    width: 60,
+    height: 40,
+  },
+  title: {
+    flex: 1,
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.heading,
+    fontWeight: '700',
+    marginLeft: theme.spacing.sm,
+  },
+  list: {
+    flex: 1,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+  },
+  avatarFallback: {
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+  },
+  textStack: {
+    flex: 1,
+    marginLeft: theme.spacing.sm,
+    marginRight: theme.spacing.sm,
+  },
+  displayName: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+  },
+  handle: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.small,
+    marginTop: 1,
+  },
+  unblockBtn: {
+    width: 90,
+    height: 36,
+  },
+  emptyText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.body,
+    textAlign: 'center',
+    marginTop: theme.spacing.xl,
+  },
+  statusText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.body,
+    textAlign: 'center',
+    marginTop: theme.spacing.xl,
+  },
+});

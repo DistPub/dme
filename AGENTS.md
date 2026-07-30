@@ -67,15 +67,17 @@ dme/
 | PDS 记录写入 | `dme-client/src/atproto/pds.ts` (envelope + identity backup + AppView proxy) |
 | AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
 | 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton） |
-| 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题"隐世"，顶部栏 +Group/+Friend/头像菜单） |
+| 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题"隐世"，顶部栏用户头像右侧上下展示昵称+handle；列表行 1:1 头像+昵称+时间+@handle+预览，群聊同样布局 + 头像占位 + creator handle） |
 | 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Poll Batch Size + AppView Proxy + Identity Backup） |
 | 创建群聊 | `dme-client/src/ui/CreateGroupScreen.tsx` |
-| 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx` |
+| 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx`（成员行头像+昵称+@handle；Block 按钮弹模态确认；已 block 成员显示 Unblock） |
+| 屏蔽列表 | `dme-client/src/ui/BlockListScreen.tsx`（头像+昵称+@handle+Unblock） |
 | 表情反应协议 | `dme-client/src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `dme-client/src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions | `dme-client/src/ui/MessageBubble.tsx` |
 | 表情选择器 | `dme-client/src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 消息操作菜单 | `dme-client/src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
+| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle，群聊 头像占位+[Group] 群名+@creator handle + ⋮） |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
@@ -101,11 +103,11 @@ dme/
 | `generateDidWebUpdate` | func | did.ts | 为 did:web 用户生成 DID 文档更新内容（合并 DME 公钥） |
 | `sharedDidResolver` | const | did.ts | 单例 `DidResolver`（`plcUrl` + `MemoryCache`），所有 DID 解析统一入口 |
 | `markConversationAsRead` | action | AppContext.tsx | 标记某会话所有非自己发送的消息为已读，并递增 `chatListVersion` |
-| `resolvedDidsRef` | ref | ChatViewScreen.tsx | `useRef<Set<string>>`，防止群聊 sender handle 重复解析 |
+| `senderProfileCacheRef` | ref | ChatViewScreen.tsx | `useRef<Record<string, {displayName, handle}>>`，群聊 sender profile 缓存，`getProfiles` 批量获取 |
 | `encryptBackup` | func | backup.ts | PBKDF2+AES-GCM 加密 FullBackupData -> base64url |
 | `decryptBackup` | func | backup.ts | 解密 base64url -> FullBackupData |
-| `backupIdentity` | action | AppContext.tsx | 密码加密身份+MLS会话+KeyPackage+群聊元数据，写入 PDS |
-| `restoreIdentityFromBackup` | action | AppContext.tsx | 从 PDS 解密恢复全部数据，reload poller sessions |
+| `backupIdentity` | action | AppContext.tsx | 密码加密身份+MLS会话+KeyPackage+群聊元数据+屏蔽列表，写入 PDS |
+| `restoreIdentityFromBackup` | action | AppContext.tsx | 从 PDS 解密恢复全部数据（含屏蔽列表），reload poller sessions |
 | `Button` | component | Button.tsx | Pressable+Text 按钮（numberOfLines=1，支持中文，替代 SkiaButton） |
 | `setAppViewProxy` | action | AppContext.tsx | 更新 atproto-proxy header 值（持久化 + 实时更新 DmePds） |
 | `sendGroupInvites` | action | AppContext.tsx | 通过1:1通道发送群聊邀请 |
@@ -115,6 +117,11 @@ dme/
 | `dissolveGroup` | action | AppContext.tsx | 群主解散群组 |
 | `leaveGroup` | action | AppContext.tsx | 成员主动离开群组 |
 | `removeMemberFromGroup` | action | AppContext.tsx | 群主移除成员 |
+| `blockMember` | action | AppContext.tsx | 屏蔽某 DID，写入 storage `blockList`，递增 `chatListVersion` 触发 UI 刷新 |
+| `unblockMember` | action | AppContext.tsx | 取消屏蔽某 DID，从 storage `blockList` 移除 |
+| `refreshBlockList` | action | AppContext.tsx | 从 storage 重新加载 blockList 到 state |
+| `blockList` | state | AppContext.tsx | `string[]`，被屏蔽的 DID 列表；`handleIncomingMessage` 入口处检查，命中则跳过存储 |
+| `getBlockList`/`addBlockedDid`/`removeBlockedDid`/`setBlockList`/`isBlocked` | method | db.ts | AsyncStorage 屏蔽列表 CRUD（单 key `blockList`，JSON 数组，幂等） |
 | `Reaction` | interface | db.ts | 表情反应（emoji + did + createdAt），挂在 `StoredMessage.reactions` |
 | `ReactionMessage` | interface | reaction.ts | E2E 加密反应协议消息（add/remove，targetMessageId） |
 | `sendReaction` | action | AppContext.tsx | toggle 当前用户对某消息的 emoji 反应，MLS 加密发送 |
@@ -143,6 +150,16 @@ dme/
 | `group_dissolved` | 群主 | 所有成员 | 群组解散通知 |
 | `group_member_removed` | 群主 | 被移除成员 | 移除通知 |
 | `group_member_left` | 离开成员 | 其他成员 | 离开通知 |
+
+## 屏蔽列表
+
+- 入口：主页头像弹出菜单 → `Block List` 屏幕（`BlockListScreen`）
+- 群管理页成员行可 Block（弹模态确认，标题「屏蔽成员」）；已 block 成员显示 Unblock（直接执行）
+- 屏蔽列表行展示：头像 + 昵称 + @handle + Unblock 按钮
+- `handleIncomingMessage` 入口处检查 `app.blockList`，命中则跳过该消息存储（poller 仍标记 queueId 已处理）
+- `ChatViewScreen.loadMessages` 在内存中过滤 `m.fromDid ∈ blockList` 的消息
+- `ChatListScreen.loadConversations` 排除被屏蔽发送者的未读计数，preview 显示「已屏蔽」
+- 不删除已存储消息、不修改群成员关系、不通知对方、不自动 remove
 
 ## 消息反应
 
@@ -182,12 +199,14 @@ dme/
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
 - **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
 - **DID 解析**: 统一使用 `atproto/did.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
+- **Profile 批量获取**: 多个 DID 的 profile（avatar + displayName + handle）必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，禁止 `Promise.all(dids.map(d => getProfile(d)))` 逐个请求；`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；每个屏幕用 `useRef` 缓存已解析的 profile，跨 focus 保留
 - **React hooks 依赖**: UI 屏幕严禁把整个 `AppContext` value 对象放入 `useEffect`/`useCallback`/`useFocusEffect` 依赖数组；必须在组件顶部解构 `storage`/`session`/`markConversationAsRead`/`chatListVersion` 等具体字段后再依赖
 - **会话列表加载**: `ChatListScreen.loadConversations` 用 `Promise.all` 并行解析各会话 handle，避免 for 循环串行 await 阻塞 JS 线程
 - **未读标记**: 进入 ChatView 时调用 `markConversationAsRead`；poller 推送新消息后，`chatListVersion` 变化触发的 `useEffect` 中会同步调用 `storage.markMessagesAsRead(conversationId)`，确保用户在 ChatView 已看到的消息返回列表时不显示未读
-- **未读 badge 布局**: 聊天列表行的未读 badge 紧跟 handle/groupName 文字，不靠右 `space-between` 推开
-- **身份备份**: PBKDF2-SHA256(100k iter)+AES-256-GCM 加密，备份范围含身份密钥+MLS会话+KeyPackage池+群聊元数据，PDS `dme.backup.identity` record（rkey=self, putRecord upsert）
+- **未读 badge 布局**: 1:1 会话列表行未读 badge 浮在头像右上角（`position: absolute, top: -4, right: -4`，红底 + 白边分隔环）；群聊行 badge 紧跟群名文字（内联，不靠右推开）
+- **身份备份**: PBKDF2-SHA256(100k iter)+AES-256-GCM 加密，备份范围含身份密钥+MLS会话+KeyPackage池+群聊元数据+屏蔽列表，PDS `dme.backup.identity` record（rkey=self, putRecord upsert）
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后检测
+- **Web 模态对话框**: `Alert.alert` 在 Web 端无效（无 polyfill），确认弹窗用 React Native `Modal` 组件（`transparent` + `animationType="fade"`），跨平台统一
 - **包管理器**: TS 侧统一 Bun，Go 侧标准 go 工具链
 - **TypeScript**: `strict: true`（两个 TS 项目都是）
 - **Go**: 1.22，仅 2 个直接依赖（badger/v4 + coder/websocket），无框架
@@ -221,9 +240,9 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **Lexicon key**: envelope 用 `"key": "tid"`（AT Protocol 自动生成时间戳 rkey）；backup 用 `"key": "literal"`（rkey 固定 `"self"`，putRecord upsert）
 - **Gateway IP 剥离**: 未显式实现 header 剥离，靠 CF 边缘 IP 隐式隔离（`proxy()` 只转发 body + Content-Type）
 - **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text），`SkiaButton.tsx` 保留但无引用
-- **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Logout 收入头像弹出菜单
+- **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Block List/Logout 收入头像弹出菜单
 - **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染
-- **备份恢复**: 恢复后 MLS 会话+KeyPackage池+群聊元数据完整恢复，无需重新握手；消息历史不备份
+- **备份恢复**: 恢复后 MLS 会话+KeyPackage池+群聊元数据+屏蔽列表完整恢复，无需重新握手；消息历史不备份
 - **Go 模块路径**: `dme/dme-server`（本地路径，非 GitHub）
 - **dme.db/**: 运行时自动创建的 BadgerDB 数据目录，已 gitignored
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`
@@ -232,7 +251,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **群主离线**: 只有群主能 addMember/removeMember，群主离线时无法管理成员
 - **群聊创建者**: 群主不能离开群组（MLS 限制 removeMember 不能移除 committer），只能解散
 - **浏览器调试现场保护**: 当用户要求「看控制台日志」时，直接使用 `browsermcp_browser_get_console_logs` 抓取当前页面日志，禁止 `browsermcp_browser_navigate` 刷新或跳转页面，避免破坏报错现场
-- **ChatViewScreen 依赖陷阱**: `useFocusEffect` 不可依赖整个 `AppContext` value 对象，否则 `chatListVersion` 递增会导致 effect 重新 fire → 再次触发 `markConversationAsRead` → 无限 `Maximum update depth exceeded` 循环
+- **ChatViewScreen 依赖陷阱**: `useFocusEffect` 不可依赖整个 `AppContext` value 对象，否则 `chatListVersion` 递增会导致 effect 重新 fire -> 再次触发 `markConversationAsRead` -> 无限 `Maximum update depth exceeded` 循环
 - **DID 解析并发**: `ChatViewScreen`/`ChatListScreen`/`GroupSettingsScreen`/`CreateGroupScreen` 中批量解析 DID 时必须用 `Promise.all`，禁止 for 循环内串行 `await`
 - **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径

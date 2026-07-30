@@ -136,6 +136,7 @@ interface AppState {
   pendingInvites: PendingInvite[];
   groupInfos: GroupInfo[];
   receivedGroupInvites: PendingInvite[];
+  blockList: string[];
 }
 
 interface AppActions {
@@ -166,6 +167,9 @@ interface AppActions {
   dissolveGroup: (groupId: string) => Promise<void>;
   removeMemberFromGroup: (groupId: string, memberDid: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
+  refreshBlockList: () => Promise<void>;
+  blockMember: (did: string) => Promise<void>;
+  unblockMember: (did: string) => Promise<void>;
 }
 
 interface AppContextValue extends AppState, AppActions {}
@@ -193,6 +197,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [groupInfos, setGroupInfos] = useState<GroupInfo[]>([]);
   const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
+  const [blockList, setBlockList] = useState<string[]>([]);
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
@@ -343,6 +348,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingInvites(sentInvites);
       setReceivedGroupInvites(recvInvites);
       setGroupInfos(storedGroupInfos);
+      setBlockList(await correctStorage.getBlockList());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
       throw err;
@@ -461,6 +467,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         setPendingInvites(sentInvites);
         setReceivedGroupInvites(recvInvites);
         setGroupInfos(storedGroupInfos);
+        setBlockList(await tempStorage.getBlockList());
         return true;
       }
 
@@ -518,12 +525,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
     const keyPackagePool = await storage.getKeyPackagePool();
     const groupInfos = await storage.listGroupInfos();
+    const blockList = await storage.getBlockList();
 
     const data: FullBackupData = {
       identity: identityKeys,
       mlsSessions,
       keyPackagePool,
       groupInfos,
+      blockList,
     };
 
     const encryptedData = encryptBackup(data, password);
@@ -565,6 +574,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await storage.putGroupInfo(info);
     }
     setGroupInfos(data.groupInfos);
+
+    await storage.setBlockList(data.blockList);
+    setBlockList(data.blockList);
 
     // 更新会话列表
     setGroups(Object.keys(data.mlsSessions));
@@ -708,6 +720,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     userDid: string,
     msgStorage: DmeStorage,
   ): Promise<void> => {
+    const isBlocked = (await msgStorage.getBlockList()).includes(msg.senderDid);
+    if (isBlocked) {
+      console.log('handleIncomingMessage: skipping message from blocked sender', msg.senderDid);
+      return;
+    }
+
     let parsed: Record<string, unknown> | null = null;
     try {
       parsed = JSON.parse(msg.plaintext) as Record<string, unknown>;
@@ -1794,6 +1812,31 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, [session, storage, pds, poller]);
 
   // -------------------------------------------------------------------------
+  // Block list
+  // -------------------------------------------------------------------------
+
+  const refreshBlockList = useCallback(async (): Promise<void> => {
+    if (!storage) return;
+    setBlockList(await storage.getBlockList());
+  }, [storage]);
+
+  const blockMember = useCallback(async (did: string): Promise<void> => {
+    if (!storage) throw new Error('blockMember: not initialized');
+    await storage.addBlockedDid(did);
+    const next = await storage.getBlockList();
+    setBlockList(next);
+    setChatListVersion((v) => v + 1);
+  }, [storage]);
+
+  const unblockMember = useCallback(async (did: string): Promise<void> => {
+    if (!storage) throw new Error('unblockMember: not initialized');
+    await storage.removeBlockedDid(did);
+    const next = await storage.getBlockList();
+    setBlockList(next);
+    setChatListVersion((v) => v + 1);
+  }, [storage]);
+
+  // -------------------------------------------------------------------------
   // Cleanup
   // -------------------------------------------------------------------------
 
@@ -1825,6 +1868,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       pendingInvites,
       groupInfos,
       receivedGroupInvites,
+      blockList,
       login,
       logout,
       restoreSession,
@@ -1852,18 +1896,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       dissolveGroup,
       removeMemberFromGroup,
       leaveGroup,
+      refreshBlockList,
+      blockMember,
+      unblockMember,
     }),
     [
       session, storage, identityKeys, poller, pds, loading, error,
       groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy,
-      pendingInvites, groupInfos, receivedGroupInvites,
+      pendingInvites, groupInfos, receivedGroupInvites, blockList,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, sendReaction, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
-      leaveGroup,
+      leaveGroup, refreshBlockList, blockMember, unblockMember,
     ],
   );
 

@@ -40,6 +40,8 @@ interface ConversationRow {
   lastMessage: StoredMessage | null;
   isGroup: boolean;
   unreadCount: number;
+  avatarUrl: string | null;
+  handle: string;
 }
 
 interface SwipeableRowProps {
@@ -90,6 +92,23 @@ const SwipeableRow = React.memo(function SwipeableRow({
   );
 });
 
+function formatTimeAgo(isoString: string | undefined): string {
+  if (!isoString) return '';
+  const now = Date.now();
+  const then = new Date(isoString).getTime();
+  const diffMs = now - then;
+  if (diffMs < 0) return '';
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return '刚刚';
+  if (diffMin < 60) return `${diffMin}分钟前`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}小时前`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 7) return `${diffDay}天前`;
+  const d = new Date(isoString);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 export function ChatListScreen(): React.JSX.Element {
   const app = useApp();
   const navigation = useNavigation<Navigation>();
@@ -102,25 +121,74 @@ export function ChatListScreen(): React.JSX.Element {
   const [menuVisible, setMenuVisible] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState(false);
-  const handleCacheRef = useRef<Record<string, string>>({});
+  const [displayName, setDisplayName] = useState('');
+  const [userHandle, setUserHandle] = useState('');
+interface ProfileEntry {
+  handle: string;
+  displayName: string;
+  avatar: string | null;
+}
 
-  const resolveHandle = useCallback(async (did: string): Promise<string> => {
-    const cached = handleCacheRef.current[did];
-    if (cached) return cached;
+const handleCacheRef = useRef<Record<string, string>>({});
+const profileCacheRef = useRef<Record<string, ProfileEntry>>({});
+
+const resolveHandle = useCallback(async (did: string): Promise<string> => {
+  const cached = handleCacheRef.current[did];
+  if (cached) return cached;
+  try {
+    const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
+    const aka = doc?.alsoKnownAs;
+    if (Array.isArray(aka) && aka.length > 0) {
+      const handle = aka[0].replace(/^at:\/\//, '');
+      handleCacheRef.current[did] = handle;
+      return handle;
+    }
+  } catch (err) {
+    console.error('resolveHandle failed for', did, err);
+  }
+  handleCacheRef.current[did] = did;
+  return did;
+}, []);
+
+const resolveProfiles = useCallback(async (
+  dids: string[],
+): Promise<Record<string, ProfileEntry>> => {
+  const result: Record<string, ProfileEntry> = {};
+  const missing = dids.filter((did) => !profileCacheRef.current[did]);
+
+  if (missing.length > 0 && app.session) {
     try {
-      const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
-      const aka = doc?.alsoKnownAs;
-      if (Array.isArray(aka) && aka.length > 0) {
-        const handle = aka[0].replace(/^at:\/\//, '');
-        handleCacheRef.current[did] = handle;
-        return handle;
+      const response = await app.session.agent.app.bsky.actor.getProfiles({ actors: missing });
+      for (const profile of response.data.profiles) {
+        const entry: ProfileEntry = {
+          handle: profile.handle ?? profile.did,
+          displayName: profile.displayName ?? '',
+          avatar: profile.avatar ?? null,
+        };
+        profileCacheRef.current[profile.did] = entry;
       }
     } catch (err) {
-      console.error('resolveHandle failed for', did, err);
+      console.error('resolveProfiles: getProfiles failed', missing, err);
     }
-    handleCacheRef.current[did] = did;
-    return did;
-  }, []);
+  }
+
+  const stillMissing = dids.filter((did) => !profileCacheRef.current[did]);
+  if (stillMissing.length > 0) {
+    const handles = await Promise.all(stillMissing.map((did) => resolveHandle(did)));
+    stillMissing.forEach((did, index) => {
+      profileCacheRef.current[did] = {
+        handle: handles[index] ?? did,
+        displayName: '',
+        avatar: null,
+      };
+    });
+  }
+
+  for (const did of dids) {
+    result[did] = profileCacheRef.current[did];
+  }
+  return result;
+}, [app.session, resolveHandle]);
 
   useEffect(() => {
     const pendingInviters = app.receivedGroupInvites
@@ -152,9 +220,12 @@ export function ChatListScreen(): React.JSX.Element {
     (async () => {
       try {
         const profile = await session.agent.app.bsky.actor.getProfile({ actor: session.did });
-        if (!cancelled && profile.data.avatar) {
+        if (cancelled) return;
+        if (profile.data.avatar) {
           setAvatarUrl(profile.data.avatar);
         }
+        setDisplayName(profile.data.displayName ?? '');
+        setUserHandle(profile.data.handle ?? '');
       } catch (err) {
         console.error('Failed to fetch profile avatar:', err);
       }
@@ -171,26 +242,57 @@ export function ChatListScreen(): React.JSX.Element {
 
     const storage = app.storage;
     const myDid = app.session?.did;
+    const blockedSet = new Set(app.blockList);
     const groups = await storage.listGroups();
     const groupInfos = await storage.listGroupInfos();
     const groupInfoMap = new Map(groupInfos.map((g) => [g.groupId, g]));
 
-    const rows = await Promise.all(
-      groups.map(async (groupId) => {
-        const messages = await storage.getMessages(groupId);
-        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-        const unreadCount = messages.filter(
-          (m) => m.fromDid !== myDid && !m.readAt,
-        ).length;
-
-        const info = groupInfoMap.get(groupId);
-        const displayName = info ? info.groupName : await resolveHandle(groupId);
-        return { groupId, displayName, lastMessage, isGroup: !!info, unreadCount };
-      }),
+    const creatorDids = groupInfos.map((g) => g.creatorDid);
+    const messagesByGroup = await Promise.all(
+      groups.map(async (groupId) => ({ groupId, messages: await storage.getMessages(groupId) })),
     );
+    const messagesMap = Object.fromEntries(messagesByGroup.map((x) => [x.groupId, x.messages]));
+
+    const friendDids = groups.filter((gid) => !groupInfoMap.has(gid));
+    const profiles = friendDids.length > 0 ? await resolveProfiles(friendDids) : {};
+    const creatorHandles = creatorDids.length > 0
+      ? await Promise.all(creatorDids.map((did) => resolveHandle(did)))
+      : [];
+    const creatorHandleMap = new Map(creatorDids.map((did, i) => [did, creatorHandles[i] ?? '']));
+
+    const rows = groups.map((groupId) => {
+      const messages = messagesMap[groupId] ?? [];
+      const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+      const unreadCount = messages.filter(
+        (m) => m.fromDid !== myDid && !m.readAt && !blockedSet.has(m.fromDid),
+      ).length;
+
+      const info = groupInfoMap.get(groupId);
+      if (info) {
+        return {
+          groupId,
+          displayName: info.groupName,
+          lastMessage,
+          isGroup: true,
+          unreadCount,
+          avatarUrl: null,
+          handle: creatorHandleMap.get(info.creatorDid) ?? '',
+        };
+      }
+      const profile = profiles[groupId];
+      return {
+        groupId,
+        displayName: profile.displayName || profile.handle || groupId,
+        lastMessage,
+        isGroup: false,
+        unreadCount,
+        avatarUrl: profile.avatar,
+        handle: profile.handle,
+      };
+    });
     setConversations(rows);
     setLoading(false);
-  }, [app.storage, resolveHandle, app.chatListVersion, app.session?.did]);
+  }, [app.storage, resolveHandle, resolveProfiles, app.chatListVersion, app.session?.did, app.blockList]);
 
   useFocusEffect(
     useCallback(() => {
@@ -291,10 +393,15 @@ export function ChatListScreen(): React.JSX.Element {
 
   const renderItem = useCallback(
     ({ item }: { item: ConversationRow }): React.JSX.Element => {
-      const preview = item.lastMessage
-        ? item.lastMessage.plaintext.slice(0, 40) +
-          (item.lastMessage.plaintext.length > 40 ? '…' : '')
-        : 'No messages yet';
+      const lastFromBlocked = item.lastMessage
+        ? app.blockList.includes(item.lastMessage.fromDid)
+        : false;
+      const preview = lastFromBlocked
+        ? '已屏蔽'
+        : item.lastMessage
+          ? item.lastMessage.plaintext.slice(0, 40) +
+            (item.lastMessage.plaintext.length > 40 ? '…' : '')
+          : 'No messages yet';
       return (
         <SwipeableRow
           isOpen={openGroupId === item.groupId}
@@ -305,29 +412,56 @@ export function ChatListScreen(): React.JSX.Element {
           renderRightActions={renderRightActions}
         >
           <View style={styles.row}>
-            <View style={styles.rowHeader}>
-              <Text style={styles.rowTitle} numberOfLines={1}>
-                {item.isGroup ? '[Group] ' : ''}{item.displayName}
-              </Text>
-              {item.unreadCount > 0 && (
-                <View style={styles.unreadBadge}>
-                  <Text style={styles.unreadBadgeText}>
-                    {item.unreadCount > 99 ? '99+' : item.unreadCount}
+            <View style={styles.dmRow}>
+              <View style={styles.dmAvatarWrap}>
+                {item.avatarUrl ? (
+                  <Image
+                    source={{ uri: item.avatarUrl }}
+                    style={styles.dmAvatar}
+                    contentFit="cover"
+                    transition={300}
+                  />
+                ) : (
+                  <View style={[styles.dmAvatar, styles.dmAvatarFallback]}>
+                    <Text style={styles.dmAvatarFallbackText}>
+                      {(item.displayName[0] ?? '?').toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                {item.unreadCount > 0 && (
+                  <View style={styles.dmBadge}>
+                    <Text style={styles.unreadBadgeText}>
+                      {item.unreadCount > 99 ? '99+' : item.unreadCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.dmTextStack}>
+                <View style={styles.dmHeader}>
+                  <Text style={styles.dmName} numberOfLines={1}>
+                    {item.isGroup ? '[Group] ' : ''}{item.displayName}
                   </Text>
+                  {item.lastMessage ? (
+                    <Text style={styles.dmTime} numberOfLines={1}>
+                      {formatTimeAgo(item.lastMessage.createdAt)}
+                    </Text>
+                  ) : null}
                 </View>
-              )}
+                {item.handle ? (
+                  <Text style={styles.dmHandle} numberOfLines={1}>
+                    @{item.handle}
+                  </Text>
+                ) : null}
+                <Text style={styles.rowSubtitle} numberOfLines={1}>
+                  {preview}
+                </Text>
+              </View>
             </View>
-            <Text
-              style={styles.rowSubtitle}
-              numberOfLines={1}
-            >
-              {preview}
-            </Text>
           </View>
         </SwipeableRow>
       );
     },
-    [navigateToChat, openGroupId, app.deleteFriend, renderRightActions],
+    [navigateToChat, openGroupId, app.deleteFriend, renderRightActions, app.blockList],
   );
 
   return (
@@ -367,7 +501,7 @@ export function ChatListScreen(): React.JSX.Element {
               <TouchableOpacity
                 onPress={() => setMenuVisible((v) => !v)}
                 activeOpacity={0.8}
-                style={styles.avatarBtn}
+                style={styles.userInfoBtn}
               >
                 {avatarUrl && !avatarError ? (
                   <Image
@@ -384,6 +518,16 @@ export function ChatListScreen(): React.JSX.Element {
                     </Text>
                   </View>
                 )}
+                <View style={styles.userInfoText}>
+                  <Text style={styles.userDisplayName} numberOfLines={1}>
+                    {displayName || userHandle || app.session?.handle || ''}
+                  </Text>
+                  {userHandle ? (
+                    <Text style={styles.userHandle} numberOfLines={1}>
+                      @{userHandle}
+                    </Text>
+                  ) : null}
+                </View>
               </TouchableOpacity>
             </View>
           </>
@@ -535,6 +679,16 @@ export function ChatListScreen(): React.JSX.Element {
             <TouchableOpacity
               onPress={() => {
                 setMenuVisible(false);
+                navigation.navigate('BlockList');
+              }}
+              style={styles.menuItem}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.menuItemText}>Block List</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setMenuVisible(false);
                 app.logout().catch((err: unknown) => console.error('Logout failed:', err));
               }}
               style={styles.menuItem}
@@ -600,6 +754,29 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.body,
     fontWeight: '700',
   },
+  userInfoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 40,
+    gap: theme.spacing.xs,
+  },
+  userInfoText: {
+    justifyContent: 'center',
+    flexShrink: 1,
+    marginLeft: theme.spacing.xs,
+  },
+  userDisplayName: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+    includeFontPadding: false,
+  },
+  userHandle: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    marginTop: 1,
+    includeFontPadding: false,
+  },
   menuPopup: {
     position: 'absolute',
     top: 60,
@@ -664,6 +841,68 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: theme.typography.small,
     fontWeight: '700',
+  },
+  dmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dmAvatarWrap: {
+    position: 'relative',
+  },
+  dmBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: theme.colors.error,
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: theme.colors.background,
+  },
+  dmAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+  },
+  dmAvatarFallback: {
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dmAvatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+  },
+  dmTextStack: {
+    flex: 1,
+    marginLeft: theme.spacing.sm,
+  },
+  dmHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dmName: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  dmTime: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.small,
+    marginLeft: theme.spacing.xs,
+    flexShrink: 0,
+  },
+  dmHandle: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.small,
+    marginTop: 1,
   },
   deleteBtnContainer: {
     width: DELETE_BTN_WIDTH,

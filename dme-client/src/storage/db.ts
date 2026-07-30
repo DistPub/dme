@@ -404,6 +404,39 @@ export class DmeStorage {
   }
 
   // -----------------------------------------------------------------------
+  // 屏蔽列表（按 DID 屏蔽某人）
+  // -----------------------------------------------------------------------
+
+  async getBlockList(): Promise<string[]> {
+    const raw = await AsyncStorage.getItem(this.prefix + 'blockList');
+    if (!raw) return [];
+    return JSON.parse(raw) as string[];
+  }
+
+  async addBlockedDid(blockedDid: string): Promise<void> {
+    const list = await this.getBlockList();
+    if (list.includes(blockedDid)) return;
+    list.push(blockedDid);
+    await AsyncStorage.setItem(this.prefix + 'blockList', JSON.stringify(list));
+  }
+
+  async removeBlockedDid(blockedDid: string): Promise<void> {
+    const list = await this.getBlockList();
+    const filtered = list.filter((d) => d !== blockedDid);
+    if (filtered.length === list.length) return;
+    await AsyncStorage.setItem(this.prefix + 'blockList', JSON.stringify(filtered));
+  }
+
+  async isBlocked(did: string): Promise<boolean> {
+    const list = await this.getBlockList();
+    return list.includes(did);
+  }
+
+  async setBlockList(blockList: string[]): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + 'blockList', JSON.stringify(blockList));
+  }
+
+  // -----------------------------------------------------------------------
   // 设置
   // -----------------------------------------------------------------------
 

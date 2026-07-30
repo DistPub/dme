@@ -2,13 +2,16 @@
  * ui/GroupSettingsScreen.tsx - Group management UI.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
+  Modal,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -23,6 +26,12 @@ import type { RootStackParamList } from '../types/navigation';
 type GroupSettingsRouteProp = NativeStackScreenProps<RootStackParamList, 'GroupSettings'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
+interface MemberProfile {
+  handle: string;
+  displayName: string;
+  avatar: string | null;
+}
+
 export function GroupSettingsScreen(): React.JSX.Element {
   const app = useApp();
   const route = useRoute<GroupSettingsRouteProp>();
@@ -31,11 +40,56 @@ export function GroupSettingsScreen(): React.JSX.Element {
 
   const [groupName, setGroupName] = useState('');
   const [members, setMembers] = useState<readonly GroupMember[]>([]);
-  const [memberHandles, setMemberHandles] = useState<Record<string, string>>({});
+  const [memberProfiles, setMemberProfiles] = useState<Record<string, MemberProfile>>({});
   const [dissolved, setDissolved] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [blockTarget, setBlockTarget] = useState<{ did: string; label: string } | null>(null);
+  const profileCacheRef = useRef<Record<string, MemberProfile>>({});
+
+  const resolveProfiles = useCallback(async (
+    dids: string[],
+  ): Promise<Record<string, MemberProfile>> => {
+    const result: Record<string, MemberProfile> = {};
+    const missing = dids.filter((did) => !profileCacheRef.current[did]);
+
+    if (missing.length > 0 && app.session) {
+      try {
+        const response = await app.session.agent.app.bsky.actor.getProfiles({ actors: missing });
+        for (const profile of response.data.profiles) {
+          const entry: MemberProfile = {
+            handle: profile.handle ?? profile.did,
+            displayName: profile.displayName ?? '',
+            avatar: profile.avatar ?? null,
+          };
+          profileCacheRef.current[profile.did] = entry;
+        }
+      } catch (err) {
+        console.error('resolveProfiles: getProfiles failed', missing, err);
+      }
+    }
+
+    const stillMissing = dids.filter((did) => !profileCacheRef.current[did]);
+    if (stillMissing.length > 0) {
+      await Promise.all(
+        stillMissing.map(async (did) => {
+          try {
+            const doc = (await sharedDidResolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
+            const handle = doc?.alsoKnownAs?.[0]?.replace(/^at:\/\//, '') ?? did;
+            profileCacheRef.current[did] = { handle, displayName: '', avatar: null };
+          } catch {
+            profileCacheRef.current[did] = { handle: did, displayName: '', avatar: null };
+          }
+        }),
+      );
+    }
+
+    for (const did of dids) {
+      result[did] = profileCacheRef.current[did];
+    }
+    return result;
+  }, [app.session]);
 
   useEffect(() => {
     const loadGroupInfo = async (): Promise<void> => {
@@ -48,28 +102,14 @@ export function GroupSettingsScreen(): React.JSX.Element {
         setRemoved(info.removed ?? false);
         setLeft(info.left ?? false);
 
-        const results = await Promise.all(
-          info.members.map(async (m) => {
-            try {
-              const doc = (await sharedDidResolver.resolve(m.did)) as { alsoKnownAs?: string[] } | null;
-              if (doc?.alsoKnownAs?.[0]) {
-                return { did: m.did, handle: doc.alsoKnownAs[0].replace(/^at:\/\//, '') };
-              }
-            } catch {
-            }
-            return { did: m.did, handle: m.did };
-          }),
-        );
-        const resolved: Record<string, string> = {};
-        for (const { did, handle } of results) {
-          resolved[did] = handle;
-        }
-        setMemberHandles(resolved);
+        const memberDids = info.members.map((m) => m.did);
+        const resolved = await resolveProfiles(memberDids);
+        setMemberProfiles(resolved);
       }
       setLoading(false);
     };
     loadGroupInfo().catch((err: unknown) => console.error('loadGroupInfo failed:', err));
-  }, [app.storage, groupId, app.chatListVersion]);
+  }, [app.storage, groupId, app.chatListVersion, resolveProfiles]);
 
   const isCreator = members.some(
     (m) => m.did === app.session?.did && m.role === 'creator',
@@ -78,6 +118,19 @@ export function GroupSettingsScreen(): React.JSX.Element {
   const handleRemoveMember = useCallback(async (memberDid: string): Promise<void> => {
     await app.removeMemberFromGroup(groupId, memberDid);
   }, [app, groupId]);
+
+  const handleBlockMember = useCallback((memberDid: string, memberLabel: string): void => {
+    setBlockTarget({ did: memberDid, label: memberLabel });
+  }, []);
+
+  const confirmBlock = useCallback((): void => {
+    if (blockTarget) {
+      app.blockMember(blockTarget.did).catch((err: unknown) =>
+        console.error('blockMember failed:', err),
+      );
+    }
+    setBlockTarget(null);
+  }, [app, blockTarget]);
 
   if (loading) {
     return (
@@ -130,22 +183,75 @@ export function GroupSettingsScreen(): React.JSX.Element {
               style={styles.list}
               data={[...members]}
               keyExtractor={(item) => item.did}
-              renderItem={({ item }) => (
-                <View style={styles.memberRow}>
-                  <Text style={styles.memberName} numberOfLines={1}>
-                    {memberHandles[item.did] ?? item.displayName}
-                    {item.role === 'creator' ? ' (Creator)' : ''}
-                  </Text>
-                  {isCreator && item.role !== 'creator' && (
-                    <Button
-                      label="Remove"
-                      onPress={() => handleRemoveMember(item.did)}
-                      variant="secondary"
-                      style={styles.removeBtn}
-                    />
-                  )}
-                </View>
-              )}
+              renderItem={({ item }) => {
+                const profile = memberProfiles[item.did];
+                const displayName = profile?.displayName || profile?.handle || item.displayName;
+                const handle = profile?.handle ?? '';
+                const avatarUrl = profile?.avatar ?? null;
+                const canBlock = item.did !== app.session?.did;
+                const isBlocked = app.blockList.includes(item.did);
+                return (
+                  <View style={styles.memberRow}>
+                    <View style={styles.memberInfo}>
+                      {avatarUrl ? (
+                        <Image
+                          source={{ uri: avatarUrl }}
+                          style={styles.memberAvatar}
+                          contentFit="cover"
+                          transition={300}
+                        />
+                      ) : (
+                        <View style={[styles.memberAvatar, styles.memberAvatarFallback]}>
+                          <Text style={styles.memberAvatarFallbackText}>
+                            {(displayName[0] ?? '?').toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.memberTextStack}>
+                        <View style={styles.memberNameRow}>
+                          <Text style={styles.memberDisplayName} numberOfLines={1}>
+                            {displayName}
+                          </Text>
+                          {item.role === 'creator' && (
+                            <Text style={styles.creatorTag}> (Creator)</Text>
+                          )}
+                        </View>
+                        {handle ? (
+                          <Text style={styles.memberHandle} numberOfLines={1}>
+                            @{handle}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                    <View style={styles.memberActions}>
+                      {canBlock && !isBlocked && (
+                        <Button
+                          label="Block"
+                          onPress={() => handleBlockMember(item.did, displayName)}
+                          variant="secondary"
+                          style={styles.blockBtn}
+                        />
+                      )}
+                      {canBlock && isBlocked && (
+                        <Button
+                          label="Unblock"
+                          onPress={() => app.unblockMember(item.did)}
+                          variant="secondary"
+                          style={styles.blockBtn}
+                        />
+                      )}
+                      {isCreator && item.role !== 'creator' && (
+                        <Button
+                          label="Remove"
+                          onPress={() => handleRemoveMember(item.did)}
+                          variant="secondary"
+                          style={styles.removeBtn}
+                        />
+                      )}
+                    </View>
+                  </View>
+                );
+              }}
             />
 
             {isCreator && (
@@ -181,6 +287,40 @@ export function GroupSettingsScreen(): React.JSX.Element {
           </>
         )}
       </View>
+
+      <Modal
+        visible={blockTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBlockTarget(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setBlockTarget(null)}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>屏蔽成员</Text>
+            <Text style={styles.modalMessage}>
+              屏蔽 {blockTarget?.label}? 屏蔽后将不再接收该成员的消息。
+            </Text>
+            <View style={styles.modalButtons}>
+              <Button
+                label="取消"
+                onPress={() => setBlockTarget(null)}
+                variant="secondary"
+                style={styles.modalBtn}
+              />
+              <Button
+                label="屏蔽"
+                onPress={confirmBlock}
+                variant="primary"
+                style={styles.modalBtn}
+              />
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -223,19 +363,67 @@ const styles = StyleSheet.create({
   memberRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingVertical: theme.spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
-  memberName: {
+  memberInfo: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  memberAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  memberAvatarFallback: {
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  memberAvatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+  },
+  memberTextStack: {
+    flex: 1,
+  },
+  memberNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  memberDisplayName: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.body,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  creatorTag: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.caption,
+  },
+  memberHandle: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.small,
+    marginTop: 1,
+  },
+  memberActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   removeBtn: {
     width: 80,
     height: 36,
+    marginLeft: theme.spacing.xs,
+  },
+  blockBtn: {
+    width: 70,
+    height: 36,
+    marginLeft: theme.spacing.xs,
   },
   fullButton: {
     width: '100%',
@@ -253,5 +441,37 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.body,
     textAlign: 'center',
     marginTop: theme.spacing.xl,
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalCard: {
+    width: 300,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing.md,
+  },
+  modalTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.heading,
+    fontWeight: '700',
+    marginBottom: theme.spacing.sm,
+  },
+  modalMessage: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.body,
+    marginBottom: theme.spacing.md,
+    lineHeight: 22,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  modalBtn: {
+    flex: 1,
+    height: 44,
   },
 });

@@ -25,6 +25,7 @@ import type { StoredMessage } from '../storage/db';
 import type { GroupInviteRequest } from '../protocol/group-message';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 import * as Clipboard from 'expo-clipboard';
+import { Image } from 'expo-image';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -46,13 +47,19 @@ export function ChatViewScreen(): React.JSX.Element {
     respondToGroupInvite,
     markConversationAsRead,
     chatListVersion,
+    blockList,
   } = app;
 
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [displayName, setDisplayName] = useState(isGroup ? 'Loading...' : conversationId);
+  const [groupCreatorHandle, setGroupCreatorHandle] = useState('');
+  const [friendAvatarUrl, setFriendAvatarUrl] = useState<string | null>(null);
+  const [friendAvatarError, setFriendAvatarError] = useState(false);
+  const [friendHandle, setFriendHandle] = useState('');
   const [senderHandles, setSenderHandles] = useState<Record<string, string>>({});
+  const senderProfileCacheRef = useRef<Record<string, { displayName: string; handle: string }>>({});
   const [dissolved, setDissolved] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
@@ -62,13 +69,13 @@ export function ChatViewScreen(): React.JSX.Element {
   const [actionMenuLayout, setActionMenuLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
-  const resolvedDidsRef = useRef<Set<string>>(new Set());
 
   const loadMessages = useCallback(async (): Promise<void> => {
     if (!storage) return;
     const msgs = await storage.getMessages(conversationId);
-    setMessages(msgs);
-  }, [storage, conversationId]);
+    const blockedSet = new Set(blockList);
+    setMessages(msgs.filter((m) => !blockedSet.has(m.fromDid)));
+  }, [storage, conversationId, blockList]);
 
   useFocusEffect(
     useCallback(() => {
@@ -89,39 +96,54 @@ export function ChatViewScreen(): React.JSX.Element {
   }, [chatListVersion, loadMessages]);
 
   useEffect(() => {
-    if (!isGroup || !storage) return;
+    if (!isGroup || !storage || !session) return;
     const unresolvedDids = [...new Set(messages.map((m) => m.fromDid))]
-      .filter((did) => did !== session?.did && !resolvedDidsRef.current.has(did));
+      .filter((did) => did !== session?.did && !senderProfileCacheRef.current[did]);
     if (unresolvedDids.length === 0) return;
 
     let cancelled = false;
     (async () => {
-      const results = await Promise.all(
-        unresolvedDids.map(async (did) => {
-          resolvedDidsRef.current.add(did);
-          try {
-            const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
-            return {
-              did,
-              handle: doc?.alsoKnownAs?.[0]
-                ? doc.alsoKnownAs[0].replace(/^at:\/\//, '')
-                : did,
+      const missing = unresolvedDids.filter((did) => !senderProfileCacheRef.current[did]);
+      if (missing.length > 0) {
+        try {
+          const response = await session.agent.app.bsky.actor.getProfiles({ actors: missing });
+          for (const profile of response.data.profiles) {
+            senderProfileCacheRef.current[profile.did] = {
+              displayName: profile.displayName ?? '',
+              handle: profile.handle ?? profile.did,
             };
-          } catch {
-            return { did, handle: did };
           }
-        }),
-      );
+        } catch (err) {
+          console.error('Failed to batch resolve sender profiles', missing, err);
+        }
+      }
+
+      const stillMissing = unresolvedDids.filter((did) => !senderProfileCacheRef.current[did]);
+      if (stillMissing.length > 0) {
+        await Promise.all(
+          stillMissing.map(async (did) => {
+            try {
+              const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
+              const handle = doc?.alsoKnownAs?.[0]?.replace(/^at:\/\//, '') ?? did;
+              senderProfileCacheRef.current[did] = { displayName: '', handle };
+            } catch {
+              senderProfileCacheRef.current[did] = { displayName: '', handle: did };
+            }
+          }),
+        );
+      }
+
       if (!cancelled) {
         const resolved: Record<string, string> = {};
-        for (const { did, handle } of results) {
-          resolved[did] = handle;
+        for (const did of unresolvedDids) {
+          const p = senderProfileCacheRef.current[did];
+          resolved[did] = p.displayName || p.handle || did;
         }
         setSenderHandles((prev) => ({ ...prev, ...resolved }));
       }
     })();
     return () => { cancelled = true; };
-  }, [messages, isGroup, storage, session?.did]);
+  }, [messages, isGroup, storage, session]);
 
   useEffect(() => {
     if (isGroup) {
@@ -130,9 +152,17 @@ export function ChatViewScreen(): React.JSX.Element {
         const info = await storage.getGroupInfo(conversationId);
         if (info) {
           setDisplayName(info.groupName);
-        setDissolved(info.dissolved ?? false);
-        setRemoved(info.removed ?? false);
-        setLeft(info.left ?? false);
+          setDissolved(info.dissolved ?? false);
+          setRemoved(info.removed ?? false);
+          setLeft(info.left ?? false);
+          try {
+            const creatorDoc = (await sharedDidResolver.resolve(info.creatorDid)) as DidDocWithHandle | null;
+            if (creatorDoc?.alsoKnownAs?.[0]) {
+              setGroupCreatorHandle(creatorDoc.alsoKnownAs[0].replace(/^at:\/\//, ''));
+            }
+          } catch (err) {
+            console.error('Failed to resolve creator handle for', info.creatorDid, err);
+          }
         }
       };
       loadGroupName().catch((err: unknown) => console.error('loadGroupName failed:', err));
@@ -141,16 +171,36 @@ export function ChatViewScreen(): React.JSX.Element {
       (async () => {
         try {
           const doc = (await sharedDidResolver.resolve(conversationId)) as DidDocWithHandle | null;
-          if (!cancelled && doc?.alsoKnownAs?.[0]) {
-            setDisplayName(doc.alsoKnownAs[0].replace(/^at:\/\//, ''));
+          if (cancelled) return;
+          if (doc?.alsoKnownAs?.[0]) {
+            const handle = doc.alsoKnownAs[0].replace(/^at:\/\//, '');
+            setDisplayName(handle);
+            setFriendHandle(handle);
           }
         } catch (err) {
           console.error('Failed to resolve handle for', conversationId, err);
         }
+        if (!cancelled && session) {
+          try {
+            const profile = await session.agent.app.bsky.actor.getProfile({ actor: conversationId });
+            if (cancelled) return;
+            if (profile.data.displayName) {
+              setDisplayName(profile.data.displayName);
+            }
+            if (profile.data.handle) {
+              setFriendHandle(profile.data.handle);
+            }
+            if (profile.data.avatar) {
+              setFriendAvatarUrl(profile.data.avatar);
+            }
+          } catch (err) {
+            console.error('Failed to fetch friend profile for', conversationId, err);
+          }
+        }
       })();
       return () => { cancelled = true; };
     }
-  }, [conversationId, isGroup, storage, chatListVersion]);
+  }, [conversationId, isGroup, storage, chatListVersion, session]);
 
   const onSend = useCallback(async (): Promise<void> => {
     const trimmed = text.trim();
@@ -292,17 +342,59 @@ export function ChatViewScreen(): React.JSX.Element {
           variant="secondary"
           style={styles.backBtn}
         />
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {displayName}
-        </Text>
-        {isGroup && (
-          <TouchableOpacity
-            onPress={() => navigation.navigate('GroupSettings', { groupId: conversationId })}
-            style={styles.settingsBtn}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.settingsIcon}>⋮</Text>
-          </TouchableOpacity>
+        {isGroup ? (
+          <View style={styles.friendInfo}>
+            <View style={[styles.friendAvatar, styles.friendAvatarFallback]}>
+              <Text style={styles.friendAvatarFallbackText}>
+                {(displayName[0] ?? '?').toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.friendInfoText}>
+              <Text style={styles.friendDisplayName} numberOfLines={1}>
+                [Group] {displayName}
+              </Text>
+              {groupCreatorHandle ? (
+                <Text style={styles.friendHandle} numberOfLines={1}>
+                  @{groupCreatorHandle}
+                </Text>
+              ) : null}
+            </View>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('GroupSettings', { groupId: conversationId })}
+              style={styles.settingsBtn}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.settingsIcon}>⋮</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.friendInfo}>
+            {friendAvatarUrl && !friendAvatarError ? (
+              <Image
+                source={{ uri: friendAvatarUrl }}
+                style={styles.friendAvatar}
+                contentFit="cover"
+                transition={300}
+                onError={() => setFriendAvatarError(true)}
+              />
+            ) : (
+              <View style={[styles.friendAvatar, styles.friendAvatarFallback]}>
+                <Text style={styles.friendAvatarFallbackText}>
+                  {(displayName[0] ?? '?').toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <View style={styles.friendInfoText}>
+              <Text style={styles.friendDisplayName} numberOfLines={1}>
+                {displayName}
+              </Text>
+              {friendHandle ? (
+                <Text style={styles.friendHandle} numberOfLines={1}>
+                  @{friendHandle}
+                </Text>
+              ) : null}
+            </View>
+          </View>
         )}
       </View>
 
@@ -397,6 +489,45 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.body,
     fontWeight: '600',
     marginLeft: theme.spacing.sm,
+  },
+  friendInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: theme.spacing.sm,
+    gap: theme.spacing.sm,
+  },
+  friendAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  friendAvatarFallback: {
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  friendAvatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+  },
+  friendInfoText: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  friendDisplayName: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+    includeFontPadding: false,
+  },
+  friendHandle: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    marginTop: 1,
+    includeFontPadding: false,
   },
   list: {
     flex: 1,

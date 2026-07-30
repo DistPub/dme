@@ -10,6 +10,7 @@ export type RootStackParamList = {
   Settings: undefined;
   CreateGroup: { groupId?: string } | undefined;
   GroupSettings: { groupId: string };
+  BlockList: undefined;
 };
 
 /** DID 文档中用于 handle 解析的最小结构。 */

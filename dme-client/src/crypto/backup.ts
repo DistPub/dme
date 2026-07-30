@@ -32,7 +32,7 @@ const SALT_LENGTH = 16;
 /** AES-GCM nonce 长度（字节）。 */
 const NONCE_LENGTH = 12;
 
-/** 完整备份数据：身份密钥 + MLS 会话 + KeyPackage 池 + 群聊元数据。 */
+/** 完整备份数据：身份密钥 + MLS 会话 + KeyPackage 池 + 群聊元数据 + 屏蔽列表。 */
 export interface FullBackupData {
   /** Ed25519 + X25519 双密钥对。 */
   identity: IdentityKeys;
@@ -42,6 +42,8 @@ export interface FullBackupData {
   keyPackagePool: KeyPackagePoolEntry[];
   /** 群聊元数据列表。 */
   groupInfos: GroupInfo[];
+  /** 屏蔽的 DID 列表。 */
+  blockList: string[];
 }
 
 /** JSON 序列化时的中间结构（Uint8Array 转 base64url）。 */
@@ -53,6 +55,7 @@ interface SerializedBackup {
   mlsSessions: Record<string, string>;
   keyPackagePool: KeyPackagePoolEntry[];
   groupInfos: GroupInfo[];
+  blockList: string[];
 }
 
 /**
@@ -74,6 +77,7 @@ function serializeFullBackupData(data: FullBackupData): string {
     mlsSessions: data.mlsSessions,
     keyPackagePool: data.keyPackagePool,
     groupInfos: data.groupInfos,
+    blockList: data.blockList,
   };
   return JSON.stringify(serialized);
 }
@@ -98,6 +102,7 @@ function deserializeFullBackupData(json: string): FullBackupData {
     mlsSessions: obj.mlsSessions,
     keyPackagePool: obj.keyPackagePool,
     groupInfos: obj.groupInfos,
+    blockList: obj.blockList ?? [],
   };
 }
 

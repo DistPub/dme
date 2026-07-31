@@ -35,6 +35,7 @@ import { QrScanScreen } from './src/ui/QrScanScreen';
 import { SettingsScreen } from './src/ui/SettingsScreen';
 import { CreateGroupScreen } from './src/ui/CreateGroupScreen';
 import { GroupSettingsScreen } from './src/ui/GroupSettingsScreen';
+import { DmSettingsScreen } from './src/ui/DmSettingsScreen';
 import { BlockListScreen } from './src/ui/BlockListScreen';
 import type { RootStackParamList } from './src/types/navigation';
 
@@ -127,6 +128,7 @@ function NavigationRoot(): React.JSX.Element {
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="CreateGroup" component={CreateGroupScreen} />
         <Stack.Screen name="GroupSettings" component={GroupSettingsScreen} />
+        <Stack.Screen name="DmSettings" component={DmSettingsScreen} />
         <Stack.Screen name="BlockList" component={BlockListScreen} />
       </Stack.Navigator>
     </NavigationContainer>

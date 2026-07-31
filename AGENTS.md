@@ -72,13 +72,14 @@ dme/
 | 消息提示音 | `dme-client/src/utils/sound.ts`（运行时生成 3 声 880Hz WAV；Web 用 Web Audio API，Native 用 expo-av） |
 | 创建群聊 | `dme-client/src/ui/CreateGroupScreen.tsx` |
 | 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx`（成员行头像+昵称+@handle；Block 按钮弹模态确认；已 block 成员显示 Unblock） |
+| 私聊管理 | `dme-client/src/ui/DmSettingsScreen.tsx`（对方头像+昵称+@handle；Block 按钮弹模态确认；已 block 显示取消屏蔽） |
 | 屏蔽列表 | `dme-client/src/ui/BlockListScreen.tsx`（头像+昵称+@handle+Unblock） |
 | 表情反应协议 | `dme-client/src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `dme-client/src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions + 群聊头像 | `dme-client/src/ui/MessageBubble.tsx`（群聊消息双列布局：头像列 + 内容列(昵称+@handle+气泡+reactions)） |
 | 表情选择器 | `dme-client/src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 消息操作菜单 | `dme-client/src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
-| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle，群聊 头像占位+[Group] 群名+@creator handle + ⋮；群聊消息行双列布局：发言人头像单独成列，收到的消息左侧头像+昵称+@handle，自己发的消息右侧头像） |
+| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle + ⋮（跳转私聊管理），群聊 头像占位+[Group] 群名+@creator handle + ⋮（跳转群管理）；群聊消息行双列布局：发言人头像单独成列，收到的消息左侧头像+昵称+@handle，自己发的消息右侧头像） |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
@@ -163,6 +164,7 @@ dme/
 ## 屏蔽列表
 
 - 入口：主页头像弹出菜单 → `Block List` 屏幕（`BlockListScreen`）
+- 私聊管理页可 Block（弹模态确认，标题「屏蔽用户」，模态中 handle 渲染为 `@xxx`）；已 block 显示取消屏蔽（直接执行）
 - 群管理页成员行可 Block（弹模态确认，标题「屏蔽成员」，模态中 handle 渲染为 `@xxx`）；已 block 成员显示 Unblock（直接执行）
 - 屏蔽列表行展示：头像 + 昵称 + @handle + Unblock 按钮
 - `handleIncomingMessage` 入口处检查 `app.blockList`，命中则跳过该消息存储（poller 仍标记 queueId 已处理）

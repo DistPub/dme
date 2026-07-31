@@ -421,6 +421,13 @@ export function ChatViewScreen(): React.JSX.Element {
                 </Text>
               ) : null}
             </View>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('DmSettings', { friendDid: conversationId })}
+              style={styles.settingsBtn}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.settingsIcon}>⋮</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>

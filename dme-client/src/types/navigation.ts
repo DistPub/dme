@@ -10,6 +10,7 @@ export type RootStackParamList = {
   Settings: undefined;
   CreateGroup: { groupId?: string } | undefined;
   GroupSettings: { groupId: string };
+  DmSettings: { friendDid: string };
   BlockList: undefined;
 };
 

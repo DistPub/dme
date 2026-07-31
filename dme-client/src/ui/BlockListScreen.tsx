@@ -1,11 +1,12 @@
 /**
  * ui/BlockListScreen.tsx - Shows all DIDs the user has blocked.
  *
- * Mirrors SettingsScreen's container/skeleton. Resolves each blocked DID's
- * handle via sharedDidResolver (in parallel) with a per-DID cache ref so
- * re-renders don't re-resolve. Each row exposes an Unblock button that calls
- * app.unblockMember; the context's blockList state auto-updates, which
- * re-renders this screen via the focus effect.
+ * Two-phase rendering: builds rows from profileCacheRef immediately (fallback
+ * to DID) so the list renders without blocking on network, then async-fetches
+ * profiles via getProfiles + sharedDidResolver and updates rows via functional
+ * setRows. Each row exposes an Unblock button that calls app.unblockMember; the
+ * context's blockList state auto-updates, which re-renders this screen via the
+ * focus effect.
  */
 
 import React, { useCallback, useRef, useState } from 'react';
@@ -97,24 +98,44 @@ export function BlockListScreen(): React.JSX.Element {
 
   useFocusEffect(
     useCallback(() => {
+      const list = [...app.blockList];
+
+      const initialRows = list.map((did) => {
+        const cached = profileCacheRef.current[did];
+        return {
+          did,
+          handle: cached?.handle ?? did,
+          displayName: cached?.displayName ?? '',
+          avatarUrl: cached?.avatar ?? null,
+        };
+      });
+      setRows(initialRows);
+      setLoading(false);
+
+      if (list.length === 0) return;
       let cancelled = false;
-      setLoading(true);
       (async () => {
-        const list = [...app.blockList];
-        const profiles = list.length > 0 ? await resolveProfiles(list) : {};
-        const results = list.map((did) => {
-          const p = profiles[did];
-          return { did, handle: p.handle, displayName: p.displayName, avatarUrl: p.avatar };
-        });
-        if (!cancelled) {
-          setRows(results);
-          setLoading(false);
-        }
+        const profiles = await resolveProfiles(list);
+        if (cancelled) return;
+        setRows((prev) =>
+          prev.map((row) => {
+            const p = profiles[row.did];
+            if (!p) return row;
+            const handle = p.handle ?? row.handle;
+            const displayName = p.displayName || row.displayName;
+            const avatarUrl = p.avatar ?? row.avatarUrl;
+            if (
+              handle === row.handle &&
+              displayName === row.displayName &&
+              avatarUrl === row.avatarUrl
+            ) {
+              return row;
+            }
+            return { did: row.did, handle, displayName, avatarUrl };
+          }),
+        );
       })().catch((err: unknown) => {
-        if (!cancelled) {
-          console.error('load block list failed:', err);
-          setLoading(false);
-        }
+        console.error('load block list failed:', err);
       });
       return () => {
         cancelled = true;

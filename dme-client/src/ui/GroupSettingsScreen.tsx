@@ -45,7 +45,9 @@ export function GroupSettingsScreen(): React.JSX.Element {
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [blockTarget, setBlockTarget] = useState<{ did: string; label: string } | null>(null);
+  const [blockTarget, setBlockTarget] = useState<
+    { did: string; displayName: string; handle: string } | null
+  >(null);
   const profileCacheRef = useRef<Record<string, MemberProfile>>({});
 
   const resolveProfiles = useCallback(async (
@@ -132,9 +134,12 @@ export function GroupSettingsScreen(): React.JSX.Element {
     await app.removeMemberFromGroup(groupId, memberDid);
   }, [app, groupId]);
 
-  const handleBlockMember = useCallback((memberDid: string, memberLabel: string): void => {
-    setBlockTarget({ did: memberDid, label: memberLabel });
-  }, []);
+  const handleBlockMember = useCallback(
+    (memberDid: string, displayName: string, handle: string): void => {
+      setBlockTarget({ did: memberDid, displayName, handle });
+    },
+    [],
+  );
 
   const confirmBlock = useCallback((): void => {
     if (blockTarget) {
@@ -240,7 +245,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
                       {canBlock && !isBlocked && (
                         <Button
                           label="Block"
-                          onPress={() => handleBlockMember(item.did, displayName)}
+                          onPress={() => handleBlockMember(item.did, displayName, handle)}
                           variant="secondary"
                           style={styles.blockBtn}
                         />
@@ -315,7 +320,12 @@ export function GroupSettingsScreen(): React.JSX.Element {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>屏蔽成员</Text>
             <Text style={styles.modalMessage}>
-              屏蔽 {blockTarget?.label}? 屏蔽后将不再接收该成员的消息。
+              屏蔽 {blockTarget?.handle
+                ? blockTarget.handle === blockTarget.displayName
+                  ? `@${blockTarget.handle}`
+                  : `${blockTarget.displayName}（@${blockTarget.handle}）`
+                : blockTarget?.displayName
+              }? 屏蔽后将不再接收该成员的消息。
             </Text>
             <View style={styles.modalButtons}>
               <Button

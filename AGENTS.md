@@ -163,7 +163,7 @@ dme/
 ## 屏蔽列表
 
 - 入口：主页头像弹出菜单 → `Block List` 屏幕（`BlockListScreen`）
-- 群管理页成员行可 Block（弹模态确认，标题「屏蔽成员」）；已 block 成员显示 Unblock（直接执行）
+- 群管理页成员行可 Block（弹模态确认，标题「屏蔽成员」，模态中 handle 渲染为 `@xxx`）；已 block 成员显示 Unblock（直接执行）
 - 屏蔽列表行展示：头像 + 昵称 + @handle + Unblock 按钮
 - `handleIncomingMessage` 入口处检查 `app.blockList`，命中则跳过该消息存储（poller 仍标记 queueId 已处理）
 - `ChatViewScreen.loadMessages` 在内存中过滤 `m.fromDid ∈ blockList` 的消息

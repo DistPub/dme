@@ -30,6 +30,7 @@ dme-server/
 |---|---|
 | 加 HTTP 端点 | `internal/server/server.go` `Handler()` |
 | 改存储 TTL | `internal/store/store.go` `EnvelopeTTL` 常量 |
+| 改 Envelope struct | `internal/store/store.go` `Envelope` + `internal/jetstream/consumer.go` `envelopeRecord`（含 `BlobCids []string`） |
 | 改 GC 策略 | `internal/store/store.go` `gcThreshold` / `gcInterval` |
 | 改 Jetstream 过滤 | `internal/jetstream/consumer.go` `processEvent()` |
 | 改重连退避 | `internal/jetstream/consumer.go` `Start()` backoff 数组 |
@@ -45,8 +46,9 @@ dme-server/
 
 **POST /xrpc/dme.batch.get**:
 - 请求: `{"queueIds": ["hex...", ...]}`
-- 响应: `{"envelopes": [{queueId, payload, createdAt, ratchetEpoch?}]}`
+- 响应: `{"envelopes": [{queueId, payload, createdAt, ratchetEpoch?, blobCids?}]}`
 - 过期/不存在 queueId 静默跳过，空结果返回 `[]` 非 `null`
+- `blobCids` 字段可选，仅文件 envelope record 携带（Go JSON 自动 marshal/unmarshal，零业务逻辑）
 - CORS 全开（`Access-Control-Allow-Origin: *`）
 
 ## 关键参数

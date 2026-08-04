@@ -19,7 +19,7 @@ DME (Decentralized Message Envelope) 是基于 AT Protocol (Bluesky) 的端到�
 dme/
 ├── dme-client/     Expo + RN Skia 移动 App（TS strict, Bun）
 ├── dme-server/     Go AppView - Jetstream 消费 + BadgerDB KV + 批量盲查
-└── dme-gateway/    Cloudflare Worker - 反向代理（47 行，0 运行时依赖）
+├── dme-gateway/    Cloudflare Worker - 反向代理 + blob CDN 缓存
 ```
 
 ## 数据流
@@ -42,6 +42,14 @@ dme/
 
 收消息:
   Client 轮询 batchSize 个 future queueId -> gateway -> dme-server batchGet -> 返回密文 -> 本地解密
+
+发文件:
+  Client 逐块(5MB) AES-256-GCM 加密 -> 每块 uploadBlob 到 PDS -> 创建 file envelope record(含 blobCids)
+  -> MLS 加密 file manifest(含 fileKey) -> PDS createRecord -> Jetstream -> dme-server 存入 BadgerDB
+
+收文件:
+  Client poller 解密 MLS manifest -> batchGetEnvelopes 拿 blobCids -> 逐片 GET gateway blob CDN
+  -> AES-256-GCM 解密 -> SHA-256 验证 -> expo-file-system 存本地
 ```
 
 ## 快速定位
@@ -84,6 +92,12 @@ dme/
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
 | 网关代理 | `dme-gateway/src/index.ts` |
+| 文件加密 | `dme-client/src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
+| 文件协议类型 | `dme-client/src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
+| 文件发送/下载 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `downloadFile`） |
+| 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片） |
+| PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
+| Gateway blob CDN | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` 端点 + CF 缓存） |
 
 ## 关键代码符号
 
@@ -145,6 +159,17 @@ dme/
 | `Store` | struct | store.go | BadgerDB Put/Get/GetBatch |
 | `Consumer` | struct | consumer.go | Jetstream WebSocket 消费 |
 | `Handler` | method | server.go | HTTP 路由 + CORS |
+| `sendFileMessage` | action | AppContext.tsx | 逐块读取文件 -> AES-256-GCM 加密 -> uploadBlob -> 创建 file envelope -> MLS 加密 manifest 发送 |
+| `downloadFile` | action | AppContext.tsx | 盲查 file envelope 拿 blobCids -> gateway CDN 下载 -> 解密 -> SHA-256 验证 -> 存本地 |
+| `encryptChunk`/`decryptChunk` | func | file-crypto.ts | 单片 AES-256-GCM 加解密，nonce = fileId 前 8 字节 + chunkIndex 4 字节 BE |
+| `generateFileId`/`generateFileKey` | func | file-crypto.ts | 随机 16 字节 fileId + 32 字节 fileKey |
+| `deriveFileQueueId` | func | file-crypto.ts | SHA-256("dme-file:" + fileIdHex) -> base64url，盲查 queueId |
+| `resolvePdsUrl` | func | did.ts | DID 解析 -> `AtprotoPersonalDataServer` serviceEndpoint |
+| `FileManifestMessage` | interface | types.ts | E2E 加密文件清单（type: 'file'，含 fileKey/fileId/sha256/mimeType 等） |
+| `FileMeta` | interface | types.ts | 本地文件元数据（含 downloadStatus: pending/downloading/ready/failed） |
+| `FileMessageBubble` | component | FileMessageBubble.tsx | 文件消息气泡：图片缩略图/视频播放/文件卡片+下载状态 |
+| `getServerUrl` | method | pds.ts | 暴露 DmePds.serverUrl 供 downloadFile 构造 gateway blob URL |
+| `updateFileMessageMeta` | method | db.ts | 局部更新某条文件消息的 fileMeta（如 downloadStatus/localPath） |
 
 ## 群聊协议
 
@@ -160,6 +185,36 @@ dme/
 | `group_dissolved` | 群主 | 所有成员 | 群组解散通知 |
 | `group_member_removed` | 群主 | 被移除成员 | 移除通知 |
 | `group_member_left` | 离开成员 | 其他成员 | 离开通知 |
+
+## 文件发送协议
+
+文件通过 PDS blob 存储 + Gateway CDN 缓存 + MLS manifest 加密信令传输：
+
+| 阶段 | 说明 |
+|---|---|
+| 加密 | 发送方生成随机 32 字节 fileKey，逐块 5MB AES-256-GCM 加密，nonce = fileId 前 8 字节 + chunkIndex 4 字节大端 |
+| 上传 | 每块作为 PDS blob 上传（`agent.uploadBlob`），blobCid 存入 `dme.queue.envelope` record 的 `blobCids` 字段 |
+| 信令 | file manifest（type: 'file'，含 fileKey/fileId/sha256/mimeType 等）通过 MLS application message 加密发送 |
+| 下载 | 接收方从 manifest 拿到 fileKey → `batchGetEnvelopes` 拿 blobCids → 逐片 GET gateway `/xrpc/dme.file.blob` |
+| 缓存 | Gateway 用 `caches.default` 缓存 blob 响应 7 天，群聊中后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次 |
+| 校验 | 解密后拼接 → SHA-256 验证与 manifest 一致 |
+| 图片自动下载 | `image/*` 且 ≤ 5MB（1 个 chunk）自动触发下载，其他类型手动点击 |
+
+### 文件消息类型
+
+| 类型 | 包含 | 用途 |
+|---|---|---|
+| `FileManifestMessage` | type: 'file', fileId, fileName, fileSize, mimeType, sha256, chunkCount, chunkSize, fileKey | MLS 加密传输的文件清单 |
+| `FileMeta` | fileId, fileName, fileSize, mimeType, sha256, chunkCount, chunkSize, fileKey, localPath?, downloadStatus | 本地存储的文件元数据 |
+
+### 下载状态
+
+| 状态 | 含义 |
+|---|---|
+| `pending` | 刚收到 manifest，尚未开始下载 |
+| `downloading` | 正在下载 blob 分片 |
+| `ready` | 下载完成，已解密校验并存本地 |
+| `failed` | 下载失败（重试 3 次后仍失败） |
 
 ## 屏蔽列表
 
@@ -273,6 +328,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 
 - **Lexicon key**: envelope 用 `"key": "tid"`（AT Protocol 自动生成时间戳 rkey）；backup 用 `"key": "literal"`（rkey 固定 `"self"`，putRecord upsert）
 - **Gateway IP 剥离**: 未显式实现 header 剥离，靠 CF 边缘 IP 隐式隔离（`proxy()` 只转发 body + Content-Type）
+- **Gateway blob CDN**: `/xrpc/dme.file.blob` 端点代理 PDS `com.atproto.sync.getBlob`，`caches.default` 缓存 7 天；客户端传入 `pds`/`did`/`cid` 参数；OPTIONS preflight 返回 CORS 头；群聊后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次
 - **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text），`SkiaButton.tsx` 保留但无引用
 - **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Block List/Logout 收入头像弹出菜单
 - **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染
@@ -290,4 +346,11 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **DID 解析并发**: `ChatViewScreen`/`ChatListScreen`/`GroupSettingsScreen`/`CreateGroupScreen` 中批量解析 DID 时必须用 `Promise.all`，禁止 for 循环内串行 `await`
 - **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
 - **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
+- **expo-document-picker**: 新增依赖 `expo-document-picker@~57.0.1`（Expo 52 兼容），用于文件选择（`getDocumentAsync({type: '*/*'})`），返回 `{uri, name, mimeType, size}`
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
+- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，file envelope record 的 blobCids 字段引用（PDS 可见，防止 blob GC）。fileKey 随机生成放在 MLS manifest 中，不依赖 exporter secret，跨 epoch 安全。Gateway 用 `caches.default` 缓存 blob 下载，群聊后续成员走 CF 边缘缓存。下载时 batchGetEnvelopes 返回空则指数退避重试 2s/4s/8s，最多 3 次。图片 ≤ 5MB 自动下载，其他类型手动
+- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方消息立即标记 `downloadStatus: 'ready'`（文件已在本机），接收方初始 `downloadStatus: 'pending'`
+- **文件消息 UI**: `FileMessageBubble` 按 mimeType 分支渲染（image → expo-image 缩略图，video → ▶ 按钮，audio → 🔊 图标，其他 → 📎 + 文件名 + 大小）。下载状态：pending → 点击下载，downloading → ActivityIndicator，ready → 点击打开，failed → 重试按钮
+- **文件消息预览**: ChatListScreen 最近消息 `kind === 'file'` 显示 `📎 filename`
+- **文件分片完整性**: 每片独立 AES-256-GCM 加密，nonce 由 fileId 前 8 字节 + chunkIndex 4 字节大端组成，同一 fileKey 下 nonce 不重复。解密后拼接整文件 SHA-256 与 manifest 比对
+- **文件大小限制**: 无硬限制，逐块 5MB 读取加密，内存 O(5MB)。>500MB 弹警告确认。无断点续传，任一 uploadBlob 失败则整个发送失败

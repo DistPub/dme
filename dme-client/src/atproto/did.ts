@@ -205,6 +205,24 @@ async function resolveDidDocument(
   return (await sharedDidResolver.resolve(did)) as DidDocumentLike | null;
 }
 
+/**
+ * Resolve a DID to its PDS URL by finding the AtprotoPersonalDataServer service endpoint.
+ * @param did - e.g. 'did:plc:abc123'
+ * @returns PDS serviceEndpoint string
+ * @throws Error if DID has no PDS service endpoint
+ */
+export async function resolvePdsUrl(did: string): Promise<string> {
+  const doc = await sharedDidResolver.resolve(did) as { service?: Array<{ type?: string; serviceEndpoint?: string }> };
+  if (!doc.service) {
+    throw new Error('resolvePdsUrl: no service endpoint for ' + did);
+  }
+  const pds = doc.service.find(s => s.type === 'AtprotoPersonalDataServer')?.serviceEndpoint;
+  if (!pds) {
+    throw new Error('resolvePdsUrl: no AtprotoPersonalDataServer for ' + did);
+  }
+  return pds;
+}
+
 export function getDidMethod(did: string): 'plc' | 'web' | 'other' {
   if (did.startsWith('did:plc:')) return 'plc';
   if (did.startsWith('did:web:')) return 'web';

@@ -42,7 +42,47 @@ export interface DmeEnvelope {
    * commit/welcome group management operations.
    */
   messageType?: MessageType;
+
+  /**
+   * PDS blob CIDs for file chunks. Present only on envelopes carrying
+   * file chunks; kept in the record to prevent PDS blob garbage
+   * collection while the ciphertext is still within its TTL.
+   */
+  blobCids?: string[];
 }
+
+/** File download status. */
+export type FileDownloadStatus = 'pending' | 'downloading' | 'ready' | 'failed';
+
+/** Metadata for file messages stored locally. Stored in StoredMessage.fileMeta. */
+export interface FileMeta {
+  readonly fileId: string;
+  readonly fileName: string;
+  readonly fileSize: number;
+  readonly mimeType: string;
+  readonly sha256: string;
+  readonly chunkCount: number;
+  readonly chunkSize: number;
+  readonly fileKey: string; // base64url-encoded 32-byte random key
+  readonly localPath?: string; // filled after download
+  readonly downloadStatus: FileDownloadStatus;
+}
+
+/** Encrypted file manifest sent via MLS application message. */
+export interface FileManifestMessage {
+  readonly type: 'file';
+  readonly fileId: string;
+  readonly fileName: string;
+  readonly fileSize: number;
+  readonly mimeType: string;
+  readonly sha256: string;
+  readonly chunkCount: number;
+  readonly chunkSize: number;
+  readonly fileKey: string; // base64url-encoded
+}
+
+/** Type discriminator for file manifest messages. */
+export const FILE_MANIFEST_TYPE = 'file' as const;
 
 /**
  * The Lexicon NSID (Namespaced Identifier) for the envelope record.

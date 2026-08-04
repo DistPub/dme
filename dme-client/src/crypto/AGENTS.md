@@ -7,7 +7,7 @@
 
 # dme-client/src/crypto
 
-MLS (RFC 9420) 加密模块。9 个文件。使用 ts-mls + @noble 库（非 WebCrypto，因 Safari < 17 不支持 X25519）。
+MLS (RFC 9420) 加密模块。10 个文件。使用 ts-mls + @noble 库（非 WebCrypto，因 Safari < 17 不支持 X25519）。
 
 ## 快速定位
 
@@ -21,6 +21,7 @@ MLS (RFC 9420) 加密模块。9 个文件。使用 ts-mls + @noble 库（非 Web
 | 改身份密钥管理 | `identity.ts`（Ed25519 签名 + X25519 加密双密钥对） |
 | 改身份备份 | `backup.ts`（PBKDF2+AES-GCM 加密/解密 FullBackupData） |
 | 改 did:key 编码 | `did-key.ts`（Ed25519 + X25519 编解码） |
+| 改文件加密 | `file-crypto.ts`（逐块 AES-256-GCM 加解密 + SHA-256 + queueId 派生） |
 
 ## 文件清单
 
@@ -34,7 +35,8 @@ MLS (RFC 9420) 加密模块。9 个文件。使用 ts-mls + @noble 库（非 Web
 | `identity.ts` | 131 | IdentityKeys（Ed25519 + X25519 双密钥对）+ 导出/导入 |
 | `backup.ts` | ~120 | FullBackupData 加密/解密：PBKDF2-SHA256(100k iter)+AES-256-GCM，备份范围含身份密钥+MLS会话+KeyPackage池+群聊元数据 |
 | `did-key.ts` | 150 | Ed25519 / X25519 did:key 编解码 |
-| `utils.ts` | 26 | bytesToHex / bytesToBase64url / base64urlToBytes |
+| `file-crypto.ts` | 59 | 文件逐块加密：generateFileId(16B) / generateFileKey(32B) / encryptChunk / decryptChunk / deriveFileQueueId / computeSha256 |
+| `utils.ts` | 45 | bytesToHex / hexToBytes / bytesToBase64url / base64urlToBytes / concatBytes / bytesToBase64 |
 
 ## 核心算法
 
@@ -47,6 +49,8 @@ MLS (RFC 9420) 加密模块。9 个文件。使用 ts-mls + @noble 库（非 Web
 **KeyPackage 加密**: X25519 ECDH + AES-256-GCM，接收方 X25519 公钥加密，确保仅目标可解。
 
 **密钥树索引**: ts-mls 的 `secretTree` 按**树位置**索引（0, 2, 4...），LeafIndex 需乘 2。`getExpectedGeneration(leafIndex)` 内部使用 `leafIndex * 2`。
+
+**文件加密**: 逐块 AES-256-GCM（`@noble/ciphers/aes` 的 `gcm(key, nonce).encrypt/decrypt`），fileKey 随机 32 字节，fileId 随机 16 字节。nonce = fileId 前 8 字节 + chunkIndex 4 字节大端（12 字节）。fileQueueId = SHA-256("dme-file:" + fileIdHex) -> base64url。fileKey 不从 MLS exporter secret 派生（跨 epoch 安全）。
 
 ## 约定
 

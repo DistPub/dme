@@ -15,11 +15,12 @@ import React, {
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { sha256 } from '@noble/hashes/sha256';
 import type { KeyPackage, PrivateKeyPackage } from 'ts-mls';
 
 import { DmeSession } from '../atproto/session';
 import { DmePds } from '../atproto/pds';
-import { declareKeys, getRemoteEncryptionKey, sharedDidResolver } from '../atproto/did';
+import { declareKeys, getRemoteEncryptionKey, resolvePdsUrl, sharedDidResolver } from '../atproto/did';
 import { acceptInvite, processWelcome } from '../handshake/handshake';
 import { encodeQrPayload } from '../handshake/qr-encode';
 import { DmePoller } from '../poll/poller';
@@ -38,9 +39,18 @@ import {
 import type { KeyPackagePair } from '../crypto/keypackage';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
 import { encryptBackup, decryptBackup, type FullBackupData } from '../crypto/backup';
-import { bytesToBase64url, base64urlToBytes } from '../crypto/utils';
+import { bytesToBase64url, base64urlToBytes, bytesToBase64, hexToBytes, bytesToHex, base64ToBytes } from '../crypto/utils';
+import {
+  generateFileId,
+  generateFileKey,
+  encryptChunk,
+  decryptChunk,
+  deriveFileQueueId,
+  computeSha256,
+} from '../crypto/file-crypto';
+import * as FileSystem from 'expo-file-system';
 import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY } from '../config';
-import type { DmeEnvelope } from '../protocol/types';
+import { type DmeEnvelope, type FileManifestMessage, FILE_MANIFEST_TYPE } from '../protocol/types';
 import type { ReactionMessage } from '../protocol/reaction';
 import type {
   GroupInfo,
@@ -151,6 +161,8 @@ interface AppActions {
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
+  sendFileMessage: (conversationId: string, fileUri: string, fileName: string, mimeType: string, fileSize: number) => Promise<void>;
+  downloadFile: (conversationId: string, msgId: string) => Promise<void>;
   sendReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   deleteMessage: (conversationId: string, messageId: string) => Promise<void>;
   deleteFriend: (groupId: string) => Promise<void>;
@@ -733,6 +745,113 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   processWelcomeRef.current = processReceivedWelcome;
 
+  const downloadFile = useCallback(async (
+    conversationId: string,
+    msgId: string,
+  ): Promise<void> => {
+    if (!storage || !pds) {
+      throw new Error('downloadFile: not initialized');
+    }
+
+    const msgs = await storage.getMessages(conversationId);
+    const msg = msgs.find((m) => m.id === msgId);
+    if (!msg || !msg.fileMeta) {
+      throw new Error('downloadFile: message or fileMeta not found');
+    }
+
+    const { fileMeta } = msg;
+    const fileKey = base64urlToBytes(fileMeta.fileKey);
+    const fileId = hexToBytes(fileMeta.fileId);
+
+    const retryDelays = [2000, 4000, 8000];
+    const maxAttempts = 3;
+    let attempts = 0;
+    let lastError: unknown = null;
+
+    while (attempts < maxAttempts) {
+      try {
+        const fileQueueId = await deriveFileQueueId(fileMeta.fileId);
+        const envelopes = await pds.batchGetEnvelopes([fileQueueId]);
+
+        if (envelopes.length === 0 || !envelopes[0].blobCids || envelopes[0].blobCids.length === 0) {
+          attempts++;
+          if (attempts >= maxAttempts) {
+            await storage.updateFileMessageMeta(conversationId, msgId, {
+              downloadStatus: 'failed',
+            });
+            setChatListVersion((v) => v + 1);
+            throw new Error('downloadFile: file envelope not found after retries');
+          }
+          await storage.updateFileMessageMeta(conversationId, msgId, {
+            downloadStatus: 'pending',
+          });
+          await new Promise((resolve) => setTimeout(resolve, retryDelays[attempts - 1]));
+          continue;
+        }
+
+        const blobCids = envelopes[0].blobCids!;
+        const senderPdsUrl = await resolvePdsUrl(msg.fromDid);
+        const serverUrl = pds.getServerUrl();
+
+        const decryptedChunks: Uint8Array[] = [];
+        for (let i = 0; i < blobCids.length; i++) {
+          const cid = blobCids[i]!;
+          const blobUrl = `${serverUrl}/xrpc/dme.file.blob?pds=${encodeURIComponent(senderPdsUrl)}&did=${encodeURIComponent(msg.fromDid)}&cid=${encodeURIComponent(cid)}`;
+          const response = await fetch(blobUrl);
+          if (!response.ok) {
+            throw new Error(`downloadFile: blob fetch failed ${response.status}`);
+          }
+          const encryptedBlob = new Uint8Array(await response.arrayBuffer());
+          const decrypted = await decryptChunk(encryptedBlob, fileKey, fileId, i);
+          decryptedChunks.push(decrypted);
+        }
+
+        const totalLength = decryptedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        const fullData = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of decryptedChunks) {
+          fullData.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        const computedHash = computeSha256(fullData);
+        if (computedHash !== fileMeta.sha256) {
+          throw new Error('downloadFile: SHA-256 mismatch');
+        }
+
+        const fileName = fileMeta.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const localPath = `${FileSystem.documentDirectory}${msgId}_${fileName}`;
+        const base64Data = bytesToBase64(fullData);
+        await FileSystem.writeAsStringAsync(localPath, base64Data, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+
+        await storage.updateFileMessageMeta(conversationId, msgId, {
+          localPath,
+          downloadStatus: 'ready',
+        });
+        setChatListVersion((v) => v + 1);
+        return;
+
+      } catch (err) {
+        lastError = err;
+        attempts++;
+        if (attempts >= maxAttempts) {
+          await storage.updateFileMessageMeta(conversationId, msgId, {
+            downloadStatus: 'failed',
+          });
+          setChatListVersion((v) => v + 1);
+          if (lastError instanceof Error) {
+            throw lastError;
+          }
+          throw new Error('downloadFile: unknown error');
+        }
+        console.error('downloadFile attempt failed:', err);
+        await new Promise((resolve) => setTimeout(resolve, retryDelays[attempts - 1]));
+      }
+    }
+  }, [storage, pds]);
+
   // -------------------------------------------------------------------------
   // Incoming message handler (group message parsing)
   // -------------------------------------------------------------------------
@@ -1065,6 +1184,39 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       } else {
         await msgStorage.removeReaction(msg.groupId, r.targetMessageId, msg.senderDid, r.emoji);
       }
+    } else if (msgType === FILE_MANIFEST_TYPE) {
+      const manifest = JSON.parse(msg.plaintext) as FileManifestMessage;
+      await msgStorage.putMessage({
+        id: msg.envelope.queueId,
+        fromDid: msg.senderDid,
+        toDid: userDid,
+        plaintext: msg.plaintext,
+        fileMeta: {
+          fileId: manifest.fileId,
+          fileName: manifest.fileName,
+          fileSize: manifest.fileSize,
+          mimeType: manifest.mimeType,
+          sha256: manifest.sha256,
+          chunkCount: manifest.chunkCount,
+          chunkSize: manifest.chunkSize,
+          fileKey: manifest.fileKey,
+          downloadStatus: 'pending',
+        },
+        kind: 'file',
+        createdAt: msg.envelope.createdAt,
+        sent: false,
+        conversationId: msg.groupId,
+      });
+
+      if (manifest.mimeType.startsWith('image/') && manifest.fileSize <= 5 * 1024 * 1024) {
+        void downloadFile(msg.groupId, msg.envelope.queueId).catch((err: unknown) => {
+          console.error('Auto-download failed:', err);
+        });
+      }
+
+      if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+        void playMessageSound();
+      }
     } else {
       await msgStorage.putMessage({
         id: msg.envelope.queueId,
@@ -1081,7 +1233,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
     }
     setChatListVersion((v) => v + 1);
-  }, [identityKeys, poller, pds, soundEnabled]);
+  }, [identityKeys, poller, pds, soundEnabled, downloadFile]);
 
   handleIncomingMessageRef.current = handleIncomingMessage;
 
@@ -1124,6 +1276,105 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
     await pds.createEnvelope(envelope);
 
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  const sendFileMessage = useCallback(async (
+    conversationId: string,
+    fileUri: string,
+    fileName: string,
+    mimeType: string,
+    fileSize: number,
+  ): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('sendFileMessage: not fully initialized');
+    }
+    if (fileSize > 500 * 1024 * 1024) {
+      console.warn('sendFileMessage: file > 500MB, upload may take a while');
+    }
+    const mlsSession = poller.getSession(conversationId);
+    if (!mlsSession) {
+      throw new Error(`sendFileMessage: no MLS session for ${conversationId}`);
+    }
+
+    const fileId = generateFileId();
+    const fileKey = generateFileKey();
+    const chunkSize = 5 * 1024 * 1024;
+    const hasher = sha256.create();
+    const blobCids: string[] = [];
+    let offset = 0;
+    let chunkIndex = 0;
+
+    while (offset < fileSize) {
+      const readSize = Math.min(chunkSize, fileSize - offset);
+      const base64 = await FileSystem.readAsStringAsync(fileUri, {
+        position: offset,
+        length: readSize,
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const block = base64ToBytes(base64);
+      hasher.update(block);
+      const encrypted = await encryptChunk(block, fileKey, fileId, chunkIndex);
+      const blobResult = await session.agent.uploadBlob(new Blob([new Uint8Array(encrypted)]), { encoding: 'application/octet-stream' });
+      blobCids.push(blobResult.data.blob.ref.toString());
+      offset += readSize;
+      chunkIndex++;
+    }
+
+    const fileHash = bytesToHex(hasher.digest());
+    const fileIdHex = bytesToHex(fileId);
+    const fileQueueId = await deriveFileQueueId(fileIdHex);
+
+    await pds.createEnvelope({
+      $type: 'dme.queue.envelope',
+      queueId: fileQueueId,
+      payload: '',
+      blobCids,
+      createdAt: new Date().toISOString(),
+    });
+
+    const manifestBytes = new TextEncoder().encode(JSON.stringify({
+      type: 'file',
+      fileId: fileIdHex,
+      fileName,
+      fileSize,
+      mimeType,
+      sha256: fileHash,
+      chunkCount: chunkIndex,
+      chunkSize,
+      fileKey: bytesToBase64url(fileKey),
+    } as FileManifestMessage));
+
+    const encResult = await mlsSession.encrypt(manifestBytes);
+    await storage.putMlsSession(conversationId, mlsSession.serialize());
+    await pds.createEnvelope({
+      $type: 'dme.queue.envelope',
+      queueId: encResult.queueId,
+      payload: bytesToBase64url(encResult.ciphertext),
+      createdAt: new Date().toISOString(),
+      messageType: 'application',
+    });
+    const msg: StoredMessage = {
+      id: encResult.queueId,
+      fromDid: session.did,
+      toDid: conversationId,
+      plaintext: JSON.stringify({ type: 'file', fileId: fileIdHex, fileName, fileSize, mimeType, sha256: fileHash, chunkCount: chunkIndex, chunkSize, fileKey: bytesToBase64url(fileKey) }),
+      createdAt: new Date().toISOString(),
+      sent: true,
+      kind: 'file',
+      fileMeta: {
+        fileId: fileIdHex,
+        fileName,
+        fileSize,
+        mimeType,
+        sha256: fileHash,
+        chunkCount: chunkIndex,
+        chunkSize,
+        fileKey: bytesToBase64url(fileKey),
+        downloadStatus: 'ready',
+      },
+    };
+    await storage.putMessage(msg);
     setChatListVersion((v) => v + 1);
   }, [session, storage, pds, poller]);
 
@@ -1921,7 +2172,9 @@ blockList,
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,
+      sendFileMessage,
       sendReaction,
+      downloadFile,
       deleteMessage,
       deleteFriend,
       markConversationAsRead,
@@ -1951,7 +2204,7 @@ blockList,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
-      sendMessage, sendReaction, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
+      sendMessage, sendFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,

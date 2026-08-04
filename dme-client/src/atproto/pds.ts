@@ -47,6 +47,10 @@ export class DmePds {
     this.agent.configureProxy(proxy as `did:${string}#${string}`);
   }
 
+  getServerUrl(): string {
+    return this.serverUrl;
+  }
+
   /**
    * 写入 dme.queue.envelope 记录到 Alice 的 Bluesky PDS。
    */
@@ -60,6 +64,7 @@ export class DmePds {
         payload: env.payload,
         createdAt: env.createdAt,
         ...(env.messageType ? { messageType: env.messageType } : {}),
+        ...(env.blobCids ? { blobCids: env.blobCids } : {}),
       },
     });
 

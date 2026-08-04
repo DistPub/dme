@@ -493,8 +493,10 @@ const resolveProfiles = useCallback(async (
         : item.lastMessage
           ? inviteGroupName
             ? `@${item.handle}邀请你加入群聊：${inviteGroupName}`
-            : item.lastMessage.plaintext.slice(0, 40) +
-              (item.lastMessage.plaintext.length > 40 ? '…' : '')
+            : item.lastMessage.kind === 'file' && item.lastMessage.fileMeta
+              ? `📎 ${item.lastMessage.fileMeta.fileName}`
+              : item.lastMessage.plaintext.slice(0, 40) +
+                (item.lastMessage.plaintext.length > 40 ? '…' : '')
           : 'No messages yet';
       return (
         <SwipeableRow

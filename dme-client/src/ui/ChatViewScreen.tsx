@@ -19,12 +19,14 @@ import { Button } from './Button';
 import { MessageBubble } from './MessageBubble';
 import { EmojiPicker } from './EmojiPicker';
 import { MessageActionMenu } from './MessageActionMenu';
+import { FileMessageBubble } from './FileMessageBubble';
 import { useApp } from '../state/AppContext';
 import { sharedDidResolver } from '../atproto/did';
 import type { StoredMessage } from '../storage/db';
 import type { GroupInviteRequest } from '../protocol/group-message';
 import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
 import { Image } from 'expo-image';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
@@ -41,8 +43,10 @@ export function ChatViewScreen(): React.JSX.Element {
     storage,
     session,
     sendMessage,
+    sendFileMessage,
     sendReaction,
     deleteMessage,
+    downloadFile,
     receivedGroupInvites,
     respondToGroupInvite,
     markConversationAsRead,
@@ -286,6 +290,19 @@ export function ChatViewScreen(): React.JSX.Element {
     }
   }, [deleteMessage, conversationId, loadMessages]);
 
+  const handleAttach = useCallback(async (): Promise<void> => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0]!;
+        await sendFileMessage(conversationId, asset.uri, asset.name, asset.mimeType ?? 'application/octet-stream', asset.size ?? 0);
+        await loadMessages();
+      }
+    } catch (err) {
+      console.error('File pick failed:', err);
+    }
+  }, [conversationId, sendFileMessage, loadMessages]);
+
   const canReact = !dissolved && !removed && !left;
 
   const renderItem = useCallback(
@@ -337,6 +354,20 @@ export function ChatViewScreen(): React.JSX.Element {
         );
       }
 
+      if (item.kind === 'file' && item.fileMeta) {
+        return (
+          <FileMessageBubble
+            fileMeta={item.fileMeta}
+            isOutgoing={item.fromDid === session?.did}
+            onRetry={item.fileMeta.downloadStatus === 'failed' ? () => {
+              void downloadFile(conversationId, item.id).catch((err: unknown) => {
+                console.error('Retry download failed:', err);
+              });
+            } : undefined}
+          />
+        );
+      }
+
       return (
         <MessageBubble
           text={item.plaintext}
@@ -352,7 +383,7 @@ export function ChatViewScreen(): React.JSX.Element {
         />
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile],
   );
 
   const keyExtractor = useCallback(
@@ -386,6 +417,9 @@ export function ChatViewScreen(): React.JSX.Element {
                 </Text>
               ) : null}
             </View>
+            <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
+              <Text style={styles.attachBtnText}>📎</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => navigation.navigate('GroupSettings', { groupId: conversationId })}
               style={styles.settingsBtn}
@@ -421,6 +455,9 @@ export function ChatViewScreen(): React.JSX.Element {
                 </Text>
               ) : null}
             </View>
+            <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
+              <Text style={styles.attachBtnText}>📎</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => navigation.navigate('DmSettings', { friendDid: conversationId })}
               style={styles.settingsBtn}
@@ -630,6 +667,15 @@ const styles = StyleSheet.create({
   inviteBtn: {
     flex: 1,
     height: 36,
+  },
+  attachBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attachBtnText: {
+    fontSize: 20,
   },
   dissolvedText: {
     color: theme.colors.textSecondary,

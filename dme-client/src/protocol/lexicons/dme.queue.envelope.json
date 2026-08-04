@@ -26,6 +26,11 @@
           "ratchetEpoch": {
             "type": "integer",
             "description": "Optional ratchet epoch number. Allows skipping ahead when the recipient polls future queueIds."
+          },
+          "blobCids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "PDS blob CIDs for file chunks; kept in record to prevent PDS blob GC"
           }
         }
       }

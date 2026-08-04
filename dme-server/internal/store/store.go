@@ -36,6 +36,7 @@ type Envelope struct {
 	Payload      string    `json:"payload"`
 	CreatedAt    time.Time `json:"createdAt"`
 	RatchetEpoch int       `json:"ratchetEpoch,omitempty"`
+	BlobCids     []string  `json:"blobCids,omitempty"`
 }
 
 // Store wraps BadgerDB for envelope persistence with native TTL.

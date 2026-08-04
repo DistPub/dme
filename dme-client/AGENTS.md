@@ -30,7 +30,7 @@ dme-client/
     ├── state/AppContext.tsx  # 全局状态（17 字段，28 action）
     ├── protocol/         # types.ts + group-message.ts + reaction.ts + lexicons/ JSON
     ├── utils/            # sound.ts（消息提示音，运行时生成 WAV）
-    ├── ui/               # 18 个文件（11 屏幕 + 7 组件，含 BlockListScreen + DmSettingsScreen + MessageBubble + EmojiPicker + MessageActionMenu）
+    ├── ui/               # 20 个文件（11 屏幕 + 9 组件，含 BlockListScreen + DmSettingsScreen + MessageBubble + EmojiPicker + MessageActionMenu + FileMessageBubble）
     └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
 
@@ -43,6 +43,11 @@ dme-client/
 | 改轮询逻辑 | `src/poll/poller.ts` |
 | 改存储 key | `src/storage/db.ts` |
 | 改 PDS/DID 交互 | `src/atproto/` |
+| 文件加密 | `src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
+| 文件协议类型 | `src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
+| 文件发送/下载 | `src/state/AppContext.tsx`（`sendFileMessage` + `downloadFile`） |
+| 文件消息气泡 | `src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片） |
+| PDS URL 解析 | `src/atproto/did.ts`（`resolvePdsUrl`） |
 | 改主题 | `src/ui/theme.ts` |
 | 加新加密操作 | `src/crypto/`（见 crypto/AGENTS.md） |
 | 改身份备份 | `src/crypto/backup.ts`（PBKDF2+AES-GCM 加密/解密 FullBackupData） |
@@ -58,6 +63,8 @@ dme-client/
 | 表情反应协议 | `src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions 渲染 | `src/ui/MessageBubble.tsx` |
+| 文件消息气泡 + 下载状态 | `src/ui/FileMessageBubble.tsx`（图片缩略图/视频播放/音频图标/文件卡片 + pending/downloading/ready/failed 状态） |
+| 文件选择器 | `expo-document-picker`（`getDocumentAsync({type: '*/*'})`） |
 | 表情选择器 | `src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 消息操作菜单 | `src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
 
@@ -94,7 +101,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **主题**: `theme.ts` 单一 `as const` 对象，暗色（#0a0a0a），无切换
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理
-- **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
+- **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`/`file`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble` 按 emoji 合并并显示计数
 - **屏蔽列表**: `blockList: string[]` 存储在 `AsyncStorage`，入口为 ChatList 头像菜单 + 私聊管理页（`DmSettingsScreen`）+ 群管理成员行；可 Block/Unblock；被 block 用户的消息不存储、不展示；不修改群成员关系
 - **Profile 批量获取**: 多个 DID 的 profile 必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；**ChatListScreen / GroupSettingsScreen / BlockListScreen 等首屏加载**须先读 `profileCacheRef`/`handleCacheRef` 本地缓存同步构造 rows 并立即 `setRows`/`setLoading(false)`，有缺失时再异步调用 `resolveProfiles`/`resolveHandle`，拿到结果后用 `setRows(prev => prev.map(...))` 更新，禁止同步 `await` 网络请求阻塞首屏
@@ -118,3 +125,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
 - **UI 头像布局**: ChatListScreen 顶部栏头像右侧展示昵称+@handle；会话列表 1:1/群聊行左侧头像+昵称+时间+@handle+最近消息预览；ChatViewScreen 1:1/群聊 header 左上角展示头像+昵称+@handle + ⋮ 按钮（1:1 跳转私聊管理 `DmSettingsScreen`，群聊跳转群管理 `GroupSettingsScreen`；群聊为 `[Group] 群名` + `@creatorHandle`）
 - **未读 badge**: 1:1 会话列表行 badge 浮在头像右上角（红底白边）；群聊行 badge 紧跟群名文字内联
+- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，fileKey 随机生成放在 MLS manifest 中。图片 ≤ 5MB 自动下载，其他类型手动。下载时 batchGetEnvelopes 返回空指数退避重试 2s/4s/8s（最多 3 次）。无文件大小硬限制（>500MB 弹警告确认）
+- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口）。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方下载状态 `ready`，接收方初始 `pending`
+- **文件选择器**: `expo-document-picker` 的 `getDocumentAsync({type: '*/*'})`，返回 `{assets: [{uri, name, mimeType, size}]}`
+- **文件本地存储**: 下载后以 base64 写入 `expo-file-system` documentDirectory，路径 `{msgId}_{sanitizedFileName}`

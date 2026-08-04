@@ -22,6 +22,22 @@ export default {
       return new Response('ok', { status: 200 });
     }
 
+    if (url.pathname === '/xrpc/dme.file.blob') {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          },
+        });
+      }
+      if (request.method === 'GET') {
+        return getBlob(url);
+      }
+    }
+
     if (url.pathname === '/xrpc/dme.batch.get' && request.method === 'POST') {
       return proxy(request, env);
     }
@@ -29,6 +45,52 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
 };
+
+async function getBlob(url: URL): Promise<Response> {
+  const pds = url.searchParams.get('pds');
+  const did = url.searchParams.get('did');
+  const cid = url.searchParams.get('cid');
+
+  if (!pds || !did || !cid) {
+    return new Response('Missing required params: pds, did, cid', {
+      status: 400,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+    });
+  }
+
+  const cacheKey = new Request(url.toString(), { method: 'GET' });
+  const cached = await caches.default.match(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const blobUrl = pds + '/xrpc/com.atproto.sync.getBlob?did=' + encodeURIComponent(did) + '&cid=' + encodeURIComponent(cid);
+  const upstream = await fetch(blobUrl);
+
+  if (!upstream.ok) {
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
+  const body = await upstream.arrayBuffer();
+  const response = new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'public, max-age=604800',
+    },
+  });
+
+  await caches.default.put(cacheKey, response.clone());
+
+  return response;
+}
 
 async function proxy(request: Request, env: Env): Promise<Response> {
   const body = await request.arrayBuffer();

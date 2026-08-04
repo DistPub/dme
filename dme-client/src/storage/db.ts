@@ -16,9 +16,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { IdentityKeys } from '../crypto/identity';
 import type { GroupInfo, PendingInvite } from '../protocol/group-message';
+import type { FileMeta } from '../protocol/types';
 import { DEFAULT_APPVIEW_PROXY } from '../config';
 
-export type MessageKind = 'text' | 'group_invite' | 'group_system';
+export type MessageKind = 'text' | 'group_invite' | 'group_system' | 'file';
 
 /** 表情回应。 */
 export interface Reaction {
@@ -39,6 +40,7 @@ export interface StoredMessage {
   conversationId?: string;
   readAt?: string;
   reactions?: Reaction[];
+  fileMeta?: FileMeta;
 }
 
 /** 等待接收 Welcome 的记录。 */
@@ -171,6 +173,24 @@ export class DmeStorage {
     if (changed) {
       await AsyncStorage.setItem(key, JSON.stringify(updated));
     }
+  }
+
+  async updateFileMessageMeta(
+    conversationId: string,
+    msgId: string,
+    partial: Partial<FileMeta>,
+  ): Promise<void> {
+    const key = this.prefix + `messages:${conversationId}`;
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return;
+    const messages: StoredMessage[] = JSON.parse(raw);
+    const idx = messages.findIndex(m => m.id === msgId);
+    if (idx === -1) return;
+    messages[idx] = {
+      ...messages[idx],
+      fileMeta: { ...(messages[idx].fileMeta ?? {}), ...partial } as FileMeta,
+    };
+    await AsyncStorage.setItem(key, JSON.stringify(messages));
   }
 
   async deleteMessages(groupId: string): Promise<void> {

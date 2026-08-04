@@ -56,7 +56,8 @@ type envelopeRecord struct {
 	QueueID      string `json:"queueId"`
 	Payload      string `json:"payload"`
 	CreatedAt    string `json:"createdAt"`
-	RatchetEpoch int    `json:"ratchetEpoch,omitempty"`
+	RatchetEpoch int      `json:"ratchetEpoch,omitempty"`
+	BlobCids     []string `json:"blobCids,omitempty"`
 }
 
 // New creates a Consumer for the given Jetstream URL.

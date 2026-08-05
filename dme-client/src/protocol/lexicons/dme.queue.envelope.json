@@ -29,8 +29,8 @@
           },
           "blobCids": {
             "type": "array",
-            "items": { "type": "string" },
-            "description": "PDS blob CIDs for file chunks; kept in record to prevent PDS blob GC"
+            "items": { "type": "blob" },
+            "description": "PDS blob references (standard {$type:'blob', ref:{$link}, mimeType, size}) for encrypted file chunks. Carried on the manifest envelope so the PDS recognizes and preserves the blobs (anti-GC)."
           }
         }
       }

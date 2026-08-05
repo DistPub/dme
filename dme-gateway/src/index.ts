@@ -14,35 +14,35 @@ interface Env {
   DME_SERVER_URL: string;
 }
 
+const CORS_ORIGIN = '*';
+const CORS_METHODS = 'GET, POST, OPTIONS';
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': CORS_ORIGIN,
+  'Access-Control-Allow-Methods': CORS_METHODS,
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === '/_health') {
-      return new Response('ok', { status: 200 });
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
-    if (url.pathname === '/xrpc/dme.file.blob') {
-      if (request.method === 'OPTIONS') {
-        return new Response(null, {
-          status: 204,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-          },
-        });
-      }
-      if (request.method === 'GET') {
-        return getBlob(url);
-      }
+    if (url.pathname === '/_health') {
+      return new Response('ok', { status: 200, headers: CORS_HEADERS });
+    }
+
+    if (url.pathname === '/xrpc/dme.file.blob' && request.method === 'GET') {
+      return getBlob(url);
     }
 
     if (url.pathname === '/xrpc/dme.batch.get' && request.method === 'POST') {
       return proxy(request, env);
     }
 
-    return new Response('Not Found', { status: 404 });
+    return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
   },
 };
 
@@ -104,6 +104,6 @@ async function proxy(request: Request, env: Env): Promise<Response> {
   const responseBody = await serverResponse.arrayBuffer();
   return new Response(responseBody, {
     status: serverResponse.status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }

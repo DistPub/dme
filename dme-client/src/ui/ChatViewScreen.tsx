@@ -417,9 +417,6 @@ export function ChatViewScreen(): React.JSX.Element {
                 </Text>
               ) : null}
             </View>
-            <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
-              <Text style={styles.attachBtnText}>📎</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => navigation.navigate('GroupSettings', { groupId: conversationId })}
               style={styles.settingsBtn}
@@ -455,9 +452,6 @@ export function ChatViewScreen(): React.JSX.Element {
                 </Text>
               ) : null}
             </View>
-            <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
-              <Text style={styles.attachBtnText}>📎</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => navigation.navigate('DmSettings', { friendDid: conversationId })}
               style={styles.settingsBtn}
@@ -488,6 +482,9 @@ export function ChatViewScreen(): React.JSX.Element {
         </View>
       ) : (
         <View style={styles.inputBar}>
+          <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
+            <Text style={styles.attachBtnText}>📄</Text>
+          </TouchableOpacity>
           <TextInput
             ref={inputRef}
             style={styles.input}

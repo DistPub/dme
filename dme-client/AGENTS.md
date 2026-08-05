@@ -125,7 +125,6 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
 - **UI 头像布局**: ChatListScreen 顶部栏头像右侧展示昵称+@handle；会话列表 1:1/群聊行左侧头像+昵称+时间+@handle+最近消息预览；ChatViewScreen 1:1/群聊 header 左上角展示头像+昵称+@handle + ⋮ 按钮（1:1 跳转私聊管理 `DmSettingsScreen`，群聊跳转群管理 `GroupSettingsScreen`；群聊为 `[Group] 群名` + `@creatorHandle`）
 - **未读 badge**: 1:1 会话列表行 badge 浮在头像右上角（红底白边）；群聊行 badge 紧跟群名文字内联
-- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，fileKey 随机生成放在 MLS manifest 中。图片 ≤ 5MB 自动下载，其他类型手动。下载时 batchGetEnvelopes 返回空指数退避重试 2s/4s/8s（最多 3 次）。无文件大小硬限制（>500MB 弹警告确认）
-- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口）。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方下载状态 `ready`，接收方初始 `pending`
-- **文件选择器**: `expo-document-picker` 的 `getDocumentAsync({type: '*/*'})`，返回 `{assets: [{uri, name, mimeType, size}]}`
-- **文件本地存储**: 下载后以 base64 写入 `expo-file-system` documentDirectory，路径 `{msgId}_{sanitizedFileName}`
+- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，blob 引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式）与 MLS 加密的 file manifest 共存在同一条 `dme.queue.envelope`（单 record，PDS 可识别防 GC）。图片 ≤ 5MB 自动下载，其他类型手动。下载时 blob fetch 失败指数退避重试 2s/4s/8s（最多 3 次）。无文件大小硬限制（>500MB 弹警告确认）
+- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口，含 `blobCids`）。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方下载状态 `ready`，接收方初始 `pending`
+- **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 用 `URL.createObjectURL` 生成 blob URL 作为 localPath

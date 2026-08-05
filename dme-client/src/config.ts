@@ -7,6 +7,12 @@ export const DEFAULT_APPVIEW_PROXY = 'did:web:fatesky.hukoubook.com#fatesky_appv
 /** DME server base URL (direct or via gateway, client doesn't distinguish). */
 export const DME_SERVER_URL = 'http://localhost:8080';
 
+/**
+ * DME gateway (Cloudflare Worker) URL - 客户端面向的网关地址。
+ * 空字符串表示直连 server（不经网关）。
+ */
+export const DEFAULT_DME_GATEWAY_URL = '';
+
 /** PLC directory base URL. */
 export const PLC_DIRECTORY_URL = 'https://plc.directory';
 

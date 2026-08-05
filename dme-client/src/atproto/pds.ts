@@ -10,6 +10,7 @@
  *   Bob 查询 -> server batchGet -> envelopes
  */
 
+import { DME_SERVER_URL } from '../config';
 import type { Agent } from '@atproto/api';
 import type { DmeEnvelope } from '../protocol/index';
 import { DME_ENVELOPE_NSID } from '../protocol/index';
@@ -27,17 +28,20 @@ interface BatchGetResponse {
 
 export class DmePds {
   private readonly agent: Agent;
-  private readonly serverUrl: string;
+  private serverUrl: string;
+  private gatewayUrl: string;
   private appViewProxy: string;
 
   /**
    * @param agent         - @atproto/api Agent（来自 DmeSession）
    * @param serverUrl     - DME server 地址（如 https://dme.example.com）
+   * @param gatewayUrl    - DME gateway（Cloudflare Worker）地址；空字符串表示直连 server
    * @param appViewProxy  - atproto-proxy header 值，用于 PDS AppView 路由
    */
-  constructor(agent: Agent, serverUrl: string, appViewProxy: string) {
+  constructor(agent: Agent, serverUrl: string, gatewayUrl: string, appViewProxy: string) {
     this.agent = agent;
     this.serverUrl = serverUrl;
+    this.gatewayUrl = gatewayUrl;
     this.appViewProxy = appViewProxy;
     agent.configureProxy(appViewProxy as `did:${string}#${string}`);
   }
@@ -47,8 +51,36 @@ export class DmePds {
     this.agent.configureProxy(proxy as `did:${string}#${string}`);
   }
 
+  setServerUrl(url: string): void {
+    this.serverUrl = url.trim() || DME_SERVER_URL;
+  }
+
+  setGatewayUrl(url: string): void {
+    this.gatewayUrl = url.trim();
+  }
+
   getServerUrl(): string {
     return this.serverUrl;
+  }
+
+  /**
+   * 客户端实际使用的 base URL（配置了网关时走网关，否则走 server）。
+   */
+  getBaseUrl(): string {
+    return this.gatewayUrl || this.serverUrl;
+  }
+
+  /**
+   * 构造 blob 拉取 URL。
+   * - 网关配置时：走网关 `/xrpc/dme.file.blob` 端点（CDN 缓存 + IP 隐藏）。
+   * - 网关未配置（直连 server）：发送者 PDS 没有 file.blob 端点，改走
+   *   PDS 原生的 `com.atproto.sync.getBlob` 拉取已加密的 blob。
+   */
+  getBlobUrl(senderPdsUrl: string, did: string, cid: string): string {
+    if (this.gatewayUrl) {
+      return `${this.gatewayUrl}/xrpc/dme.file.blob?pds=${encodeURIComponent(senderPdsUrl)}&did=${encodeURIComponent(did)}&cid=${encodeURIComponent(cid)}`;
+    }
+    return `${senderPdsUrl}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(cid)}`;
   }
 
   /**
@@ -78,7 +110,7 @@ export class DmePds {
    * 批量查询 envelopes。
    */
   async batchGetEnvelopes(queueIds: string[]): Promise<DmeEnvelope[]> {
-    const response = await fetch(`${this.serverUrl}/xrpc/dme.batch.get`, {
+    const response = await fetch(`${this.getBaseUrl()}/xrpc/dme.batch.get`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ queueIds }),

@@ -16,6 +16,13 @@
  */
 export type MessageType = 'application' | 'commit' | 'welcome';
 
+export interface DmeBlobRef {
+  readonly $type: 'blob';
+  readonly ref: { readonly $link: string };
+  readonly mimeType: string;
+  readonly size: number;
+}
+
 export interface DmeEnvelope {
   /** Lexicon type identifier. */
   $type: 'dme.queue.envelope';
@@ -44,11 +51,12 @@ export interface DmeEnvelope {
   messageType?: MessageType;
 
   /**
-   * PDS blob CIDs for file chunks. Present only on envelopes carrying
-   * file chunks; kept in the record to prevent PDS blob garbage
-   * collection while the ciphertext is still within its TTL.
+   * Standard ATProtocol blob references for the encrypted file chunks.
+   * Present on file-manifest envelopes so the PDS recognizes and preserves
+   * the blobs (preventing GC). Sent in plaintext on the record (outside the
+   * MLS-encrypted payload); the manifest itself stays end-to-end encrypted.
    */
-  blobCids?: string[];
+  blobCids?: DmeBlobRef[];
 }
 
 /** File download status. */
@@ -66,6 +74,7 @@ export interface FileMeta {
   readonly fileKey: string; // base64url-encoded 32-byte random key
   readonly localPath?: string; // filled after download
   readonly downloadStatus: FileDownloadStatus;
+  readonly blobCids?: DmeBlobRef[];
 }
 
 /** Encrypted file manifest sent via MLS application message. */

@@ -17,7 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { IdentityKeys } from '../crypto/identity';
 import type { GroupInfo, PendingInvite } from '../protocol/group-message';
 import type { FileMeta } from '../protocol/types';
-import { DEFAULT_APPVIEW_PROXY } from '../config';
+import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../config';
 
 export type MessageKind = 'text' | 'group_invite' | 'group_system' | 'file';
 
@@ -486,6 +486,36 @@ export class DmeStorage {
     await AsyncStorage.setItem(
       this.prefix + this.APPVIEW_PROXY_KEY,
       trimmed || DEFAULT_APPVIEW_PROXY,
+    );
+  }
+
+  private readonly DME_SERVER_URL_KEY = 'dmeServerUrl';
+
+  async getDmeServerUrl(): Promise<string> {
+    const raw = await AsyncStorage.getItem(this.prefix + this.DME_SERVER_URL_KEY);
+    return raw ?? DME_SERVER_URL;
+  }
+
+  async setDmeServerUrl(value: string): Promise<void> {
+    const trimmed = value.trim();
+    await AsyncStorage.setItem(
+      this.prefix + this.DME_SERVER_URL_KEY,
+      trimmed || DME_SERVER_URL,
+    );
+  }
+
+  private readonly DME_GATEWAY_URL_KEY = 'dmeGatewayUrl';
+
+  async getDmeGatewayUrl(): Promise<string> {
+    const raw = await AsyncStorage.getItem(this.prefix + this.DME_GATEWAY_URL_KEY);
+    return raw ?? DEFAULT_DME_GATEWAY_URL;
+  }
+
+  async setDmeGatewayUrl(value: string): Promise<void> {
+    const trimmed = value.trim();
+    await AsyncStorage.setItem(
+      this.prefix + this.DME_GATEWAY_URL_KEY,
+      trimmed || DEFAULT_DME_GATEWAY_URL,
     );
   }
 

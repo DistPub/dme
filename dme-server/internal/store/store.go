@@ -18,6 +18,21 @@ import (
 // EnvelopeTTL is 7 days, matching the DME protocol spec.
 const EnvelopeTTL = 7 * 24 * time.Hour
 
+// BlobRef is the standard ATProtocol blob reference object stored inside
+// envelope records. Only this object form registers a blob for PDS GC
+// protection; a bare CID string would not.
+type BlobRef struct {
+	Type     string   `json:"$type"`
+	Ref      BlobLink `json:"ref"`
+	MimeType string   `json:"mimeType"`
+	Size     int64    `json:"size"`
+}
+
+// BlobLink is the CID link inside a BlobRef.
+type BlobLink struct {
+	Link string `json:"$link"`
+}
+
 // valueLogFileSize controls the maximum size of a single BadgerDB value log
 // file. 64 MiB keeps GC churn reasonable for envelope-sized values
 // (1–100 KB ciphertext).
@@ -36,7 +51,7 @@ type Envelope struct {
 	Payload      string    `json:"payload"`
 	CreatedAt    time.Time `json:"createdAt"`
 	RatchetEpoch int       `json:"ratchetEpoch,omitempty"`
-	BlobCids     []string  `json:"blobCids,omitempty"`
+	BlobCids     []BlobRef `json:"blobCids,omitempty"`
 }
 
 // Store wraps BadgerDB for envelope persistence with native TTL.

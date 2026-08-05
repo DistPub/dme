@@ -50,7 +50,7 @@ MLS (RFC 9420) 加密模块。10 个文件。使用 ts-mls + @noble 库（非 We
 
 **密钥树索引**: ts-mls 的 `secretTree` 按**树位置**索引（0, 2, 4...），LeafIndex 需乘 2。`getExpectedGeneration(leafIndex)` 内部使用 `leafIndex * 2`。
 
-**文件加密**: 逐块 AES-256-GCM（`@noble/ciphers/aes` 的 `gcm(key, nonce).encrypt/decrypt`），fileKey 随机 32 字节，fileId 随机 16 字节。nonce = fileId 前 8 字节 + chunkIndex 4 字节大端（12 字节）。fileQueueId = SHA-256("dme-file:" + fileIdHex) -> base64url。fileKey 不从 MLS exporter secret 派生（跨 epoch 安全）。
+**文件加密**: 逐块 AES-256-GCM（`@noble/ciphers/aes` 的 `gcm(key, nonce).encrypt/decrypt`），fileKey 随机 32 字节，fileId 随机 16 字节。nonce = fileId 前 8 字节 + chunkIndex 4 字节大端（12 字节）。fileKey 不从 MLS exporter secret 派生（跨 epoch 安全）。fileQueueId 派生（`deriveFileQueueId` = SHA-256("dme-file:" + fileIdHex) -> base64url）已废弃：blob 引用现随 manifest envelope 同一条 record 传输，无需独立 file envelope 盲查。
 
 ## 约定
 

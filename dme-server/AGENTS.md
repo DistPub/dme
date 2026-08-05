@@ -30,7 +30,7 @@ dme-server/
 |---|---|
 | 加 HTTP 端点 | `internal/server/server.go` `Handler()` |
 | 改存储 TTL | `internal/store/store.go` `EnvelopeTTL` 常量 |
-| 改 Envelope struct | `internal/store/store.go` `Envelope` + `internal/jetstream/consumer.go` `envelopeRecord`（含 `BlobCids []string`） |
+| 改 Envelope struct | `internal/store/store.go` `Envelope` + `internal/jetstream/consumer.go` `envelopeRecord`（含 `BlobCids []BlobRef`（BlobRef struct: `$type, ref{$link}, mimeType, size`）） |
 | 改 GC 策略 | `internal/store/store.go` `gcThreshold` / `gcInterval` |
 | 改 Jetstream 过滤 | `internal/jetstream/consumer.go` `processEvent()` |
 | 改重连退避 | `internal/jetstream/consumer.go` `Start()` backoff 数组 |

@@ -56,8 +56,8 @@ type envelopeRecord struct {
 	QueueID      string `json:"queueId"`
 	Payload      string `json:"payload"`
 	CreatedAt    string `json:"createdAt"`
-	RatchetEpoch int      `json:"ratchetEpoch,omitempty"`
-	BlobCids     []string `json:"blobCids,omitempty"`
+	RatchetEpoch int            `json:"ratchetEpoch,omitempty"`
+	BlobCids     []store.BlobRef `json:"blobCids,omitempty"`
 }
 
 // New creates a Consumer for the given Jetstream URL.
@@ -180,6 +180,7 @@ func (c *Consumer) processEvent(ctx context.Context, data []byte) {
 		Payload:      rec.Payload,
 		CreatedAt:    parseTime(rec.CreatedAt),
 		RatchetEpoch: rec.RatchetEpoch,
+		BlobCids:     rec.BlobCids,
 	}
 
 	if err := c.store.Put(ctx, env); err != nil {

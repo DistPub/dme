@@ -45,12 +45,12 @@ import {
   generateFileKey,
   encryptChunk,
   decryptChunk,
-  deriveFileQueueId,
   computeSha256,
 } from '../crypto/file-crypto';
 import * as FileSystem from 'expo-file-system';
-import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY } from '../config';
-import { type DmeEnvelope, type FileManifestMessage, FILE_MANIFEST_TYPE } from '../protocol/types';
+import { Platform } from 'react-native';
+import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY, DEFAULT_DME_GATEWAY_URL } from '../config';
+import { type DmeBlobRef, type DmeEnvelope, type FileManifestMessage, FILE_MANIFEST_TYPE } from '../protocol/types';
 import type { ReactionMessage } from '../protocol/reaction';
 import type {
   GroupInfo,
@@ -144,6 +144,8 @@ interface AppState {
   chatListVersion: number;
   pollBatchSize: number;
   appViewProxy: string;
+  serverUrl: string;
+  gatewayUrl: string;
   pendingInvites: PendingInvite[];
   groupInfos: GroupInfo[];
   receivedGroupInvites: PendingInvite[];
@@ -172,6 +174,8 @@ interface AppActions {
   refreshKeyPackagePool: () => Promise<void>;
   setPollBatchSize: (size: number) => Promise<void>;
   setAppViewProxy: (proxy: string) => Promise<void>;
+  setServerUrl: (url: string) => Promise<void>;
+  setGatewayUrl: (url: string) => Promise<void>;
   sendGroupInvites: (groupName: string, friendDids: readonly string[]) => Promise<string>;
   respondToGroupInvite: (inviteId: string, accepted: boolean) => Promise<void>;
   createGroupFromPendingInvites: (groupId: string) => Promise<void>;
@@ -210,6 +214,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [chatListVersion, setChatListVersion] = useState(0);
   const [pollBatchSize, setPollBatchSizeState] = useState(3);
   const [appViewProxy, setAppViewProxyState] = useState<string>(DEFAULT_APPVIEW_PROXY);
+  const [serverUrl, setServerUrlState] = useState<string>(DME_SERVER_URL);
+  const [gatewayUrl, setGatewayUrlState] = useState<string>(DEFAULT_DME_GATEWAY_URL);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [groupInfos, setGroupInfos] = useState<GroupInfo[]>([]);
   const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
@@ -277,6 +283,20 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setAppViewProxyState(proxy);
   }, [storage, pds]);
 
+  const setServerUrl = useCallback(async (url: string): Promise<void> => {
+    if (!storage || !pds) return;
+    await storage.setDmeServerUrl(url);
+    pds.setServerUrl(url);
+    setServerUrlState(url);
+  }, [storage, pds]);
+
+  const setGatewayUrl = useCallback(async (url: string): Promise<void> => {
+    if (!storage || !pds) return;
+    await storage.setDmeGatewayUrl(url);
+    pds.setGatewayUrl(url);
+    setGatewayUrlState(url);
+  }, [storage, pds]);
+
   // -------------------------------------------------------------------------
   // Login / Logout / Restore
   // -------------------------------------------------------------------------
@@ -313,7 +333,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
 
       const appViewProxyValue = await correctStorage.getAppViewProxy();
-      const newPds = new DmePds(newSession.agent, DME_SERVER_URL, appViewProxyValue);
+      const serverUrlValue = await correctStorage.getDmeServerUrl();
+      const gatewayUrlValue = await correctStorage.getDmeGatewayUrl();
+      const newPds = new DmePds(newSession.agent, serverUrlValue, gatewayUrlValue, appViewProxyValue);
 
       // Load or generate identity keys
       const storedKeys = await correctStorage.getIdentityKeys();
@@ -374,6 +396,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setKeyPackagePool(pool);
       setPollBatchSizeState(batchSize);
       setAppViewProxyState(appViewProxyValue);
+      setServerUrlState(serverUrlValue);
+      setGatewayUrlState(gatewayUrlValue);
       setPendingInvites(sentInvites);
       setReceivedGroupInvites(recvInvites);
       setGroupInfos(storedGroupInfos);
@@ -414,6 +438,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroupInfos([]);
       setPollBatchSizeState(3);
       setAppViewProxyState(DEFAULT_APPVIEW_PROXY);
+      setServerUrlState(DME_SERVER_URL);
+      setGatewayUrlState(DEFAULT_DME_GATEWAY_URL);
       setLoading(false);
     }
   }, [session, storage, poller]);
@@ -441,7 +467,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         tempSession.setStorage(tempStorage);
 
         const appViewProxyValue = await tempStorage.getAppViewProxy();
-        const newPds = new DmePds(tempSession.agent, DME_SERVER_URL, appViewProxyValue);
+        const serverUrlValue = await tempStorage.getDmeServerUrl();
+        const gatewayUrlValue = await tempStorage.getDmeGatewayUrl();
+        const newPds = new DmePds(tempSession.agent, serverUrlValue, gatewayUrlValue, appViewProxyValue);
         const storedKeys = await tempStorage.getIdentityKeys();
         const idKeys = storedKeys ?? generateIdentityKeys();
         if (!storedKeys) {
@@ -497,6 +525,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         setKeyPackagePool(pool);
         setPollBatchSizeState(batchSize);
         setAppViewProxyState(appViewProxyValue);
+        setServerUrlState(serverUrlValue);
+        setGatewayUrlState(gatewayUrlValue);
         setPendingInvites(sentInvites);
         setReceivedGroupInvites(recvInvites);
         setGroupInfos(storedGroupInfos);
@@ -762,6 +792,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const { fileMeta } = msg;
     const fileKey = base64urlToBytes(fileMeta.fileKey);
     const fileId = hexToBytes(fileMeta.fileId);
+    const blobCids = fileMeta.blobCids;
+    if (!blobCids || blobCids.length === 0) {
+      throw new Error('downloadFile: blobCids missing from fileMeta');
+    }
 
     const retryDelays = [2000, 4000, 8000];
     const maxAttempts = 3;
@@ -770,33 +804,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     while (attempts < maxAttempts) {
       try {
-        const fileQueueId = await deriveFileQueueId(fileMeta.fileId);
-        const envelopes = await pds.batchGetEnvelopes([fileQueueId]);
-
-        if (envelopes.length === 0 || !envelopes[0].blobCids || envelopes[0].blobCids.length === 0) {
-          attempts++;
-          if (attempts >= maxAttempts) {
-            await storage.updateFileMessageMeta(conversationId, msgId, {
-              downloadStatus: 'failed',
-            });
-            setChatListVersion((v) => v + 1);
-            throw new Error('downloadFile: file envelope not found after retries');
-          }
-          await storage.updateFileMessageMeta(conversationId, msgId, {
-            downloadStatus: 'pending',
-          });
-          await new Promise((resolve) => setTimeout(resolve, retryDelays[attempts - 1]));
-          continue;
-        }
-
-        const blobCids = envelopes[0].blobCids!;
         const senderPdsUrl = await resolvePdsUrl(msg.fromDid);
-        const serverUrl = pds.getServerUrl();
 
         const decryptedChunks: Uint8Array[] = [];
         for (let i = 0; i < blobCids.length; i++) {
-          const cid = blobCids[i]!;
-          const blobUrl = `${serverUrl}/xrpc/dme.file.blob?pds=${encodeURIComponent(senderPdsUrl)}&did=${encodeURIComponent(msg.fromDid)}&cid=${encodeURIComponent(cid)}`;
+          const blobRef = blobCids[i]!;
+          const cid = blobRef.ref.$link;
+          const blobUrl = pds.getBlobUrl(senderPdsUrl, msg.fromDid, cid);
           const response = await fetch(blobUrl);
           if (!response.ok) {
             throw new Error(`downloadFile: blob fetch failed ${response.status}`);
@@ -820,11 +834,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         }
 
         const fileName = fileMeta.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const localPath = `${FileSystem.documentDirectory}${msgId}_${fileName}`;
-        const base64Data = bytesToBase64(fullData);
-        await FileSystem.writeAsStringAsync(localPath, base64Data, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        let localPath: string;
+        if (Platform.OS === 'web') {
+          localPath = URL.createObjectURL(new Blob([fullData], { type: fileMeta.mimeType }));
+        } else {
+          localPath = `${FileSystem.documentDirectory}${msgId}_${fileName}`;
+          const base64Data = bytesToBase64(fullData);
+          await FileSystem.writeAsStringAsync(localPath, base64Data, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+        }
 
         await storage.updateFileMessageMeta(conversationId, msgId, {
           localPath,
@@ -1191,17 +1210,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         fromDid: msg.senderDid,
         toDid: userDid,
         plaintext: msg.plaintext,
-        fileMeta: {
-          fileId: manifest.fileId,
-          fileName: manifest.fileName,
-          fileSize: manifest.fileSize,
-          mimeType: manifest.mimeType,
-          sha256: manifest.sha256,
-          chunkCount: manifest.chunkCount,
-          chunkSize: manifest.chunkSize,
-          fileKey: manifest.fileKey,
-          downloadStatus: 'pending',
-        },
+         fileMeta: {
+           fileId: manifest.fileId,
+           fileName: manifest.fileName,
+           fileSize: manifest.fileSize,
+           mimeType: manifest.mimeType,
+           sha256: manifest.sha256,
+           chunkCount: manifest.chunkCount,
+           chunkSize: manifest.chunkSize,
+           fileKey: manifest.fileKey,
+           blobCids: msg.envelope.blobCids,
+           downloadStatus: 'pending',
+         },
         kind: 'file',
         createdAt: msg.envelope.createdAt,
         sent: false,
@@ -1301,37 +1321,44 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const fileKey = generateFileKey();
     const chunkSize = 5 * 1024 * 1024;
     const hasher = sha256.create();
-    const blobCids: string[] = [];
+    const blobRefs: DmeBlobRef[] = [];
+
+    let webFileBytes: Uint8Array | null = null;
+    if (Platform.OS === 'web') {
+      const response = await fetch(fileUri);
+      webFileBytes = new Uint8Array(await response.arrayBuffer());
+      if (webFileBytes.byteLength !== fileSize) {
+        console.warn(`sendFileMessage: web file size ${webFileBytes.byteLength} != reported ${fileSize}`);
+      }
+    }
+
     let offset = 0;
     let chunkIndex = 0;
 
     while (offset < fileSize) {
       const readSize = Math.min(chunkSize, fileSize - offset);
-      const base64 = await FileSystem.readAsStringAsync(fileUri, {
-        position: offset,
-        length: readSize,
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const block = base64ToBytes(base64);
+      let block: Uint8Array;
+      if (Platform.OS === 'web') {
+        const end = Math.min(offset + readSize, webFileBytes!.length);
+        block = webFileBytes!.subarray(offset, end);
+      } else {
+        const base64 = await FileSystem.readAsStringAsync(fileUri, {
+          position: offset,
+          length: readSize,
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        block = base64ToBytes(base64);
+      }
       hasher.update(block);
       const encrypted = await encryptChunk(block, fileKey, fileId, chunkIndex);
       const blobResult = await session.agent.uploadBlob(new Blob([new Uint8Array(encrypted)]), { encoding: 'application/octet-stream' });
-      blobCids.push(blobResult.data.blob.ref.toString());
+      blobRefs.push(blobResult.data.blob.toJSON());
       offset += readSize;
       chunkIndex++;
     }
 
     const fileHash = bytesToHex(hasher.digest());
     const fileIdHex = bytesToHex(fileId);
-    const fileQueueId = await deriveFileQueueId(fileIdHex);
-
-    await pds.createEnvelope({
-      $type: 'dme.queue.envelope',
-      queueId: fileQueueId,
-      payload: '',
-      blobCids,
-      createdAt: new Date().toISOString(),
-    });
 
     const manifestBytes = new TextEncoder().encode(JSON.stringify({
       type: 'file',
@@ -1351,6 +1378,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       $type: 'dme.queue.envelope',
       queueId: encResult.queueId,
       payload: bytesToBase64url(encResult.ciphertext),
+      blobCids: blobRefs,
       createdAt: new Date().toISOString(),
       messageType: 'application',
     });
@@ -1371,6 +1399,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         chunkCount: chunkIndex,
         chunkSize,
         fileKey: bytesToBase64url(fileKey),
+        blobCids: blobRefs,
         downloadStatus: 'ready',
       },
     };
@@ -2158,6 +2187,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       chatListVersion,
       pollBatchSize,
       appViewProxy,
+      serverUrl,
+      gatewayUrl,
       pendingInvites,
       groupInfos,
       receivedGroupInvites,
@@ -2183,6 +2214,8 @@ blockList,
       refreshKeyPackagePool,
       setPollBatchSize,
       setAppViewProxy,
+      setServerUrl,
+      setGatewayUrl,
       sendGroupInvites,
       respondToGroupInvite,
       createGroupFromPendingInvites,
@@ -2200,12 +2233,12 @@ blockList,
     }),
     [
       session, storage, identityKeys, poller, pds, loading, error,
-      groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy,
+      groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy, serverUrl, gatewayUrl,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, sendFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
-      refreshKeyPackagePool, setPollBatchSize, setAppViewProxy,
+      refreshKeyPackagePool, setPollBatchSize, setAppViewProxy, setServerUrl, setGatewayUrl,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
       leaveGroup, refreshBlockList, blockMember, unblockMember, setActiveConversation, setSoundEnabled,

@@ -6,7 +6,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
-import { DEFAULT_APPVIEW_PROXY } from '../config';
+import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../config';
 import type { RootStackParamList } from '../types/navigation';
 
 interface Props {
@@ -20,6 +20,12 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
   const [proxyDraft, setProxyDraft] = useState(app.appViewProxy);
   const [proxySaved, setProxySaved] = useState(false);
+
+  const [serverDraft, setServerDraft] = useState(app.serverUrl);
+  const [serverSaved, setServerSaved] = useState(false);
+
+  const [gatewayDraft, setGatewayDraft] = useState(app.gatewayUrl);
+  const [gatewaySaved, setGatewaySaved] = useState(false);
 
   const [backupPwd, setBackupPwd] = useState('');
   const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
@@ -45,6 +51,32 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     await app.setAppViewProxy(DEFAULT_APPVIEW_PROXY);
     setProxySaved(true);
     setTimeout(() => setProxySaved(false), 2000);
+  };
+
+  const handleSaveServer = async (): Promise<void> => {
+    await app.setServerUrl(serverDraft);
+    setServerSaved(true);
+    setTimeout(() => setServerSaved(false), 2000);
+  };
+
+  const handleResetServer = async (): Promise<void> => {
+    setServerDraft(DME_SERVER_URL);
+    await app.setServerUrl(DME_SERVER_URL);
+    setServerSaved(true);
+    setTimeout(() => setServerSaved(false), 2000);
+  };
+
+  const handleSaveGateway = async (): Promise<void> => {
+    await app.setGatewayUrl(gatewayDraft);
+    setGatewaySaved(true);
+    setTimeout(() => setGatewaySaved(false), 2000);
+  };
+
+  const handleResetGateway = async (): Promise<void> => {
+    setGatewayDraft(DEFAULT_DME_GATEWAY_URL);
+    await app.setGatewayUrl(DEFAULT_DME_GATEWAY_URL);
+    setGatewaySaved(true);
+    setTimeout(() => setGatewaySaved(false), 2000);
   };
 
   const handleBackup = async (): Promise<void> => {
@@ -123,6 +155,62 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           <Button
             label="Reset"
             onPress={handleResetProxy}
+            variant="secondary"
+            style={styles.halfButton}
+          />
+        </View>
+
+        <Text style={styles.title}>Server</Text>
+        <Text style={styles.hint}>
+          DME server base URL used for message polling.
+        </Text>
+        <TextInput
+          style={styles.input}
+          value={serverDraft}
+          onChangeText={setServerDraft}
+          placeholder={DME_SERVER_URL}
+          placeholderTextColor={theme.colors.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <View style={styles.rowButtons}>
+          <Button
+            label={serverSaved ? 'Saved!' : 'Save'}
+            onPress={handleSaveServer}
+            variant="primary"
+            style={styles.halfButton}
+          />
+          <Button
+            label="Reset"
+            onPress={handleResetServer}
+            variant="secondary"
+            style={styles.halfButton}
+          />
+        </View>
+
+        <Text style={styles.title}>Gateway</Text>
+        <Text style={styles.hint}>
+          DME gateway (Cloudflare Worker) URL for IP-privacy polling and blob CDN. Leave empty to use server directly.
+        </Text>
+        <TextInput
+          style={styles.input}
+          value={gatewayDraft}
+          onChangeText={setGatewayDraft}
+          placeholder="https://gateway.example.com"
+          placeholderTextColor={theme.colors.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <View style={styles.rowButtons}>
+          <Button
+            label={gatewaySaved ? 'Saved!' : 'Save'}
+            onPress={handleSaveGateway}
+            variant="primary"
+            style={styles.halfButton}
+          />
+          <Button
+            label="Reset"
+            onPress={handleResetGateway}
             variant="secondary"
             style={styles.halfButton}
           />

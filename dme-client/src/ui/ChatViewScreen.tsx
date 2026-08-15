@@ -10,6 +10,9 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -31,6 +34,7 @@ import { Image } from 'expo-image';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
+const savedScrollOffsets = new Map<string, number>();
 
 export function ChatViewScreen(): React.JSX.Element {
   const app = useApp();
@@ -75,13 +79,43 @@ export function ChatViewScreen(): React.JSX.Element {
   const [actionMenuLayout, setActionMenuLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
+  const scrollMetricsRef = useRef({ offset: 0, contentHeight: 0, layoutHeight: 0, isAtBottom: true });
+  const isRestoringScrollRef = useRef(false);
+
+  const messageEqual = useCallback((a: StoredMessage, b: StoredMessage): boolean => {
+    if (a.id !== b.id) return false;
+    if (a.kind !== b.kind) return false;
+    if (a.plaintext !== b.plaintext) return false;
+    if (a.readAt !== b.readAt) return false;
+    if (a.reactions?.length !== b.reactions?.length) return false;
+    if (a.reactions && b.reactions) {
+      for (let i = 0; i < a.reactions.length; i++) {
+        if (
+          a.reactions[i]!.did !== b.reactions[i]!.did ||
+          a.reactions[i]!.emoji !== b.reactions[i]!.emoji
+        ) {
+          return false;
+        }
+      }
+    }
+    if (a.fileMeta?.downloadStatus !== b.fileMeta?.downloadStatus) return false;
+    if (a.fileMeta?.localPath !== b.fileMeta?.localPath) return false;
+    return true;
+  }, []);
 
   const loadMessages = useCallback(async (): Promise<void> => {
     if (!storage) return;
     const msgs = await storage.getMessages(conversationId);
     const blockedSet = new Set(blockList);
-    setMessages(msgs.filter((m) => !blockedSet.has(m.fromDid)));
-  }, [storage, conversationId, blockList]);
+    const next = msgs.filter((m) => !blockedSet.has(m.fromDid));
+    setMessages((prev) => {
+      if (prev.length !== next.length) return next;
+      for (let i = 0; i < prev.length; i++) {
+        if (!messageEqual(prev[i]!, next[i]!)) return next;
+      }
+      return prev;
+    });
+  }, [storage, conversationId, blockList, messageEqual]);
 
   useFocusEffect(
     useCallback(() => {
@@ -90,6 +124,18 @@ export function ChatViewScreen(): React.JSX.Element {
       markConversationAsRead(conversationId).catch((err: unknown) => {
         console.error('markConversationAsRead failed:', err);
       });
+
+      const savedOffset = savedScrollOffsets.get(conversationId);
+      if (savedOffset !== undefined && savedOffset > 0) {
+        isRestoringScrollRef.current = true;
+        requestAnimationFrame(() => {
+          listRef.current?.scrollToOffset({ offset: savedOffset, animated: false });
+          setTimeout(() => {
+            isRestoringScrollRef.current = false;
+          }, 150);
+        });
+      }
+
       return () => {
         setActiveConversation(null);
       };
@@ -303,6 +349,30 @@ export function ChatViewScreen(): React.JSX.Element {
     }
   }, [conversationId, sendFileMessage, loadMessages]);
 
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>): void => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    scrollMetricsRef.current = {
+      offset: contentOffset.y,
+      contentHeight: contentSize.height,
+      layoutHeight: layoutMeasurement.height,
+      isAtBottom: contentSize.height - contentOffset.y - layoutMeasurement.height < 50,
+    };
+    savedScrollOffsets.set(conversationId, contentOffset.y);
+  }, [conversationId]);
+
+  const handleLayout = useCallback((event: LayoutChangeEvent): void => {
+    scrollMetricsRef.current.layoutHeight = event.nativeEvent.layout.height;
+  }, []);
+
+  const handleContentSizeChange = useCallback((_: number, height: number): void => {
+    scrollMetricsRef.current.contentHeight = height;
+    if (isRestoringScrollRef.current) return;
+    const { isAtBottom, layoutHeight } = scrollMetricsRef.current;
+    if (isAtBottom || height <= layoutHeight) {
+      listRef.current?.scrollToEnd({ animated: true });
+    }
+  }, []);
+
   const canReact = !dissolved && !removed && !left;
 
   const renderItem = useCallback(
@@ -355,15 +425,27 @@ export function ChatViewScreen(): React.JSX.Element {
       }
 
       if (item.kind === 'file' && item.fileMeta) {
+        const fileMeta = item.fileMeta;
+        const localPath = fileMeta.localPath;
         return (
           <FileMessageBubble
-            fileMeta={item.fileMeta}
+            fileMeta={fileMeta}
             isOutgoing={item.fromDid === session?.did}
-            onRetry={item.fileMeta.downloadStatus === 'failed' ? () => {
+            reactions={item.reactions}
+            currentDid={session?.did}
+            onRetry={fileMeta.downloadStatus === 'failed' ? () => {
               void downloadFile(conversationId, item.id).catch((err: unknown) => {
                 console.error('Retry download failed:', err);
               });
             } : undefined}
+            onImagePress={localPath ? () => {
+              navigation.navigate('ImageViewer', {
+                uri: localPath,
+                fileName: fileMeta.fileName,
+              });
+            } : undefined}
+            onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
+            onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
           />
         );
       }
@@ -470,8 +552,9 @@ export function ChatViewScreen(): React.JSX.Element {
         data={messages}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-        onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
+        onScroll={handleScroll}
+        onLayout={handleLayout}
+        onContentSizeChange={handleContentSizeChange}
       />
 
       {dissolved || removed || left ? (

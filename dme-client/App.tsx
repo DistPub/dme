@@ -37,6 +37,7 @@ import { CreateGroupScreen } from './src/ui/CreateGroupScreen';
 import { GroupSettingsScreen } from './src/ui/GroupSettingsScreen';
 import { DmSettingsScreen } from './src/ui/DmSettingsScreen';
 import { BlockListScreen } from './src/ui/BlockListScreen';
+import { ImageViewerScreen } from './src/ui/ImageViewerScreen';
 import type { RootStackParamList } from './src/types/navigation';
 
 export type { RootStackParamList };
@@ -130,6 +131,7 @@ function NavigationRoot(): React.JSX.Element {
         <Stack.Screen name="GroupSettings" component={GroupSettingsScreen} />
         <Stack.Screen name="DmSettings" component={DmSettingsScreen} />
         <Stack.Screen name="BlockList" component={BlockListScreen} />
+        <Stack.Screen name="ImageViewer" component={ImageViewerScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

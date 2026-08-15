@@ -47,6 +47,7 @@ import {
   decryptChunk,
   computeSha256,
 } from '../crypto/file-crypto';
+import { cacheFile, makeIndexedDbUri } from '../utils/file-cache';
 import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY, DEFAULT_DME_GATEWAY_URL } from '../config';
@@ -797,6 +798,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw new Error('downloadFile: blobCids missing from fileMeta');
     }
 
+    await storage.updateFileMessageMeta(conversationId, msgId, {
+      downloadStatus: 'downloading',
+    });
+    setChatListVersion((v) => v + 1);
+
     const retryDelays = [2000, 4000, 8000];
     const maxAttempts = 3;
     let attempts = 0;
@@ -836,7 +842,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         const fileName = fileMeta.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
         let localPath: string;
         if (Platform.OS === 'web') {
-          localPath = URL.createObjectURL(new Blob([fullData], { type: fileMeta.mimeType }));
+          await cacheFile(fileMeta.fileId, fullData, fileMeta.mimeType);
+          localPath = makeIndexedDbUri(fileMeta.fileId);
         } else {
           localPath = `${FileSystem.documentDirectory}${msgId}_${fileName}`;
           const base64Data = bytesToBase64(fullData);
@@ -1382,6 +1389,25 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       createdAt: new Date().toISOString(),
       messageType: 'application',
     });
+
+    let senderLocalPath: string;
+    if (Platform.OS === 'web') {
+      if (!webFileBytes) {
+        throw new Error('sendFileMessage: web file bytes not available');
+      }
+      await cacheFile(fileIdHex, webFileBytes, mimeType);
+      senderLocalPath = makeIndexedDbUri(fileIdHex);
+    } else {
+      const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      senderLocalPath = `${FileSystem.documentDirectory}${encResult.queueId}_${sanitizedFileName}`;
+      const fileBase64 = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await FileSystem.writeAsStringAsync(senderLocalPath, fileBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    }
+
     const msg: StoredMessage = {
       id: encResult.queueId,
       fromDid: session.did,
@@ -1401,6 +1427,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         fileKey: bytesToBase64url(fileKey),
         blobCids: blobRefs,
         downloadStatus: 'ready',
+        localPath: senderLocalPath,
       },
     };
     await storage.putMessage(msg);

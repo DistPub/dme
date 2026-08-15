@@ -29,8 +29,8 @@ dme-client/
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
     ├── state/AppContext.tsx  # 全局状态（17 字段，28 action）
     ├── protocol/         # types.ts + group-message.ts + reaction.ts + lexicons/ JSON
-    ├── utils/            # sound.ts（消息提示音，运行时生成 WAV）
-    ├── ui/               # 20 个文件（11 屏幕 + 9 组件，含 BlockListScreen + DmSettingsScreen + MessageBubble + EmojiPicker + MessageActionMenu + FileMessageBubble）
+    ├── utils/            # sound.ts（消息提示音，运行时生成 WAV）+ file-cache.ts（IndexedDB 文件缓存 / useFileUri）
+    ├── ui/               # 21 个文件（11 屏幕 + 10 组件，含 BlockListScreen + DmSettingsScreen + MessageBubble + EmojiPicker + MessageActionMenu + FileMessageBubble + ImageViewerScreen）
     └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
 
@@ -63,7 +63,9 @@ dme-client/
 | 表情反应协议 | `src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions 渲染 | `src/ui/MessageBubble.tsx` |
-| 文件消息气泡 + 下载状态 | `src/ui/FileMessageBubble.tsx`（图片缩略图/视频播放/音频图标/文件卡片 + pending/downloading/ready/failed 状态） |
+| 文件消息气泡 + 下载状态 | `src/ui/FileMessageBubble.tsx`（图片缩略图/视频播放/音频图标/文件卡片 + pending/downloading/ready/failed 状态 + reactions） |
+| 图片查看器 | `src/ui/ImageViewerScreen.tsx`（全屏查看，点击或 ✕ 关闭） |
+| Web 文件缓存 | `src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | 文件选择器 | `expo-document-picker`（`getDocumentAsync({type: '*/*'})`） |
 | 表情选择器 | `src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 消息操作菜单 | `src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
@@ -102,7 +104,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理
 - **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`/`file`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
-- **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble` 按 emoji 合并并显示计数
+- **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble`/`FileMessageBubble` 按 emoji 合并并显示计数
 - **屏蔽列表**: `blockList: string[]` 存储在 `AsyncStorage`，入口为 ChatList 头像菜单 + 私聊管理页（`DmSettingsScreen`）+ 群管理成员行；可 Block/Unblock；被 block 用户的消息不存储、不展示；不修改群成员关系
 - **Profile 批量获取**: 多个 DID 的 profile 必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；**ChatListScreen / GroupSettingsScreen / BlockListScreen 等首屏加载**须先读 `profileCacheRef`/`handleCacheRef` 本地缓存同步构造 rows 并立即 `setRows`/`setLoading(false)`，有缺失时再异步调用 `resolveProfiles`/`resolveHandle`，拿到结果后用 `setRows(prev => prev.map(...))` 更新，禁止同步 `await` 网络请求阻塞首屏
 - **消息操作菜单**: 长按（原生）/右键（web）气泡弹出 `MessageActionMenu`（复制/转发/删除）；复制走 `expo-clipboard`，转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，删除仅本地删除（PDS 密文不变）
@@ -121,10 +123,12 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`
 - **群主不能离开**: MLS 禁止 removeMember 移除 committer，群主只能解散群组
 - **群组只读状态**: dissolved/removed/left 标记后群组变为只读，保留消息但禁止发送
-- **Web 长按缺失**: Web 无 `onLongPress`，每条文本消息气泡旁固定一个 emoji 按钮（incoming 右下/outgoing 左下）触发 `EmojiPicker`；`EmojiPicker` 用 `measureInWindow` 取按钮坐标做锚定浮层，上方优先、空间不足转下方，左右 clamp 防溢出
+- **Web 长按缺失**: Web 无 `onLongPress`，每条文本/文件消息气泡旁固定一个 emoji 按钮（incoming 右下/outgoing 左下）触发 `EmojiPicker`；`EmojiPicker` 用 `measureInWindow` 取按钮坐标做锚定浮层，上方优先、空间不足转下方，左右 clamp 防溢出
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
 - **UI 头像布局**: ChatListScreen 顶部栏头像右侧展示昵称+@handle；会话列表 1:1/群聊行左侧头像+昵称+时间+@handle+最近消息预览；ChatViewScreen 1:1/群聊 header 左上角展示头像+昵称+@handle + ⋮ 按钮（1:1 跳转私聊管理 `DmSettingsScreen`，群聊跳转群管理 `GroupSettingsScreen`；群聊为 `[Group] 群名` + `@creatorHandle`）
 - **未读 badge**: 1:1 会话列表行 badge 浮在头像右上角（红底白边）；群聊行 badge 紧跟群名文字内联
-- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，blob 引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式）与 MLS 加密的 file manifest 共存在同一条 `dme.queue.envelope`（单 record，PDS 可识别防 GC）。图片 ≤ 5MB 自动下载，其他类型手动。下载时 blob fetch 失败指数退避重试 2s/4s/8s（最多 3 次）。无文件大小硬限制（>500MB 弹警告确认）
+- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，blob 引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式）与 MLS 加密的 file manifest 共存在同一条 `dme.queue.envelope`（单 record，PDS 可识别防 GC）。发送完成后 Native 复制到 `documentDirectory`、Web 写入 IndexedDB，使发送方刷新后仍可显示。图片 ≤ 5MB 自动下载，其他类型手动。下载时 blob fetch 失败指数退避重试 2s/4s/8s（最多 3 次）。无文件大小硬限制（>500MB 弹警告确认）
 - **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口，含 `blobCids`）。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方下载状态 `ready`，接收方初始 `pending`
-- **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 用 `URL.createObjectURL` 生成 blob URL 作为 localPath
+- **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 写入 IndexedDB 并以 `indexeddb://{fileId}` 作为 localPath，组件渲染时通过 `useFileUri` 解析为 blob URL；发送方同样持久化，刷新页面后仍可显示
+- **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
+- **聊天滚动位置保持**: `ChatViewScreen` 用模块级 `savedScrollOffsets` 记录每个会话滚动偏移，从 `ImageViewer` 返回时恢复；`messageEqual` 确保 fileMeta/reactions/readAt 变化能触发 FlatList 更新

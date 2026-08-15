@@ -7,7 +7,7 @@
 
 # DME 项目知识库
 
-**Generated:** 2026-07-29
+**Generated:** 2026-08-15
 
 ## 概述
 
@@ -94,7 +94,9 @@ dme/
 | 文件加密 | `dme-client/src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
 | 文件协议类型 | `dme-client/src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
 | 文件发送/下载 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `downloadFile`） |
-| 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片） |
+| 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片 + reactions） |
+| 图片查看器 | `dme-client/src/ui/ImageViewerScreen.tsx`（全屏查看，点击关闭） |
+| Web 文件缓存 | `dme-client/src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
 | Gateway (blob CDN + batch 代理) | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN 缓存 + `/xrpc/dme.batch.get` 反代 dme-server，全局 OPTIONS 预检 + CORS） |
 
@@ -166,7 +168,12 @@ dme/
 | `resolvePdsUrl` | func | did.ts | DID 解析 -> `AtprotoPersonalDataServer` serviceEndpoint |
 | `FileManifestMessage` | interface | types.ts | E2E 加密文件清单（type: 'file'，含 fileKey/fileId/sha256/mimeType 等） |
 | `FileMeta` | interface | types.ts | 本地文件元数据（含 downloadStatus: pending/downloading/ready/failed） |
-| `FileMessageBubble` | component | FileMessageBubble.tsx | 文件消息气泡：图片缩略图/视频播放/文件卡片+下载状态 |
+| `FileMessageBubble` | component | FileMessageBubble.tsx | 文件消息气泡：图片缩略图/视频播放/文件卡片+下载状态+reactions |
+| `ImageViewerScreen` | component | ImageViewerScreen.tsx | 全屏图片查看器，点击或 ✕ 关闭 |
+| `useFileUri` | hook | file-cache.ts | 解析 `indexeddb://` / 普通 URI 为可渲染 blob URL，管理生命周期 |
+| `cacheFile` | func | file-cache.ts | Web 端把文件字节持久化到 IndexedDB |
+| `savedScrollOffsets` | const | ChatViewScreen.tsx | 模块级 Map，持久化保存每个会话的 FlatList 滚动偏移 |
+| `messageEqual` | func | ChatViewScreen.tsx | 比较两条 StoredMessage 是否真正变化（含 fileMeta/reactions/readAt） |
 | `getServerUrl` | method | pds.ts | 返回 DmePds.serverUrl（直连 server） |
 | `getBaseUrl`/`getBlobUrl` | method | pds.ts | 客户端面向端点：`getBaseUrl()` = gateway||server 用于 batch.get；`getBlobUrl(pds,did,cid)` 网关走 file.blob CDN、直连退化为 PDS `com.atproto.sync.getBlob` |
 | `updateFileMessageMeta` | method | db.ts | 局部更新某条文件消息的 fileMeta（如 downloadStatus/localPath） |
@@ -239,8 +246,8 @@ dme/
 | `conversationId` | 会话 ID（群聊 groupId 或好友 did） |
 
 - 本地先 toggle `StoredMessage.reactions`（`Reaction[]`）再发送，接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本
-- `MessageBubble` 按 emoji 聚合渲染 pill，相同 emoji 合并并显示计数（>1 时小字），当前用户参与的高亮
-- Web 无长按：每条文本气泡旁固定 emoji 按钮触发 `EmojiPicker`（`measureInWindow` 锚定浮层）
+- `MessageBubble`/`FileMessageBubble` 按 emoji 聚合渲染 pill，相同 emoji 合并并显示计数（>1 时小字），当前用户参与的高亮
+- Web 无长按：每条文本/文件气泡旁固定 emoji 按钮触发 `EmojiPicker`（`measureInWindow` 锚定浮层）
 
 ## 消息提示音
 
@@ -343,7 +350,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **浏览器调试现场保护**: 当用户要求「看控制台日志」时，直接使用 `browsermcp_browser_get_console_logs` 抓取当前页面日志，禁止 `browsermcp_browser_navigate` 刷新或跳转页面，避免破坏报错现场
 - **ChatViewScreen 依赖陷阱**: `useFocusEffect` 不可依赖整个 `AppContext` value 对象，否则 `chatListVersion` 递增会导致 effect 重新 fire -> 再次触发 `markConversationAsRead` -> 无限 `Maximum update depth exceeded` 循环
 - **DID 解析并发**: `ChatViewScreen`/`ChatListScreen`/`GroupSettingsScreen`/`CreateGroupScreen` 中批量解析 DID 时必须用 `Promise.all`，禁止 for 循环内串行 `await`
-- **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
+- **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本/文件消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
 - **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
 - **expo-document-picker**: 新增依赖 `expo-document-picker@~57.0.1`（Expo 52 兼容），用于文件选择（`getDocumentAsync({type: '*/*'})`），返回 `{uri, name, mimeType, size}`
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
@@ -353,3 +360,6 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **文件消息预览**: ChatListScreen 最近消息 `kind === 'file'` 显示 `📎 filename`
 - **文件分片完整性**: 每片独立 AES-256-GCM 加密，nonce 由 fileId 前 8 字节 + chunkIndex 4 字节大端组成，同一 fileKey 下 nonce 不重复。解密后拼接整文件 SHA-256 与 manifest 比对
 - **文件大小限制**: 无硬限制，逐块 5MB 读取加密，内存 O(5MB)。>500MB 弹警告确认。无断点续传，任一 uploadBlob 失败则整个发送失败
+- **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 写入 IndexedDB 并以 `indexeddb://{fileId}` 作为 localPath，组件渲染时通过 `useFileUri` 解析为 blob URL；发送方同样持久化，刷新页面后仍可显示
+- **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
+- **聊天滚动位置保持**: `ChatViewScreen` 用模块级 `savedScrollOffsets` 记录每个会话滚动偏移，从 `ImageViewer` 返回时恢复；`messageEqual` 确保 fileMeta/reactions/readAt 变化能触发 FlatList 更新

@@ -55,6 +55,8 @@ export function QrDisplayScreen(): React.JSX.Element {
   const [errorMsg, setErrorMsg] = useState('');
 
   const submittedRef = useRef(false);
+  const keyPackageSerializedRef = useRef<string>('');
+  const welcomeQueueIdRef = useRef<string>('');
 
   const onCheckBob = useCallback(async (): Promise<void> => {
     const trimmed = handle.trim();
@@ -68,6 +70,12 @@ export function QrDisplayScreen(): React.JSX.Element {
       });
       const resolvedDid = result.data.did;
 
+      if (resolvedDid === app.session.did) {
+        setErrorMsg('You cannot invite yourself');
+        setPhase('error');
+        return;
+      }
+
       const status = await checkBobDmeStatus(app.storage, resolvedDid);
       setBobDid(resolvedDid);
       setBobHandle(trimmed);
@@ -77,8 +85,10 @@ export function QrDisplayScreen(): React.JSX.Element {
         setPostText(generateInvitePostText(trimmed));
         setPhase('preview');
       } else if (status === 'registered_not_friend') {
-        const { qrString } = await app.generateInviteQr(resolvedDid);
+        const { qrString, keyPackageSerialized, welcomeQueueId } = await app.generateInviteQr(resolvedDid);
         setQrValue(qrString);
+        keyPackageSerializedRef.current = keyPackageSerialized;
+        welcomeQueueIdRef.current = welcomeQueueId;
         setPostText(generateAddFriendPostText(trimmed));
         setPhase('preview');
       } else {
@@ -101,13 +111,18 @@ export function QrDisplayScreen(): React.JSX.Element {
 
       await createDmeInvitePost(app.session.agent, postText, qrBytes);
 
+      // Only start waiting for the handshake after the invite post is published.
+      if (bobStatus === 'registered_not_friend' && bobDid && keyPackageSerializedRef.current && welcomeQueueIdRef.current) {
+        await app.trackInvitePendingWelcome(bobDid, keyPackageSerializedRef.current, welcomeQueueIdRef.current);
+      }
+
       setPhase('published');
       setTimeout(() => navigation.goBack(), 1500);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to publish invite');
       setPhase('error');
     }
-  }, [phase, bobStatus, qrValue, postText, app, navigation]);
+  }, [phase, bobStatus, qrValue, postText, app, bobDid, navigation]);
 
   const onCancel = useCallback((): void => {
     navigation.goBack();
@@ -115,6 +130,8 @@ export function QrDisplayScreen(): React.JSX.Element {
 
   const onRetry = useCallback((): void => {
     submittedRef.current = false;
+    keyPackageSerializedRef.current = '';
+    welcomeQueueIdRef.current = '';
     setPhase('input');
     setHandle('');
     setQrValue('');
@@ -147,6 +164,8 @@ export function QrDisplayScreen(): React.JSX.Element {
               style={styles.input}
               value={handle}
               onChangeText={setHandle}
+              onSubmitEditing={onCheckBob}
+              returnKeyType="go"
               placeholder="Bob's handle (e.g. bob.bsky.social)"
               placeholderTextColor={theme.colors.placeholder}
               autoCapitalize="none"

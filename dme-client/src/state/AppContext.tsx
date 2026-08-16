@@ -159,7 +159,9 @@ interface AppActions {
   deleteMessage: (conversationId: string, messageId: string) => Promise<void>;
   deleteFriend: (groupId: string) => Promise<void>;
   markConversationAsRead: (groupId: string) => Promise<void>;
-  generateInviteQr: (bobDid: string) => Promise<{ qrString: string; keyPackageInitKey: Uint8Array }>;
+  generateInviteQr: (bobDid: string) => Promise<{ qrString: string; keyPackageInitKey: Uint8Array; keyPackageSerialized: string; welcomeQueueId: string }>;
+  trackInvitePendingWelcome: (bobDid: string, keyPackageSerialized: string, welcomeQueueId: string) => Promise<void>;
+  deletePendingWelcome: (queueId: string) => Promise<void>;
   acceptInviteQr: (qrString: string) => Promise<void>;
   refreshKeyPackagePool: () => Promise<void>;
   setPollBatchSize: (size: number) => Promise<void>;
@@ -651,7 +653,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const generateInviteQr = useCallback(async (
     bobDid: string,
-  ): Promise<{ qrString: string; keyPackageInitKey: Uint8Array }> => {
+  ): Promise<{ qrString: string; keyPackageInitKey: Uint8Array; keyPackageSerialized: string; welcomeQueueId: string }> => {
     if (!storage || !identityKeys || !session || !poller) {
       throw new Error('generateInviteQr: not fully initialized');
     }
@@ -680,25 +682,47 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     );
     const qrString = encodeQrPayload({ encryptedKeyPackage, aliceDid: session.did });
     const keyPackageInitKey = pair.publicPackage.initKey;
-
-    // Track pending welcome
+    const keyPackageSerialized = serializeWithUint8Array(pair);
     const welcomeQueueId = deriveWelcomeQueueId(keyPackageInitKey);
+
+    // Mark pool entry as consumed (QR is generated for this specific invitation)
+    await storage.markKeyPackageConsumed(available.id);
+    setKeyPackagePool(await storage.getKeyPackagePool());
+
+    // Pending welcome is NOT tracked here; caller should track it only after
+    // the invite post is actually published (see trackInvitePendingWelcome).
+    return { qrString, keyPackageInitKey, keyPackageSerialized, welcomeQueueId };
+  }, [storage, identityKeys, session, poller, refreshKeyPackagePool]);
+
+  const trackInvitePendingWelcome = useCallback(async (
+    bobDid: string,
+    keyPackageSerialized: string,
+    welcomeQueueId: string,
+  ): Promise<void> => {
+    if (!storage || !poller) {
+      throw new Error('trackInvitePendingWelcome: not fully initialized');
+    }
+
     const entry: PendingWelcome = {
       queueId: welcomeQueueId,
       groupId: bobDid,
-      keyPackageSerialized: serializeWithUint8Array(pair),
+      keyPackageSerialized,
       createdAt: new Date().toISOString(),
     };
     await storage.putPendingWelcome(entry);
     poller.addPendingWelcome(entry);
     setPendingWelcomes((prev) => [...prev, entry]);
+  }, [storage, poller]);
 
-    // Mark pool entry as consumed
-    await storage.markKeyPackageConsumed(available.id);
-    setKeyPackagePool(await storage.getKeyPackagePool());
+  const deletePendingWelcome = useCallback(async (queueId: string): Promise<void> => {
+    if (!storage || !poller) {
+      throw new Error('deletePendingWelcome: not fully initialized');
+    }
 
-    return { qrString, keyPackageInitKey };
-  }, [storage, identityKeys, session, poller, refreshKeyPackagePool]);
+    await storage.deletePendingWelcome(queueId);
+    poller.removePendingWelcome(queueId);
+    setPendingWelcomes((prev) => prev.filter((w) => w.queueId !== queueId));
+  }, [storage, poller]);
 
   const acceptInviteQr = useCallback(async (qrString: string): Promise<void> => {
     if (!storage || !identityKeys || !session || !pds || !poller) {
@@ -2226,6 +2250,8 @@ blockList,
       deleteFriend,
       markConversationAsRead,
       generateInviteQr,
+      trackInvitePendingWelcome,
+      deletePendingWelcome,
       acceptInviteQr,
       refreshKeyPackagePool,
       setPollBatchSize,
@@ -2253,7 +2279,7 @@ blockList,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
-      sendMessage, sendFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, acceptInviteQr,
+      sendMessage, sendFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, trackInvitePendingWelcome, deletePendingWelcome, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy, setServerUrl, setGatewayUrl,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,

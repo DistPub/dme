@@ -124,6 +124,7 @@ export function ChatListScreen(): React.JSX.Element {
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviterHandles, setInviterHandles] = useState<Record<string, string>>({});
+  const [welcomeHandles, setWelcomeHandles] = useState<Record<string, string>>({});
   const [menuVisible, setMenuVisible] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState(false);
@@ -219,6 +220,29 @@ const resolveProfiles = useCallback(async (
     })();
     return () => { cancelled = true; };
   }, [app.receivedGroupInvites, inviterHandles, resolveHandle]);
+
+  useEffect(() => {
+    const dids = app.pendingWelcomes
+      .map((w) => w.groupId)
+      .filter((did) => !welcomeHandles[did]);
+    const uniqueDids = [...new Set(dids)];
+    if (uniqueDids.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(
+        uniqueDids.map(async (did) => ({ did, handle: await resolveHandle(did) })),
+      );
+      if (!cancelled) {
+        const resolved: Record<string, string> = {};
+        for (const { did, handle } of results) {
+          resolved[did] = handle;
+        }
+        setWelcomeHandles((prev) => ({ ...prev, ...resolved }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [app.pendingWelcomes, welcomeHandles, resolveHandle]);
 
   useEffect(() => {
     const session = app.session;
@@ -428,25 +452,28 @@ const resolveProfiles = useCallback(async (
   }, [app, backupPwd, backupPwdConfirm]);
 
   const onDeleteWelcome = useCallback((queueId: string) => {
-    if (!app.storage) return;
-    app.storage.deletePendingWelcome(queueId).catch((err: unknown) => console.error('deletePendingWelcome failed:', err));
-  }, [app]);
+    app.deletePendingWelcome(queueId).catch((err: unknown) => console.error('deletePendingWelcome failed:', err));
+  }, [app.deletePendingWelcome]);
 
   const renderWelcomeRow = useCallback(
-    (welcome: PendingWelcome): React.JSX.Element => (
-      <View style={styles.inviteRow}>
-        <View style={styles.inviteInfo}>
-          <Text style={styles.inviteHandle} numberOfLines={1}>{welcome.groupId}</Text>
-          <Text style={styles.inviteStatus}>
-            Waiting for welcome…
-          </Text>
+    (welcome: PendingWelcome): React.JSX.Element => {
+      const handle = welcomeHandles[welcome.groupId];
+      const label = handle && handle !== welcome.groupId ? `@${handle}` : welcome.groupId;
+      return (
+        <View style={styles.inviteRow}>
+          <View style={styles.inviteInfo}>
+            <Text style={styles.inviteHandle} numberOfLines={1}>{label}</Text>
+            <Text style={styles.inviteStatus}>
+              Waiting for welcome… {formatTimeAgo(welcome.createdAt)}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={() => onDeleteWelcome(welcome.queueId)} style={styles.inviteBtn}>
+            <Text style={[styles.inviteBtnText, { color: theme.colors.error }]}>Delete</Text>
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity onPress={() => onDeleteWelcome(welcome.queueId)} style={styles.inviteBtn}>
-          <Text style={[styles.inviteBtnText, { color: theme.colors.error }]}>Delete</Text>
-        </TouchableOpacity>
-      </View>
-    ),
-    [onDeleteWelcome],
+      );
+    },
+    [onDeleteWelcome, welcomeHandles],
   );
 
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);

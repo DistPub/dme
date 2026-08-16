@@ -112,6 +112,10 @@ export async function acceptInvite(
     bobIdentityKeys.encryption.privateKey,
   );
 
+  if (aliceDid === bobDid) {
+    throw new Error('Cannot accept an invite from yourself');
+  }
+
   const bobKeyPackagePair = await generateKeyPackageForUser(
     bobDid,
     bobIdentityKeys.signing.privateKey,

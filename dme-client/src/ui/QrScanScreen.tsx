@@ -91,6 +91,9 @@ export function QrScanScreen(): React.JSX.Element {
       }
 
       const payload = decodeQrPayload(decoded);
+      if (payload.aliceDid === app.session?.did) {
+        throw new Error('Cannot accept your own invite');
+      }
       const handle = await resolveHandle(payload.aliceDid);
       setAliceHandle(handle);
       setQrString(decoded);

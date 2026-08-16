@@ -10,9 +10,6 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  type LayoutChangeEvent,
 } from 'react-native';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -34,7 +31,6 @@ import { Image } from 'expo-image';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
-const savedScrollOffsets = new Map<string, number>();
 
 export function ChatViewScreen(): React.JSX.Element {
   const app = useApp();
@@ -60,6 +56,8 @@ export function ChatViewScreen(): React.JSX.Element {
   } = app;
 
   const [messages, setMessages] = useState<StoredMessage[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [displayName, setDisplayName] = useState(isGroup ? 'Loading...' : conversationId);
@@ -79,77 +77,79 @@ export function ChatViewScreen(): React.JSX.Element {
   const [actionMenuLayout, setActionMenuLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
-  const scrollMetricsRef = useRef({ offset: 0, contentHeight: 0, layoutHeight: 0, isAtBottom: true });
-  const isRestoringScrollRef = useRef(false);
+  const messagesRef = useRef<StoredMessage[]>([]);
 
-  const messageEqual = useCallback((a: StoredMessage, b: StoredMessage): boolean => {
-    if (a.id !== b.id) return false;
-    if (a.kind !== b.kind) return false;
-    if (a.plaintext !== b.plaintext) return false;
-    if (a.readAt !== b.readAt) return false;
-    if (a.reactions?.length !== b.reactions?.length) return false;
-    if (a.reactions && b.reactions) {
-      for (let i = 0; i < a.reactions.length; i++) {
-        if (
-          a.reactions[i]!.did !== b.reactions[i]!.did ||
-          a.reactions[i]!.emoji !== b.reactions[i]!.emoji
-        ) {
-          return false;
-        }
-      }
-    }
-    if (a.fileMeta?.downloadStatus !== b.fileMeta?.downloadStatus) return false;
-    if (a.fileMeta?.localPath !== b.fileMeta?.localPath) return false;
-    return true;
-  }, []);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
-  const loadMessages = useCallback(async (): Promise<void> => {
+  const loadRecentMessages = useCallback(async (): Promise<void> => {
     if (!storage) return;
-    const msgs = await storage.getMessages(conversationId);
+    const { messages: msgs, hasMore: more } = await storage.getMessagesPaginated(conversationId, undefined, 50);
     const blockedSet = new Set(blockList);
     const next = msgs.filter((m) => !blockedSet.has(m.fromDid));
-    setMessages((prev) => {
-      if (prev.length !== next.length) return next;
-      for (let i = 0; i < prev.length; i++) {
-        if (!messageEqual(prev[i]!, next[i]!)) return next;
-      }
-      return prev;
-    });
-  }, [storage, conversationId, blockList, messageEqual]);
+    setMessages(next);
+    setHasMore(more);
+  }, [storage, conversationId, blockList]);
+
+  const loadOlderMessages = useCallback(async (): Promise<void> => {
+    if (!storage || !hasMore || loadingMore || messages.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const beforeId = messages[messages.length - 1]!.id;
+      const { messages: older, hasMore: more } = await storage.getMessagesPaginated(conversationId, beforeId, 50);
+      const blockedSet = new Set(blockList);
+      const next = older.filter((m) => !blockedSet.has(m.fromDid));
+      setMessages((prev) => [...prev, ...next]);
+      setHasMore(more);
+    } catch (err) {
+      console.error('loadOlderMessages failed:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [storage, conversationId, hasMore, loadingMore, messages, blockList]);
 
   useFocusEffect(
     useCallback(() => {
       setActiveConversation(conversationId);
-      loadMessages();
+      loadRecentMessages().catch((err: unknown) => {
+        console.error('loadRecentMessages failed:', err);
+      });
       markConversationAsRead(conversationId).catch((err: unknown) => {
         console.error('markConversationAsRead failed:', err);
       });
 
-      const savedOffset = savedScrollOffsets.get(conversationId);
-      if (savedOffset !== undefined && savedOffset > 0) {
-        isRestoringScrollRef.current = true;
-        requestAnimationFrame(() => {
-          listRef.current?.scrollToOffset({ offset: savedOffset, animated: false });
-          setTimeout(() => {
-            isRestoringScrollRef.current = false;
-          }, 150);
-        });
-      }
-
       return () => {
         setActiveConversation(null);
       };
-    }, [loadMessages, markConversationAsRead, conversationId, setActiveConversation]),
+    }, [loadRecentMessages, markConversationAsRead, conversationId, setActiveConversation]),
   );
 
   useEffect(() => {
-    loadMessages();
-    if (storage) {
-      storage.markMessagesAsRead(conversationId).catch((err: unknown) => {
-        console.error('markMessagesAsRead failed:', err);
+    if (!storage) return;
+    if (messagesRef.current.length === 0) {
+      loadRecentMessages().catch((err: unknown) => {
+        console.error('loadRecentMessages failed:', err);
+      });
+    } else {
+      const limit = Math.max(50, messagesRef.current.length);
+      storage.getMessagesPaginated(conversationId, undefined, limit).then(({ messages: recent }) => {
+        if (recent.length === 0) return;
+        const recentMap = new Map(recent.map((m) => [m.id, m]));
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const newMessages = recent.filter((m) => !existingIds.has(m.id));
+          const merged = prev.map((m) => recentMap.get(m.id) ?? m);
+          return [...newMessages, ...merged];
+        });
+      }).catch((err: unknown) => {
+        console.error('merge messages failed:', err);
       });
     }
-  }, [chatListVersion, loadMessages]);
+    storage.markMessagesAsRead(conversationId).catch((err: unknown) => {
+      console.error('markMessagesAsRead failed:', err);
+    });
+  }, [chatListVersion, storage, conversationId, loadRecentMessages]);
 
   useEffect(() => {
     if (!isGroup || !storage || !session) return;
@@ -285,14 +285,13 @@ export function ChatViewScreen(): React.JSX.Element {
     try {
       await sendMessage(conversationId, trimmed);
       setText('');
-      await loadMessages();
       inputRef.current?.focus();
     } catch (err) {
       console.error('Send failed:', err);
     } finally {
       setSending(false);
     }
-  }, [text, sending, app, conversationId, loadMessages]);
+  }, [text, sending, sendMessage, conversationId]);
 
   const handleReact = useCallback(async (msg: StoredMessage, emoji: string): Promise<void> => {
     setPickerTarget(null);
@@ -330,11 +329,11 @@ export function ChatViewScreen(): React.JSX.Element {
   const handleDeleteMessage = useCallback(async (msg: StoredMessage): Promise<void> => {
     try {
       await deleteMessage(conversationId, msg.id);
-      await loadMessages();
+      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
     } catch (err) {
       console.error('deleteMessage failed:', err);
     }
-  }, [deleteMessage, conversationId, loadMessages]);
+  }, [deleteMessage, conversationId]);
 
   const handleAttach = useCallback(async (): Promise<void> => {
     try {
@@ -342,36 +341,11 @@ export function ChatViewScreen(): React.JSX.Element {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0]!;
         await sendFileMessage(conversationId, asset.uri, asset.name, asset.mimeType ?? 'application/octet-stream', asset.size ?? 0);
-        await loadMessages();
       }
     } catch (err) {
       console.error('File pick failed:', err);
     }
-  }, [conversationId, sendFileMessage, loadMessages]);
-
-  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>): void => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    scrollMetricsRef.current = {
-      offset: contentOffset.y,
-      contentHeight: contentSize.height,
-      layoutHeight: layoutMeasurement.height,
-      isAtBottom: contentSize.height - contentOffset.y - layoutMeasurement.height < 50,
-    };
-    savedScrollOffsets.set(conversationId, contentOffset.y);
-  }, [conversationId]);
-
-  const handleLayout = useCallback((event: LayoutChangeEvent): void => {
-    scrollMetricsRef.current.layoutHeight = event.nativeEvent.layout.height;
-  }, []);
-
-  const handleContentSizeChange = useCallback((_: number, height: number): void => {
-    scrollMetricsRef.current.contentHeight = height;
-    if (isRestoringScrollRef.current) return;
-    const { isAtBottom, layoutHeight } = scrollMetricsRef.current;
-    if (isAtBottom || height <= layoutHeight) {
-      listRef.current?.scrollToEnd({ animated: true });
-    }
-  }, []);
+  }, [conversationId, sendFileMessage]);
 
   const canReact = !dissolved && !removed && !left;
 
@@ -469,7 +443,7 @@ export function ChatViewScreen(): React.JSX.Element {
   );
 
   const keyExtractor = useCallback(
-    (item: StoredMessage, index: number): string => `${item.id}-${index}`,
+    (item: StoredMessage): string => item.id,
     [],
   );
 
@@ -478,7 +452,9 @@ export function ChatViewScreen(): React.JSX.Element {
       <View style={styles.header}>
         <Button
           label="Back"
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            navigation.goBack();
+          }}
           variant="secondary"
           style={styles.backBtn}
         />
@@ -552,9 +528,9 @@ export function ChatViewScreen(): React.JSX.Element {
         data={messages}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        onScroll={handleScroll}
-        onLayout={handleLayout}
-        onContentSizeChange={handleContentSizeChange}
+        inverted={true}
+        onEndReached={loadOlderMessages}
+        onEndReachedThreshold={0.3}
       />
 
       {dissolved || removed || left ? (

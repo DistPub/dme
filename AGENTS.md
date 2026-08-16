@@ -86,7 +86,7 @@ dme/
 | 消息气泡 + reactions + 群聊头像 | `dme-client/src/ui/MessageBubble.tsx`（群聊消息双列布局：头像列 + 内容列(昵称+@handle+气泡+reactions)） |
 | 表情选择器 | `dme-client/src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 消息操作菜单 | `dme-client/src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
-| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle + ⋮（跳转私聊管理），群聊 头像占位+[Group] 群名+@creator handle + ⋮（跳转群管理）；群聊消息行双列布局：发言人头像单独成列，收到的消息左侧头像+昵称+@handle，自己发的消息右侧头像） |
+| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle + ⋮（跳转私聊管理），群聊 头像占位+[Group] 群名+@creator handle + ⋮（跳转群管理）；群聊消息行双列布局：发言人头像单独成列，收到的消息左侧头像+昵称+@handle，自己发的消息右侧头像；FlatList `inverted={true}` + newest-first 分页，进入自动显示最新消息） |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
@@ -172,8 +172,11 @@ dme/
 | `ImageViewerScreen` | component | ImageViewerScreen.tsx | 全屏图片查看器，点击或 ✕ 关闭 |
 | `useFileUri` | hook | file-cache.ts | 解析 `indexeddb://` / 普通 URI 为可渲染 blob URL，管理生命周期 |
 | `cacheFile` | func | file-cache.ts | Web 端把文件字节持久化到 IndexedDB |
-| `savedScrollOffsets` | const | ChatViewScreen.tsx | 模块级 Map，持久化保存每个会话的 FlatList 滚动偏移 |
-| `messageEqual` | func | ChatViewScreen.tsx | 比较两条 StoredMessage 是否真正变化（含 fileMeta/reactions/readAt） |
+| `loadRecentMessages` | func | ChatViewScreen.tsx | 进入聊天时加载最近 50 条消息，数据按 newest-first 倒序 |
+| `loadOlderMessages` | func | ChatViewScreen.tsx | 用户滑到顶部时加载更早 50 条，append 到倒序数组末尾 |
+| `messagesRef` | ref | ChatViewScreen.tsx | `useRef<StoredMessage[]>`，供 `chatListVersion` effect 读取当前 messages 长度做 merge |
+| `getMessagesPaginated` | method | db.ts | 按 `beforeId`/`limit` 返回倒序消息切片 + `hasMore`，当前仍基于完整 JSON 数组切片 |
+| `getMessagesAfter` | method | db.ts | 返回指定消息 id 之后的新增消息（正序）|
 | `getServerUrl` | method | pds.ts | 返回 DmePds.serverUrl（直连 server） |
 | `getBaseUrl`/`getBlobUrl` | method | pds.ts | 客户端面向端点：`getBaseUrl()` = gateway||server 用于 batch.get；`getBlobUrl(pds,did,cid)` 网关走 file.blob CDN、直连退化为 PDS `com.atproto.sync.getBlob` |
 | `updateFileMessageMeta` | method | db.ts | 局部更新某条文件消息的 fileMeta（如 downloadStatus/localPath） |
@@ -362,4 +365,4 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **文件大小限制**: 无硬限制，逐块 5MB 读取加密，内存 O(5MB)。>500MB 弹警告确认。无断点续传，任一 uploadBlob 失败则整个发送失败
 - **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 写入 IndexedDB 并以 `indexeddb://{fileId}` 作为 localPath，组件渲染时通过 `useFileUri` 解析为 blob URL；发送方同样持久化，刷新页面后仍可显示
 - **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
-- **聊天滚动位置保持**: `ChatViewScreen` 用模块级 `savedScrollOffsets` 记录每个会话滚动偏移，从 `ImageViewer` 返回时恢复；`messageEqual` 确保 fileMeta/reactions/readAt 变化能触发 FlatList 更新
+- **聊天列表分页**: `ChatViewScreen` 使用 `inverted={true}` FlatList，数据 newest-first；进入时只加载最近 50 条，滑到顶部触发 `onEndReached` 加载更早 50 条；`chatListVersion` 变化时 merge 最近 N 条（N = max(50, 已加载数)）以刷新 fileMeta/reactions/readAt 并 prepend 新消息，不再依赖 `scrollToEnd`

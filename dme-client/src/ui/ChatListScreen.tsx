@@ -293,7 +293,15 @@ const resolveProfiles = useCallback(async (
         handle: cachedProfile?.handle ?? (handleCacheRef.current[groupId] ?? groupId),
       };
     });
-    setConversations(rows);
+    const sortedRows = rows.slice().sort((a, b) => {
+      const ta = a.lastMessage?.createdAt;
+      const tb = b.lastMessage?.createdAt;
+      if (!ta && !tb) return 0;
+      if (!ta) return 1;
+      if (!tb) return -1;
+      return tb.localeCompare(ta);
+    });
+    setConversations(sortedRows);
     setLoading(false);
 
     const needsRefresh =

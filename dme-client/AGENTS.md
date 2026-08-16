@@ -131,4 +131,4 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口，含 `blobCids`）。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方下载状态 `ready`，接收方初始 `pending`
 - **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 写入 IndexedDB 并以 `indexeddb://{fileId}` 作为 localPath，组件渲染时通过 `useFileUri` 解析为 blob URL；发送方同样持久化，刷新页面后仍可显示
 - **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
-- **聊天滚动位置保持**: `ChatViewScreen` 用模块级 `savedScrollOffsets` 记录每个会话滚动偏移，从 `ImageViewer` 返回时恢复；`messageEqual` 确保 fileMeta/reactions/readAt 变化能触发 FlatList 更新
+- **聊天列表分页**: `ChatViewScreen` 使用 `inverted={true}` FlatList，数据 newest-first；进入时只加载最近 50 条，滑到顶部触发 `onEndReached` 加载更早 50 条；`chatListVersion` 变化时 merge 最近 N 条（N = max(50, 已加载数)）以刷新 fileMeta/reactions/readAt 并 prepend 新消息，不再依赖 `scrollToEnd`

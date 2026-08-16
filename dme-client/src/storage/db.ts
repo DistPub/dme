@@ -156,6 +156,31 @@ export class DmeStorage {
     return messages;
   }
 
+  async getMessagesPaginated(
+    groupId: string,
+    beforeId?: string,
+    limit = 50,
+  ): Promise<{ messages: StoredMessage[]; hasMore: boolean }> {
+    const all = await this.getMessages(groupId);
+    if (beforeId === undefined) {
+      const slice = all.slice(-limit);
+      return { messages: slice.slice().reverse(), hasMore: all.length > limit };
+    }
+    const idx = all.findIndex((m) => m.id === beforeId);
+    if (idx === -1) {
+      return { messages: [], hasMore: false };
+    }
+    const slice = all.slice(Math.max(0, idx - limit), idx);
+    return { messages: slice.slice().reverse(), hasMore: idx > limit };
+  }
+
+  async getMessagesAfter(groupId: string, afterId: string): Promise<StoredMessage[]> {
+    const all = await this.getMessages(groupId);
+    const idx = all.findIndex((m) => m.id === afterId);
+    if (idx === -1) return [];
+    return all.slice(idx + 1);
+  }
+
   async markMessagesAsRead(groupId: string): Promise<void> {
     const key = this.prefix + `messages:${groupId}`;
     const raw = await AsyncStorage.getItem(key);

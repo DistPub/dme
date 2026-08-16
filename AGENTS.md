@@ -95,7 +95,7 @@ dme/
 | 文件加密 | `dme-client/src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
 | 文件协议类型 | `dme-client/src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
 | 文件发送/下载 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `downloadFile`） |
-| 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片 + reactions） |
+| 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+文件卡片/图片缩略图/视频/音频+reactions)，与 `MessageBubble` 同款；1:1 不渲染头像列） |
 | 图片查看器 | `dme-client/src/ui/ImageViewerScreen.tsx`（全屏查看，点击关闭） |
 | Web 文件缓存 | `dme-client/src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
@@ -174,7 +174,7 @@ dme/
 | `resolvePdsUrl` | func | did.ts | DID 解析 -> `AtprotoPersonalDataServer` serviceEndpoint |
 | `FileManifestMessage` | interface | types.ts | E2E 加密文件清单（type: 'file'，含 fileKey/fileId/sha256/mimeType 等） |
 | `FileMeta` | interface | types.ts | 本地文件元数据（含 downloadStatus: pending/downloading/ready/failed） |
-| `FileMessageBubble` | component | FileMessageBubble.tsx | 文件消息气泡：图片缩略图/视频播放/文件卡片+下载状态+reactions |
+| `FileMessageBubble` | component | FileMessageBubble.tsx | 群聊双列布局（头像列 + 内容列：昵称+@handle+文件卡片/图片缩略图/视频播放/音频图标+下载状态+reactions），与 `MessageBubble` 同款；1:1 不渲染头像列 |
 | `ImageViewerScreen` | component | ImageViewerScreen.tsx | 全屏图片查看器，点击或 ✕ 关闭 |
 | `useFileUri` | hook | file-cache.ts | 解析 `indexeddb://` / 普通 URI 为可渲染 blob URL，管理生命周期 |
 | `cacheFile` | func | file-cache.ts | Web 端把文件字节持久化到 IndexedDB |
@@ -305,7 +305,8 @@ dme/
 - **DID 解析**: 统一使用 `atproto/resolver.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
 - **DID/Profile 24h 缓存**: UI 显示相关请求必须走 `atproto/profile-cache.ts`（`resolveHandleCached` / `getProfileCached` / `getProfilesCached`），24h TTL + AsyncStorage 持久化 + 内存热缓存；登陆、加好友、文件下载等**功能性请求**必须跳过缓存，直接使用 `atproto/did.ts` 的 `getRemoteEncryptionKey` / `resolvePdsUrl`
 - **Profile 批量获取**: 多个 DID 的 profile（avatar + displayName + handle）必须用 `atproto/profile-cache.ts` 的 `getProfilesCached(dids)` 批量接口，内部走 `app.bsky.actor.getProfiles({ actors: string[] })`，禁止 `Promise.all(dids.map(d => getProfile(d)))` 逐个请求；缓存 miss 时 fallback 到 `sharedDidResolver`（仅 handle）；每个屏幕用 `useRef` 缓存已解析的 profile，跨 focus 保留；**首屏加载**（ChatListScreen 等）须先读本地缓存同步构造 rows 立即渲染，再异步调 `getProfilesCached`/`resolveHandleCached` 解析，拿到后用 `setX(prev => prev.map(...))` 函数式更新，禁止同步 `await` 网络请求阻塞首屏渲染
-- **群聊消息布局**: 群聊消息行采用双列布局：头像列（40px 圆形 `expo-image`，加载失败回退首字母）单独成列，内容列（昵称+@handle+消息气泡+reactions）单独成列；收到的消息头像在左、内容在右，自己发的消息内容在左、头像在右；1:1 聊天不渲染头像列
+- **Sender profile effect 模式**: `ChatViewScreen` 解析群聊发送者 profile 的 `useEffect` 必须先按当前 `messages` 的 senderDids 把 `senderProfileCacheRef`（ref）已有条目镜像进 `senderProfiles` state，再对缺失 DID 发起 `getProfilesCached`/`resolveHandleCached`，完成时用 `mountedRef`（仅组件卸载翻 false）守卫而非 per-run `cancelled`（绑定 `messages` 变化的 cancelled 会让被 superseded 但已写 cache 的结果永远不进 state，导致名字塌缩成 DID、`@handle` 不渲染——即进入群聊时 `loadRecentMessages` 与 `markConversationAsRead`→`markMessagesAsRead`→`setChatListVersion` merge 两次 `messages` 变更引发的 race）。模块级 `profileInFlight`+`profileMemoryCache` 负责去重，重复调用同 DID 是 no-op
+- **群聊消息布局**: 群聊消息行（文本 `MessageBubble` 与文件 `FileMessageBubble` 共用同一布局）采用双列布局：头像列（40px 圆形 `expo-image`，加载失败回退首字母）单独成列，内容列（昵称+@handle+消息气泡+reactions）单独成列；收到的消息头像在左、内容在右，自己发的消息内容在左、头像在右；1:1 聊天不渲染头像列。`ChatViewScreen.renderItem` 用 `senderIdentityFor(item)` helper 统一计算 `senderDisplayName`/`senderHandle`/`senderAvatarUrl`，文本与文件分支共用，禁止各写一份三元
 - **React hooks 依赖**: UI 屏幕严禁把整个 `AppContext` value 对象放入 `useEffect`/`useCallback`/`useFocusEffect` 依赖数组；必须在组件顶部解构 `storage`/`session`/`markConversationAsRead`/`chatListVersion` 等具体字段后再依赖
 - **会话列表加载**: `ChatListScreen.loadConversations` 用 `Promise.all` 并行解析各会话 handle，避免 for 循环串行 await 阻塞 JS 线程
 - **未读标记**: 进入 ChatView 时调用 `markConversationAsRead`；poller 推送新消息后，`chatListVersion` 变化触发的 `useEffect` 中会同步调用 `storage.markMessagesAsRead(conversationId)`，确保用户在 ChatView 已看到的消息返回列表时不显示未读
@@ -366,7 +367,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
 - **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，blobCids 字段引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式，PDS 可识别防 GC）。fileKey 随机生成放在 MLS manifest 中，与 blobCids 共存在同一条 `dme.queue.envelope` 中（单 record）。Gateway 用 `caches.default` 缓存 blob 下载，群聊后续成员走 CF 边缘缓存。下载时 blob fetch 失败指数退避重试 2s/4s/8s，最多 3 次。图片 ≤ 5MB 自动下载，其他类型手动
 - **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方消息立即标记 `downloadStatus: 'ready'`（文件已在本机），接收方初始 `downloadStatus: 'pending'`
-- **文件消息 UI**: `FileMessageBubble` 按 mimeType 分支渲染（image → expo-image 缩略图，video → ▶ 按钮，audio → 🔊 图标，其他 → 📎 + 文件名 + 大小）。下载状态：pending → 点击下载，downloading → ActivityIndicator，ready → 点击打开，failed → 重试按钮
+- **文件消息 UI**: `FileMessageBubble` 按 mimeType 分支渲染（image → expo-image 缩略图，video → ▶ 按钮，audio → 🔊 图标，其他 → 📎 + 文件名 + 大小）。下载状态：pending → 点击下载，downloading → ActivityIndicator，ready → 点击打开，failed → 重试按钮。群聊时复用与 `MessageBubble` 相同的双列布局（头像列 + 内容列昵称+@handle），1:1 不渲染头像列
 - **文件消息预览**: ChatListScreen 最近消息 `kind === 'file'` 显示 `📎 filename`
 - **文件分片完整性**: 每片独立 AES-256-GCM 加密，nonce 由 fileId 前 8 字节 + chunkIndex 4 字节大端组成，同一 fileKey 下 nonce 不重复。解密后拼接整文件 SHA-256 与 manifest 比对
 - **文件大小限制**: 无硬限制，逐块 5MB 读取加密，内存 O(5MB)。>500MB 弹警告确认。无断点续传，任一 uploadBlob 失败则整个发送失败

@@ -36,6 +36,12 @@ import { Image } from 'expo-image';
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
+interface SenderProfile {
+  displayName: string;
+  handle: string;
+  avatarUrl: string | null;
+}
+
 export function ChatViewScreen(): React.JSX.Element {
   const app = useApp();
   const route = useRoute<ChatViewRouteProp>();
@@ -69,9 +75,9 @@ export function ChatViewScreen(): React.JSX.Element {
   const [friendAvatarUrl, setFriendAvatarUrl] = useState<string | null>(null);
   const [friendAvatarError, setFriendAvatarError] = useState(false);
   const [friendHandle, setFriendHandle] = useState('');
-  const [senderProfiles, setSenderProfiles] = useState<Record<string, { displayName: string; handle: string; avatarUrl: string | null }>>({});
-  const senderProfileCacheRef = useRef<Record<string, { displayName: string; handle: string; avatarUrl: string | null }>>({});
-  const [ownProfile, setOwnProfile] = useState<{ displayName: string; handle: string; avatarUrl: string | null } | null>(null);
+  const [senderProfiles, setSenderProfiles] = useState<Record<string, SenderProfile>>({});
+  const senderProfileCacheRef = useRef<Record<string, SenderProfile>>({});
+  const [ownProfile, setOwnProfile] = useState<SenderProfile | null>(null);
   const [dissolved, setDissolved] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
@@ -82,6 +88,8 @@ export function ChatViewScreen(): React.JSX.Element {
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
   const messagesRef = useRef<StoredMessage[]>([]);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -156,30 +164,53 @@ export function ChatViewScreen(): React.JSX.Element {
   }, [chatListVersion, storage, conversationId, loadRecentMessages]);
 
   useEffect(() => {
-    if (!isGroup || !storage || !session) return;
-    const unresolvedDids = [...new Set(messages.map((m) => m.fromDid))]
-      .filter((did) => did !== session?.did && !senderProfileCacheRef.current[did]);
-    if (unresolvedDids.length === 0) return;
+    if (!isGroup || !session) return;
 
-    let cancelled = false;
-    (async () => {
-      const missing = unresolvedDids.filter((did) => !senderProfileCacheRef.current[did]);
-      if (missing.length > 0) {
-        try {
-          const profiles = await getProfilesCached(session.agent, missing);
-          for (const [did, profile] of Object.entries(profiles)) {
-            senderProfileCacheRef.current[did] = {
-              displayName: profile.displayName ?? '',
-              handle: profile.handle ?? did,
-              avatarUrl: profile.avatar ?? null,
-            };
-          }
-        } catch (err) {
-          console.error('Failed to batch resolve sender profiles', missing, err);
+    // Distinct sender DIDs in the current view, excluding self (own avatar
+    // is resolved by the separate ownProfile effect).
+    const senderDids = [...new Set(messages.map((m) => m.fromDid))]
+      .filter((did) => did !== session.did);
+    if (senderDids.length === 0) return;
+
+    // Always mirror the cache into state for DIDs we have already resolved.
+    // This is the fix for the cancellation race: a fetch that was superseded
+    // by a newer `messages` change (e.g. the markConversationAsRead merge)
+    // still writes the cache; we surface it here instead of bailing out and
+    // never calling setSenderProfiles.
+    setSenderProfiles((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const did of senderDids) {
+        const entry = senderProfileCacheRef.current[did];
+        if (entry && prev[did] !== entry) {
+          next[did] = entry;
+          changed = true;
         }
       }
+      return changed ? next : prev;
+    });
 
-      const stillMissing = unresolvedDids.filter((did) => !senderProfileCacheRef.current[did]);
+    // Only kick off network resolution for DIDs we don't have yet. The
+    // profile-cache module dedups in-flight requests and serves from its
+    // own cache, so repeated calls for the same DID are no-ops.
+    const missing = senderDids.filter((did) => !senderProfileCacheRef.current[did]);
+    if (missing.length === 0) return;
+
+    void (async () => {
+      try {
+        const profiles = await getProfilesCached(session.agent, missing);
+        for (const [did, profile] of Object.entries(profiles)) {
+          senderProfileCacheRef.current[did] = {
+            displayName: profile.displayName ?? '',
+            handle: profile.handle ?? did,
+            avatarUrl: profile.avatar ?? null,
+          };
+        }
+      } catch (err) {
+        console.error('Failed to batch resolve sender profiles', missing, err);
+      }
+
+      const stillMissing = missing.filter((did) => !senderProfileCacheRef.current[did]);
       if (stillMissing.length > 0) {
         await Promise.all(
           stillMissing.map(async (did) => {
@@ -193,35 +224,42 @@ export function ChatViewScreen(): React.JSX.Element {
         );
       }
 
-      if (!cancelled) {
-        const resolved: Record<string, { displayName: string; handle: string; avatarUrl: string | null }> = {};
-        for (const did of unresolvedDids) {
-          const p = senderProfileCacheRef.current[did];
-          resolved[did] = { displayName: p.displayName, handle: p.handle, avatarUrl: p.avatarUrl };
+      // Publish to state only if we're still mounted. We deliberately do NOT
+      // gate this on a per-run `cancelled` flag tied to `messages` changes:
+      // superseded runs already wrote the cache, and the next run's cache
+      // sync (above) handles surfacing their results.
+      if (!mountedRef.current) return;
+      setSenderProfiles((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const did of missing) {
+          const entry = senderProfileCacheRef.current[did];
+          if (entry && prev[did] !== entry) {
+            next[did] = entry;
+            changed = true;
+          }
         }
-        setSenderProfiles((prev) => ({ ...prev, ...resolved }));
-      }
+        return changed ? next : prev;
+      });
     })();
-    return () => { cancelled = true; };
-  }, [messages, isGroup, storage, session]);
+  }, [messages, isGroup, session]);
 
   useEffect(() => {
     if (!isGroup || !session?.did) return;
-    let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const profile = await getProfileCached(session.agent, session.did);
-        if (cancelled || !profile) return;
-        setOwnProfile({
+        if (!mountedRef.current || !profile) return;
+        const next: SenderProfile = {
           displayName: profile.displayName ?? '',
           handle: profile.handle ?? '',
           avatarUrl: profile.avatar ?? null,
-        });
+        };
+        setOwnProfile((prev) => (prev && prev.displayName === next.displayName && prev.handle === next.handle && prev.avatarUrl === next.avatarUrl ? prev : next));
       } catch (err) {
         console.error('Failed to fetch own profile for avatar:', err);
       }
     })();
-    return () => { cancelled = true; };
   }, [session?.did, isGroup, chatListVersion]);
 
   useEffect(() => {
@@ -351,6 +389,27 @@ export function ChatViewScreen(): React.JSX.Element {
 
   const canReact = !dissolved && !removed && !left;
 
+  const senderIdentityFor = useCallback((item: StoredMessage): {
+    senderDisplayName?: string;
+    senderHandle?: string;
+    senderAvatarUrl?: string | null;
+  } => {
+    if (!isGroup) return {};
+    const isOwn = item.fromDid === session?.did;
+    if (isOwn) {
+      return {
+        senderDisplayName: ownProfile?.displayName || ownProfile?.handle || session?.did,
+        senderAvatarUrl: ownProfile?.avatarUrl ?? null,
+      };
+    }
+    const sp = senderProfiles[item.fromDid];
+    return {
+      senderDisplayName: sp?.displayName || sp?.handle || item.fromDid,
+      senderHandle: sp?.handle,
+      senderAvatarUrl: sp?.avatarUrl ?? null,
+    };
+  }, [isGroup, session?.did, ownProfile, senderProfiles]);
+
   const renderItem = useCallback(
     ({ item }: { item: StoredMessage }): React.JSX.Element => {
       if (item.kind === 'group_system') {
@@ -403,10 +462,15 @@ export function ChatViewScreen(): React.JSX.Element {
       if (item.kind === 'file' && item.fileMeta) {
         const fileMeta = item.fileMeta;
         const localPath = fileMeta.localPath;
+        const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
+        const isOutgoing = item.fromDid === session?.did;
         return (
           <FileMessageBubble
             fileMeta={fileMeta}
-            isOutgoing={item.fromDid === session?.did}
+            isOutgoing={isOutgoing}
+            senderDisplayName={senderDisplayName}
+            senderHandle={senderHandle}
+            senderAvatarUrl={senderAvatarUrl}
             reactions={item.reactions}
             currentDid={session?.did}
             onRetry={fileMeta.downloadStatus === 'failed' ? () => {
@@ -426,22 +490,24 @@ export function ChatViewScreen(): React.JSX.Element {
         );
       }
 
+      const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
+      const isOutgoing = item.fromDid === session?.did;
       return (
         <MessageBubble
           text={item.plaintext}
-          isOutgoing={item.fromDid === session?.did}
+          isOutgoing={isOutgoing}
           reactions={item.reactions}
           currentDid={session?.did}
-          senderDisplayName={isGroup ? (item.fromDid === session?.did ? (ownProfile?.displayName || ownProfile?.handle || session?.did) : (senderProfiles[item.fromDid]?.displayName || senderProfiles[item.fromDid]?.handle || item.fromDid)) : undefined}
-          senderHandle={isGroup && item.fromDid !== session?.did ? senderProfiles[item.fromDid]?.handle : undefined}
-          senderAvatarUrl={isGroup ? (item.fromDid === session?.did ? (ownProfile?.avatarUrl ?? null) : (senderProfiles[item.fromDid]?.avatarUrl ?? null)) : undefined}
+          senderDisplayName={senderDisplayName}
+          senderHandle={senderHandle}
+          senderAvatarUrl={senderAvatarUrl}
           onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
           onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
           onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
         />
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, senderIdentityFor],
   );
 
   const keyExtractor = useCallback(

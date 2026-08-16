@@ -63,7 +63,7 @@ dme-client/
 | 表情反应协议 | `src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions 渲染 | `src/ui/MessageBubble.tsx` |
-| 文件消息气泡 + 下载状态 | `src/ui/FileMessageBubble.tsx`（图片缩略图/视频播放/音频图标/文件卡片 + pending/downloading/ready/failed 状态 + reactions） |
+| 文件消息气泡 + 下载状态 | `src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+图片缩略图/视频播放/音频图标/文件卡片)；1:1 不渲染头像列；pending/downloading/ready/failed 状态 + reactions） |
 | 图片查看器 | `src/ui/ImageViewerScreen.tsx`（全屏查看，点击或 ✕ 关闭） |
 | Web 文件缓存 | `src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | 文件选择器 | `expo-document-picker`（`getDocumentAsync({type: '*/*'})`） |

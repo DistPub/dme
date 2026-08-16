@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Pressable } from 'react-native';
 import { Image } from 'expo-image';
 import { theme } from './theme';
@@ -12,6 +12,10 @@ interface FileMessageBubbleProps {
   isOutgoing: boolean;
   reactions?: Reaction[];
   currentDid?: string;
+  senderDisplayName?: string;
+  senderHandle?: string;
+  senderAvatarUrl?: string | null;
+  senderAvatarError?: boolean;
   onRetry?: () => void;
   onDownload?: () => void;
   onImagePress?: () => void;
@@ -30,6 +34,10 @@ export function FileMessageBubble({
   isOutgoing,
   reactions,
   currentDid,
+  senderDisplayName,
+  senderHandle,
+  senderAvatarUrl,
+  senderAvatarError,
   onRetry,
   onDownload,
   onImagePress,
@@ -42,6 +50,11 @@ export function FileMessageBubble({
   const isVideo = mimeType.startsWith('video/');
   const isAudio = mimeType.startsWith('audio/');
   const emojiBtnRef = useRef<View>(null);
+  const [avatarError, setAvatarError] = useState(false);
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [senderAvatarUrl]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, { emoji: string; count: number; includesMe: boolean }>();
@@ -60,7 +73,29 @@ export function FileMessageBubble({
     });
   }, [onOpenPicker]);
 
-  const renderContent = () => {
+  const effectiveAvatarError = senderAvatarError || avatarError;
+
+  const renderAvatar = (): React.JSX.Element | null => {
+    if (senderAvatarUrl === undefined) return null;
+    const fallbackLetter = (senderDisplayName?.[0] ?? '?').toUpperCase();
+    return (
+      <View style={styles.avatarWrap}>
+        {senderAvatarUrl && !effectiveAvatarError ? (
+          <Image
+            source={{ uri: senderAvatarUrl }}
+            style={styles.avatarImage}
+            contentFit="cover"
+            transition={300}
+            onError={() => setAvatarError(true)}
+          />
+        ) : (
+          <Text style={styles.avatarFallbackText}>{fallbackLetter}</Text>
+        )}
+      </View>
+    );
+  };
+
+  const renderFileContent = () => {
     if (downloadStatus === 'ready' && resolvedUri && isImage) {
       return (
         <Pressable onPress={onImagePress} disabled={!onImagePress}>
@@ -126,75 +161,132 @@ export function FileMessageBubble({
 
   return (
     <View style={[
-      styles.wrapper,
-      isOutgoing ? styles.wrapperOutgoing : styles.wrapperIncoming,
+      styles.row,
+      isOutgoing ? styles.rowOutgoing : styles.rowIncoming,
     ]}>
-      <View style={styles.bubbleRow}>
-        {isOutgoing && (
-          <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
-            <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={styles.emojiBtnText}>😀</Text>
-            </Pressable>
-          </View>
+      {!isOutgoing && renderAvatar()}
+      <View style={styles.contentCol}>
+        {senderDisplayName && !isOutgoing && (
+          <>
+            <Text style={styles.senderName} numberOfLines={1}>{senderDisplayName}</Text>
+            {senderHandle ? (
+              <Text style={styles.senderHandle} numberOfLines={1}>@{senderHandle}</Text>
+            ) : null}
+          </>
         )}
-        <View style={[
-          styles.container,
-          isOutgoing ? styles.outgoing : styles.incoming,
-        ]}>
-          {renderContent()}
+        <View style={[styles.bubbleRow, isOutgoing ? styles.bubbleRowOutgoing : styles.bubbleRowIncoming]}>
+          {isOutgoing && (
+            <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
+              <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.emojiBtnText}>😀</Text>
+              </Pressable>
+            </View>
+          )}
+          <View style={[
+            styles.container,
+            isOutgoing ? styles.outgoing : styles.incoming,
+          ]}>
+            {renderFileContent()}
+          </View>
+          {!isOutgoing && (
+            <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
+              <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.emojiBtnText}>😀</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
-        {!isOutgoing && (
-          <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
-            <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={styles.emojiBtnText}>😀</Text>
-            </Pressable>
+        {grouped.length > 0 && (
+          <View style={[
+            styles.reactionsRow,
+            isOutgoing ? styles.reactionsRowOutgoing : styles.reactionsRowIncoming,
+          ]}>
+            {grouped.map((entry) => (
+              <Pressable
+                key={entry.emoji}
+                onPress={onReactionPress ? () => onReactionPress(entry.emoji) : undefined}
+                style={[
+                  styles.reactionPill,
+                  entry.includesMe ? styles.reactionPillActive : styles.reactionPillInactive,
+                ]}
+              >
+                <Text style={styles.reactionEmoji}>{entry.emoji}</Text>
+                {entry.count > 1 && (
+                  <Text style={styles.reactionCount}>{entry.count}</Text>
+                )}
+              </Pressable>
+            ))}
           </View>
         )}
       </View>
-      {grouped.length > 0 && (
-        <View style={[
-          styles.reactionsRow,
-          isOutgoing ? styles.reactionsRowOutgoing : styles.reactionsRowIncoming,
-        ]}>
-          {grouped.map((entry) => (
-            <Pressable
-              key={entry.emoji}
-              onPress={onReactionPress ? () => onReactionPress(entry.emoji) : undefined}
-              style={[
-                styles.reactionPill,
-                entry.includesMe ? styles.reactionPillActive : styles.reactionPillInactive,
-              ]}
-            >
-              <Text style={styles.reactionEmoji}>{entry.emoji}</Text>
-              {entry.count > 1 && (
-                <Text style={styles.reactionCount}>{entry.count}</Text>
-              )}
-            </Pressable>
-          ))}
-        </View>
-      )}
+      {isOutgoing && renderAvatar()}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    marginVertical: 2,
-    maxWidth: 320,
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginHorizontal: 16,
+    marginVertical: 8,
   },
-  wrapperOutgoing: {
-    alignSelf: 'flex-end',
+  rowIncoming: {
+    justifyContent: 'flex-start',
   },
-  wrapperIncoming: {
-    alignSelf: 'flex-start',
+  rowOutgoing: {
+    justifyContent: 'flex-end',
+  },
+  avatarWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: theme.spacing.xs,
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+  },
+  avatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  contentCol: {
+    flex: 1,
+  },
+  senderName: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 1,
+    includeFontPadding: false,
+  },
+  senderHandle: {
+    color: theme.colors.textSecondary,
+    fontSize: 11,
+    marginBottom: 4,
+    includeFontPadding: false,
   },
   bubbleRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
+    alignSelf: 'stretch',
+  },
+  bubbleRowIncoming: {
+    justifyContent: 'flex-start',
+  },
+  bubbleRowOutgoing: {
+    justifyContent: 'flex-end',
   },
   container: {
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.sm,
+    maxWidth: 320,
   },
   outgoing: {
     backgroundColor: theme.colors.outgoingBubble,

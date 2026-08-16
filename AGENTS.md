@@ -69,8 +69,9 @@ dme/
 | 全局状态 | `dme-client/src/state/AppContext.tsx` (17 字段，28 action) |
 | 消息轮询 | `dme-client/src/poll/poller.ts` |
 | 存储 schema | `dme-client/src/storage/db.ts` |
-| DID 公钥读写 | `dme-client/src/atproto/did.ts` (`declareKeys` + `getRemoteEncryptionKey` + `getRemoteSigningKey` + `getDidMethod` + `generateDidWebUpdate` + `sharedDidResolver`) |
-| DID 解析缓存 | `dme-client/src/atproto/did.ts` (`sharedDidResolver`: 单例 `DidResolver` + `MemoryCache`) |
+| DID 公钥读写 | `dme-client/src/atproto/did.ts` (`declareKeys` + `getRemoteEncryptionKey` + `getRemoteSigningKey` + `getDidMethod` + `generateDidWebUpdate`)；`sharedDidResolver` 单例在 `atproto/resolver.ts` |
+| DID 解析缓存 | `dme-client/src/atproto/profile-cache.ts`（24h TTL + AsyncStorage 持久化 + 内存热缓存 + 请求去重）；底层解析用 `atproto/resolver.ts` 的 `sharedDidResolver` |
+| DID Resolver 单例 | `dme-client/src/atproto/resolver.ts` (`sharedDidResolver`: `DidResolver` + `MemoryCache`) |
 | PDS 记录写入 | `dme-client/src/atproto/pds.ts` (envelope + identity backup + AppView proxy) |
 | AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
 | 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton） |
@@ -118,11 +119,16 @@ dme/
 | `declareKeys` | func | did.ts | PLC 操作发布 Ed25519 + X25519 到 DID 文档 |
 | `getDidMethod` | func | did.ts | 判断 DID 方法类型（plc/web/other） |
 | `generateDidWebUpdate` | func | did.ts | 为 did:web 用户生成 DID 文档更新内容（合并 DME 公钥） |
-| `sharedDidResolver` | const | did.ts | 单例 `DidResolver`（`plcUrl` + `MemoryCache`），所有 DID 解析统一入口 |
+| `sharedDidResolver` | const | resolver.ts | 单例 `DidResolver`（`plcUrl` + `MemoryCache`），所有 DID 解析统一入口 |
+| `resolveHandleCached` | func | profile-cache.ts | DID -> handle（24h 缓存，失败回退 did） |
+| `getProfileCached` | func | profile-cache.ts | 单条 profile 获取（24h 缓存） |
+| `getProfilesCached` | func | profile-cache.ts | 批量 profile 获取（24h 缓存 + 批量 miss 合并） |
+| `getRemoteEncryptionKeyCached` | func | profile-cache.ts | 读取对方 X25519 公钥（24h 缓存） |
+| `resolvePdsUrlCached` | func | profile-cache.ts | DID -> PDS URL（24h 缓存） |
 | `markConversationAsRead` | action | AppContext.tsx | 标记某会话所有非自己发送的消息为已读，并递增 `chatListVersion` |
-| `senderProfileCacheRef` | ref | ChatViewScreen.tsx | `useRef<Record<string, {displayName, handle, avatarUrl}>>`，群聊 sender profile 缓存（含头像 URL），`getProfiles` 批量获取 |
+| `senderProfileCacheRef` | ref | ChatViewScreen.tsx | `useRef<Record<string, {displayName, handle, avatarUrl}>>`，群聊 sender profile 缓存（含头像 URL），`getProfilesCached` 批量获取 |
 | `senderProfiles` | state | ChatViewScreen.tsx | `Record<string, {displayName, handle, avatarUrl}>`，群聊消息发送者的 profile（displayName+handle+avatar），从 cacheRef 同步到 state 驱动渲染 |
-| `ownProfile` | state | ChatViewScreen.tsx | `{displayName, handle, avatarUrl} \| null`，当前用户自身 profile，群聊中自己发消息的右侧头像来源，`getProfile({actor: session.did})` 获取 |
+| `ownProfile` | state | ChatViewScreen.tsx | `{displayName, handle, avatarUrl} \| null`，当前用户自身 profile，群聊中自己发消息的右侧头像来源，`getProfileCached(agent, session.did)` 获取 |
 | `encryptBackup` | func | backup.ts | PBKDF2+AES-GCM 加密 FullBackupData -> base64url |
 | `decryptBackup` | func | backup.ts | 解密 base64url -> FullBackupData |
 | `backupIdentity` | action | AppContext.tsx | 密码加密身份+MLS会话+KeyPackage+群聊元数据+屏蔽列表，写入 PDS |
@@ -296,8 +302,9 @@ dme/
 - **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
 - **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
-- **DID 解析**: 统一使用 `atproto/did.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
-- **Profile 批量获取**: 多个 DID 的 profile（avatar + displayName + handle）必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，禁止 `Promise.all(dids.map(d => getProfile(d)))` 逐个请求；`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；每个屏幕用 `useRef` 缓存已解析的 profile，跨 focus 保留；**首屏加载**（ChatListScreen 等）须先读本地缓存同步构造 rows 立即渲染，再异步调 `getProfiles`/handle 解析，拿到后用 `setX(prev => prev.map(...))` 函数式更新，禁止同步 `await` 网络请求阻塞首屏渲染
+- **DID 解析**: 统一使用 `atproto/resolver.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
+- **DID/Profile 24h 缓存**: UI 显示相关请求必须走 `atproto/profile-cache.ts`（`resolveHandleCached` / `getProfileCached` / `getProfilesCached`），24h TTL + AsyncStorage 持久化 + 内存热缓存；登陆、加好友、文件下载等**功能性请求**必须跳过缓存，直接使用 `atproto/did.ts` 的 `getRemoteEncryptionKey` / `resolvePdsUrl`
+- **Profile 批量获取**: 多个 DID 的 profile（avatar + displayName + handle）必须用 `atproto/profile-cache.ts` 的 `getProfilesCached(dids)` 批量接口，内部走 `app.bsky.actor.getProfiles({ actors: string[] })`，禁止 `Promise.all(dids.map(d => getProfile(d)))` 逐个请求；缓存 miss 时 fallback 到 `sharedDidResolver`（仅 handle）；每个屏幕用 `useRef` 缓存已解析的 profile，跨 focus 保留；**首屏加载**（ChatListScreen 等）须先读本地缓存同步构造 rows 立即渲染，再异步调 `getProfilesCached`/`resolveHandleCached` 解析，拿到后用 `setX(prev => prev.map(...))` 函数式更新，禁止同步 `await` 网络请求阻塞首屏渲染
 - **群聊消息布局**: 群聊消息行采用双列布局：头像列（40px 圆形 `expo-image`，加载失败回退首字母）单独成列，内容列（昵称+@handle+消息气泡+reactions）单独成列；收到的消息头像在左、内容在右，自己发的消息内容在左、头像在右；1:1 聊天不渲染头像列
 - **React hooks 依赖**: UI 屏幕严禁把整个 `AppContext` value 对象放入 `useEffect`/`useCallback`/`useFocusEffect` 依赖数组；必须在组件顶部解构 `storage`/`session`/`markConversationAsRead`/`chatListVersion` 等具体字段后再依赖
 - **会话列表加载**: `ChatListScreen.loadConversations` 用 `Promise.all` 并行解析各会话 handle，避免 for 循环串行 await 阻塞 JS 线程

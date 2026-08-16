@@ -27,11 +27,15 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
-import { sharedDidResolver } from '../atproto/did';
+import {
+  getProfileCached,
+  getProfilesCached,
+  resolveHandleCached,
+} from '../atproto/profile-cache';
 import type { StoredMessage } from '../storage/db';
 import type { PendingWelcome } from '../storage/db';
 import type { PendingInvite, GroupInfo } from '../protocol/group-message';
-import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
+import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 type ChatListRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatList'>['route'];
@@ -143,13 +147,9 @@ const resolveHandle = useCallback(async (did: string): Promise<string> => {
   const cached = handleCacheRef.current[did];
   if (cached) return cached;
   try {
-    const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
-    const aka = doc?.alsoKnownAs;
-    if (Array.isArray(aka) && aka.length > 0) {
-      const handle = aka[0].replace(/^at:\/\//, '');
-      handleCacheRef.current[did] = handle;
-      return handle;
-    }
+    const handle = await resolveHandleCached(did);
+    handleCacheRef.current[did] = handle;
+    return handle;
   } catch (err) {
     console.error('resolveHandle failed for', did, err);
   }
@@ -163,21 +163,21 @@ const resolveProfiles = useCallback(async (
   const result: Record<string, ProfileEntry> = {};
   const missing = dids.filter((did) => !profileCacheRef.current[did]);
 
-  if (missing.length > 0 && app.session) {
-    try {
-      const response = await app.session.agent.app.bsky.actor.getProfiles({ actors: missing });
-      for (const profile of response.data.profiles) {
-        const entry: ProfileEntry = {
-          handle: profile.handle ?? profile.did,
-          displayName: profile.displayName ?? '',
-          avatar: profile.avatar ?? null,
-        };
-        profileCacheRef.current[profile.did] = entry;
+    if (missing.length > 0 && app.session) {
+      try {
+        const profiles = await getProfilesCached(app.session.agent, missing);
+        for (const [did, profile] of Object.entries(profiles)) {
+          const entry: ProfileEntry = {
+            handle: profile.handle ?? did,
+            displayName: profile.displayName ?? '',
+            avatar: profile.avatar ?? null,
+          };
+          profileCacheRef.current[did] = entry;
+        }
+      } catch (err) {
+        console.error('resolveProfiles: getProfilesCached failed', missing, err);
       }
-    } catch (err) {
-      console.error('resolveProfiles: getProfiles failed', missing, err);
     }
-  }
 
   const stillMissing = dids.filter((did) => !profileCacheRef.current[did]);
   if (stillMissing.length > 0) {
@@ -226,13 +226,13 @@ const resolveProfiles = useCallback(async (
     let cancelled = false;
     (async () => {
       try {
-        const profile = await session.agent.app.bsky.actor.getProfile({ actor: session.did });
-        if (cancelled) return;
-        if (profile.data.avatar) {
-          setAvatarUrl(profile.data.avatar);
+        const profile = await getProfileCached(session.agent, session.did);
+        if (cancelled || !profile) return;
+        if (profile.avatar) {
+          setAvatarUrl(profile.avatar);
         }
-        setDisplayName(profile.data.displayName ?? '');
-        setUserHandle(profile.data.handle ?? '');
+        setDisplayName(profile.displayName ?? '');
+        setUserHandle(profile.handle ?? '');
       } catch (err) {
         console.error('Failed to fetch profile avatar:', err);
       }

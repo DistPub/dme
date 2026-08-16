@@ -19,7 +19,7 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-n
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
-import { sharedDidResolver } from '../atproto/did';
+import { getProfilesCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -61,17 +61,17 @@ export function CreateGroupScreen(): React.JSX.Element {
 
     if (missing.length > 0 && app.session) {
       try {
-        const response = await app.session.agent.app.bsky.actor.getProfiles({ actors: missing });
-        for (const profile of response.data.profiles) {
+        const profiles = await getProfilesCached(app.session.agent, missing);
+        for (const [did, profile] of Object.entries(profiles)) {
           const entry: ProfileEntry = {
-            handle: profile.handle ?? profile.did,
+            handle: profile.handle ?? did,
             displayName: profile.displayName ?? '',
             avatar: profile.avatar ?? null,
           };
-          profileCacheRef.current[profile.did] = entry;
+          profileCacheRef.current[did] = entry;
         }
       } catch (err) {
-        console.error('resolveProfiles: getProfiles failed', missing, err);
+        console.error('resolveProfiles: getProfilesCached failed', missing, err);
       }
     }
 
@@ -80,8 +80,7 @@ export function CreateGroupScreen(): React.JSX.Element {
       await Promise.all(
         stillMissing.map(async (did) => {
           try {
-            const doc = (await sharedDidResolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
-            const handle = doc?.alsoKnownAs?.[0]?.replace(/^at:\/\//, '') ?? did;
+            const handle = await resolveHandleCached(did);
             profileCacheRef.current[did] = { handle, displayName: '', avatar: null };
           } catch {
             profileCacheRef.current[did] = { handle: did, displayName: '', avatar: null };

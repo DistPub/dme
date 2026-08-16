@@ -19,9 +19,7 @@
  */
 
 import { Agent } from '@atproto/api';
-import { DidResolver, MemoryCache } from '@atproto/identity';
 
-import { PLC_DIRECTORY_URL } from '../config';
 import {
   decodeEd25519DidKey,
   decodeX25519DidKey,
@@ -33,19 +31,7 @@ import {
   DME_SIGNING_KEY_ID,
   type IdentityKeys,
 } from '../crypto/identity';
-
-/**
- * Shared DID resolver with in-memory caching.
- *
- * Using a single instance avoids creating a new resolver on every UI render and
- * lets @atproto/identity cache DID documents across the app. did:plc DIDs are
- * routed to PLC_DIRECTORY_URL automatically.
- */
-export const sharedDidResolver = new DidResolver({
-  plcUrl: PLC_DIRECTORY_URL,
-  didCache: new MemoryCache(),
-  timeout: 20_000,
-});
+import { sharedDidResolver } from './resolver';
 
 /** DID_KEY_PREFIX prepended to multibase values from PLC documents. */
 const DID_KEY_PREFIX = 'did:key:';

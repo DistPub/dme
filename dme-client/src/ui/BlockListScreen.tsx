@@ -3,8 +3,8 @@
  *
  * Two-phase rendering: builds rows from profileCacheRef immediately (fallback
  * to DID) so the list renders without blocking on network, then async-fetches
- * profiles via getProfiles + sharedDidResolver and updates rows via functional
- * setRows. Each row exposes an Unblock button that calls app.unblockMember; the
+ * profiles via getProfilesCached + resolveHandleCached and updates rows via
+ * functional setRows. Each row exposes an Unblock button that calls app.unblockMember; the
  * context's blockList state auto-updates, which re-renders this screen via the
  * focus effect.
  */
@@ -19,8 +19,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
-import { sharedDidResolver } from '../atproto/did';
-import type { DidDocWithHandle, RootStackParamList } from '../types/navigation';
+import { getProfilesCached, resolveHandleCached } from '../atproto/profile-cache';
+import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
@@ -52,17 +52,17 @@ export function BlockListScreen(): React.JSX.Element {
 
     if (missing.length > 0 && app.session) {
       try {
-        const response = await app.session.agent.app.bsky.actor.getProfiles({ actors: missing });
-        for (const profile of response.data.profiles) {
+        const profiles = await getProfilesCached(app.session.agent, missing);
+        for (const [did, profile] of Object.entries(profiles)) {
           const entry: ProfileEntry = {
-            handle: profile.handle ?? profile.did,
+            handle: profile.handle ?? did,
             displayName: profile.displayName ?? '',
             avatar: profile.avatar ?? null,
           };
-          profileCacheRef.current[profile.did] = entry;
+          profileCacheRef.current[did] = entry;
         }
       } catch (err) {
-        console.error('resolveProfiles: getProfiles failed', missing, err);
+        console.error('resolveProfiles: getProfilesCached failed', missing, err);
       }
     }
 
@@ -71,19 +71,10 @@ export function BlockListScreen(): React.JSX.Element {
       await Promise.all(
         stillMissing.map(async (did) => {
           try {
-            const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
-            const aka = doc?.alsoKnownAs;
-            if (Array.isArray(aka) && aka.length > 0) {
-              profileCacheRef.current[did] = {
-                handle: aka[0].replace(/^at:\/\//, ''),
-                displayName: '',
-                avatar: null,
-              };
-            } else {
-              profileCacheRef.current[did] = { handle: did, displayName: '', avatar: null };
-            }
+            const handle = await resolveHandleCached(did);
+            profileCacheRef.current[did] = { handle, displayName: '', avatar: null };
           } catch (err) {
-            console.error('resolveProfiles: DID doc resolve failed for', did, err);
+            console.error('resolveProfiles: resolveHandleCached failed for', did, err);
             profileCacheRef.current[did] = { handle: did, displayName: '', avatar: null };
           }
         }),

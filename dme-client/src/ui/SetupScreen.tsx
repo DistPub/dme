@@ -19,7 +19,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
-import { getRemoteEncryptionKey, requestPlcSignature, getDidMethod, generateDidWebUpdate, type DidWebEntry } from '../atproto/did';
+import { requestPlcSignature, getDidMethod, generateDidWebUpdate, getRemoteEncryptionKey, type DidWebEntry } from '../atproto/did';
 import type { RootStackParamList } from '../types/navigation';
 
 function readWebQuery(key: string): string | null {

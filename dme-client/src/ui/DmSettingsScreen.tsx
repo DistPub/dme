@@ -21,8 +21,8 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-n
 import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
-import { sharedDidResolver } from '../atproto/did';
-import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
+import { getProfileCached, resolveHandleCached } from '../atproto/profile-cache';
+import type { RootStackParamList } from '../types/navigation';
 
 type DmSettingsRouteProp = NativeStackScreenProps<RootStackParamList, 'DmSettings'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -57,28 +57,27 @@ export function DmSettingsScreen(): React.JSX.Element {
 
     if (app.session) {
       try {
-        const response = await app.session.agent.app.bsky.actor.getProfile({ actor: did });
-        result = {
-          handle: response.data.handle ?? did,
-          displayName: response.data.displayName ?? '',
-          avatar: response.data.avatar ?? null,
-        };
+        const profile = await getProfileCached(app.session.agent, did);
+        if (profile) {
+          result = {
+            handle: profile.handle ?? did,
+            displayName: profile.displayName ?? '',
+            avatar: profile.avatar ?? null,
+          };
+        }
       } catch (err) {
-        console.error('resolveProfile: getProfile failed', did, err);
+        console.error('resolveProfile: getProfileCached failed', did, err);
       }
     }
 
     if (!result.displayName && !result.avatar) {
       try {
-        const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
-        if (doc?.alsoKnownAs?.[0]) {
-          const handle = doc.alsoKnownAs[0].replace(/^at:\/\//, '');
-          if (!result.handle || result.handle === did) {
-            result = { ...result, handle };
-          }
+        const handle = await resolveHandleCached(did);
+        if (handle !== did && (!result.handle || result.handle === did)) {
+          result = { ...result, handle };
         }
       } catch (err) {
-        console.error('resolveProfile: DID doc resolve failed for', did, err);
+        console.error('resolveProfile: resolveHandleCached failed for', did, err);
       }
     }
 

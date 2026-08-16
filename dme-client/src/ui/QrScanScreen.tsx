@@ -20,8 +20,8 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { useApp } from '../state/AppContext';
 import { decodeQrPayload } from '../handshake/qr-encode';
-import { sharedDidResolver } from '../atproto/did';
-import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
+import { resolveHandleCached } from '../atproto/profile-cache';
+import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
@@ -38,11 +38,7 @@ export function QrScanScreen(): React.JSX.Element {
 
   const resolveHandle = async (did: string): Promise<string> => {
     try {
-      const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
-      const aka = doc?.alsoKnownAs;
-      if (Array.isArray(aka) && aka.length > 0) {
-        return aka[0].replace(/^at:\/\//, '');
-      }
+      return await resolveHandleCached(did);
     } catch (err) {
       console.error('QrScan: resolveHandle failed for', did, err);
     }

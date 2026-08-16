@@ -20,7 +20,8 @@ import type { KeyPackage, PrivateKeyPackage } from 'ts-mls';
 
 import { DmeSession } from '../atproto/session';
 import { DmePds } from '../atproto/pds';
-import { declareKeys, getRemoteEncryptionKey, resolvePdsUrl, sharedDidResolver } from '../atproto/did';
+import { declareKeys, getRemoteEncryptionKey, resolvePdsUrl } from '../atproto/did';
+import { resolveHandleCached } from '../atproto/profile-cache';
 import { acceptInvite, processWelcome } from '../handshake/handshake';
 import { encodeQrPayload } from '../handshake/qr-encode';
 import { DmePoller } from '../poll/poller';
@@ -113,18 +114,6 @@ function deserializeWithUint8Array<T>(serialized: string): T {
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-}
-
-async function resolveDidToHandle(did: string): Promise<string> {
-  try {
-    const doc = (await sharedDidResolver.resolve(did)) as { alsoKnownAs?: string[] } | null;
-    if (doc?.alsoKnownAs?.[0]) {
-      return doc.alsoKnownAs[0].replace(/^at:\/\//, '');
-    }
-  } catch (err) {
-    console.error('resolveDidToHandle failed for', did, err);
-  }
-  return did;
 }
 
 // ---------------------------------------------------------------------------
@@ -943,7 +932,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               prev.map((i) => i.inviteId === resp.inviteId ? updated : i),
             );
           }
-          const senderHandle = await resolveDidToHandle(msg.senderDid);
+          const senderHandle = await resolveHandleCached(msg.senderDid);
           await msgStorage.putMessage({
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
@@ -1170,7 +1159,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           await msgStorage.putGroupInfo(updatedInfo);
           setGroupInfos((prev) => prev.map((g) => g.groupId === left.groupId ? updatedInfo : g));
 
-          const senderHandle = await resolveDidToHandle(left.memberDid);
+          const senderHandle = await resolveHandleCached(left.memberDid);
           await msgStorage.putMessage({
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
@@ -1556,7 +1545,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       };
       await pds.createEnvelope(envelope);
 
-      const friendHandle = await resolveDidToHandle(friendDid);
+      const friendHandle = await resolveHandleCached(friendDid);
       await storage.putMessage({
         id: `sys_invite_${inviteId}`,
         fromDid: session.did,
@@ -1828,7 +1817,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const friendMlsSession = poller.getSession(friendDid);
     if (!friendMlsSession) throw new Error('addMemberToGroup: no MLS session for friend');
 
-    const inviterEncKey = await getRemoteEncryptionKey(friendDid);
+      const inviterEncKey = await getRemoteEncryptionKey(friendDid);
     if (!inviterEncKey) throw new Error('addMemberToGroup: friend has no encryption key');
 
     const keyPackageSerialized = await generateEncryptedKeyPackageForInvite({
@@ -1861,7 +1850,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
     await pds.createEnvelope(envelope);
 
-    const friendHandle = await resolveDidToHandle(friendDid);
+    const friendHandle = await resolveHandleCached(friendDid);
     await storage.putMessage({
       id: `sys_invite_${inviteId}`,
       fromDid: session.did,

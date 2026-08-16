@@ -21,10 +21,14 @@ import { EmojiPicker } from './EmojiPicker';
 import { MessageActionMenu } from './MessageActionMenu';
 import { FileMessageBubble } from './FileMessageBubble';
 import { useApp } from '../state/AppContext';
-import { sharedDidResolver } from '../atproto/did';
+import {
+  getProfileCached,
+  getProfilesCached,
+  resolveHandleCached,
+} from '../atproto/profile-cache';
 import type { StoredMessage } from '../storage/db';
 import type { GroupInviteRequest } from '../protocol/group-message';
-import type { RootStackParamList, DidDocWithHandle } from '../types/navigation';
+import type { RootStackParamList } from '../types/navigation';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { Image } from 'expo-image';
@@ -162,11 +166,11 @@ export function ChatViewScreen(): React.JSX.Element {
       const missing = unresolvedDids.filter((did) => !senderProfileCacheRef.current[did]);
       if (missing.length > 0) {
         try {
-          const response = await session.agent.app.bsky.actor.getProfiles({ actors: missing });
-          for (const profile of response.data.profiles) {
-            senderProfileCacheRef.current[profile.did] = {
+          const profiles = await getProfilesCached(session.agent, missing);
+          for (const [did, profile] of Object.entries(profiles)) {
+            senderProfileCacheRef.current[did] = {
               displayName: profile.displayName ?? '',
-              handle: profile.handle ?? profile.did,
+              handle: profile.handle ?? did,
               avatarUrl: profile.avatar ?? null,
             };
           }
@@ -180,8 +184,7 @@ export function ChatViewScreen(): React.JSX.Element {
         await Promise.all(
           stillMissing.map(async (did) => {
             try {
-              const doc = (await sharedDidResolver.resolve(did)) as DidDocWithHandle | null;
-              const handle = doc?.alsoKnownAs?.[0]?.replace(/^at:\/\//, '') ?? did;
+              const handle = await resolveHandleCached(did);
               senderProfileCacheRef.current[did] = { displayName: '', handle, avatarUrl: null };
             } catch {
               senderProfileCacheRef.current[did] = { displayName: '', handle: did, avatarUrl: null };
@@ -207,12 +210,12 @@ export function ChatViewScreen(): React.JSX.Element {
     let cancelled = false;
     (async () => {
       try {
-        const profile = await session.agent.app.bsky.actor.getProfile({ actor: session.did });
-        if (cancelled) return;
+        const profile = await getProfileCached(session.agent, session.did);
+        if (cancelled || !profile) return;
         setOwnProfile({
-          displayName: profile.data.displayName ?? '',
-          handle: profile.data.handle ?? '',
-          avatarUrl: profile.data.avatar ?? null,
+          displayName: profile.displayName ?? '',
+          handle: profile.handle ?? '',
+          avatarUrl: profile.avatar ?? null,
         });
       } catch (err) {
         console.error('Failed to fetch own profile for avatar:', err);
@@ -232,9 +235,9 @@ export function ChatViewScreen(): React.JSX.Element {
           setRemoved(info.removed ?? false);
           setLeft(info.left ?? false);
           try {
-            const creatorDoc = (await sharedDidResolver.resolve(info.creatorDid)) as DidDocWithHandle | null;
-            if (creatorDoc?.alsoKnownAs?.[0]) {
-              setGroupCreatorHandle(creatorDoc.alsoKnownAs[0].replace(/^at:\/\//, ''));
+            const handle = await resolveHandleCached(info.creatorDid);
+            if (handle !== info.creatorDid) {
+              setGroupCreatorHandle(handle);
             }
           } catch (err) {
             console.error('Failed to resolve creator handle for', info.creatorDid, err);
@@ -246,10 +249,9 @@ export function ChatViewScreen(): React.JSX.Element {
       let cancelled = false;
       (async () => {
         try {
-          const doc = (await sharedDidResolver.resolve(conversationId)) as DidDocWithHandle | null;
+          const handle = await resolveHandleCached(conversationId);
           if (cancelled) return;
-          if (doc?.alsoKnownAs?.[0]) {
-            const handle = doc.alsoKnownAs[0].replace(/^at:\/\//, '');
+          if (handle !== conversationId) {
             setDisplayName(handle);
             setFriendHandle(handle);
           }
@@ -258,16 +260,16 @@ export function ChatViewScreen(): React.JSX.Element {
         }
         if (!cancelled && session) {
           try {
-            const profile = await session.agent.app.bsky.actor.getProfile({ actor: conversationId });
-            if (cancelled) return;
-            if (profile.data.displayName) {
-              setDisplayName(profile.data.displayName);
+            const profile = await getProfileCached(session.agent, conversationId);
+            if (cancelled || !profile) return;
+            if (profile.displayName) {
+              setDisplayName(profile.displayName);
             }
-            if (profile.data.handle) {
-              setFriendHandle(profile.data.handle);
+            if (profile.handle) {
+              setFriendHandle(profile.handle);
             }
-            if (profile.data.avatar) {
-              setFriendAvatarUrl(profile.data.avatar);
+            if (profile.avatar) {
+              setFriendAvatarUrl(profile.avatar);
             }
           } catch (err) {
             console.error('Failed to fetch friend profile for', conversationId, err);

@@ -1007,7 +1007,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
                 await msgStorage.putMlsSession(welcome.groupId, newSession.serialize());
                 poller.addSession(welcome.groupId, newSession);
-                await msgStorage.deletePendingInvite(ownInvite.inviteId);
+                // Keep invite in storage (status stays 'accepted'): the group_invite message
+                // persists in the 1:1 conversation, so receivedGroupInvites must survive
+                // restart to keep the card showing "Responded" instead of Accept/Decline.
               }
             } catch (err) {
               console.error('handleIncomingMessage: failed to join group via welcome:', err);

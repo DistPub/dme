@@ -54,6 +54,7 @@ export function ChatViewScreen(): React.JSX.Element {
     session,
     sendMessage,
     sendFileMessage,
+    retryUploadFileMessage,
     sendReaction,
     deleteMessage,
     downloadFile,
@@ -151,7 +152,9 @@ export function ChatViewScreen(): React.JSX.Element {
         setMessages((prev) => {
           const existingIds = new Set(prev.map((m) => m.id));
           const newMessages = recent.filter((m) => !existingIds.has(m.id));
-          const merged = prev.map((m) => recentMap.get(m.id) ?? m);
+          const merged = prev
+            .filter((m) => recentMap.has(m.id))
+            .map((m) => recentMap.get(m.id) ?? m);
           return [...newMessages, ...merged];
         });
       }).catch((err: unknown) => {
@@ -473,9 +476,19 @@ export function ChatViewScreen(): React.JSX.Element {
             senderAvatarUrl={senderAvatarUrl}
             reactions={item.reactions}
             currentDid={session?.did}
+            onDownload={!isOutgoing && fileMeta.downloadStatus === 'pending' ? () => {
+              void downloadFile(conversationId, item.id).catch((err: unknown) => {
+                console.error('Download file failed:', err);
+              });
+            } : undefined}
             onRetry={fileMeta.downloadStatus === 'failed' ? () => {
               void downloadFile(conversationId, item.id).catch((err: unknown) => {
                 console.error('Retry download failed:', err);
+              });
+            } : undefined}
+            onRetryUpload={fileMeta.uploadStatus === 'failed' ? () => {
+              void retryUploadFileMessage(conversationId, item.id).catch((err: unknown) => {
+                console.error('Retry upload failed:', err);
               });
             } : undefined}
             onImagePress={localPath ? () => {
@@ -507,7 +520,7 @@ export function ChatViewScreen(): React.JSX.Element {
         />
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, senderIdentityFor],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, retryUploadFileMessage, senderIdentityFor],
   );
 
   const keyExtractor = useCallback(

@@ -22,8 +22,11 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
+const UPSTREAM_TIMEOUT_MS = 15_000;
+const MAX_CACHEABLE_BYTES = 100 * 1024 * 1024;
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -35,7 +38,7 @@ export default {
     }
 
     if (url.pathname === '/xrpc/dme.file.blob' && request.method === 'GET') {
-      return getBlob(url);
+      return getBlob(url, ctx);
     }
 
     if (url.pathname === '/xrpc/dme.batch.get' && request.method === 'POST') {
@@ -46,7 +49,7 @@ export default {
   },
 };
 
-async function getBlob(url: URL): Promise<Response> {
+async function getBlob(url: URL, ctx: ExecutionContext): Promise<Response> {
   const pds = url.searchParams.get('pds');
   const did = url.searchParams.get('did');
   const cid = url.searchParams.get('cid');
@@ -65,29 +68,48 @@ async function getBlob(url: URL): Promise<Response> {
   }
 
   const blobUrl = pds + '/xrpc/com.atproto.sync.getBlob?did=' + encodeURIComponent(did) + '&cid=' + encodeURIComponent(cid);
-  const upstream = await fetch(blobUrl);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  let upstream: Response;
+  try {
+    upstream = await fetch(blobUrl, { signal: controller.signal });
+  } catch {
+    return new Response('Upstream blob fetch failed', {
+      status: 504,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
 
   if (!upstream.ok) {
     return new Response(upstream.body, {
       status: upstream.status,
       headers: {
-        'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
+        'Content-Type': contentType,
         'Access-Control-Allow-Origin': '*',
       },
     });
   }
 
-  const body = await upstream.arrayBuffer();
-  const response = new Response(body, {
+  const response = new Response(upstream.body, {
     status: 200,
     headers: {
-      'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
+      'Content-Type': contentType,
       'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'public, max-age=604800',
     },
   });
 
-  await caches.default.put(cacheKey, response.clone());
+  const contentLength = Number(upstream.headers.get('content-length') ?? '0');
+  if (Number.isFinite(contentLength) && contentLength > 0 && contentLength <= MAX_CACHEABLE_BYTES) {
+    ctx.waitUntil(
+      caches.default.put(cacheKey, response.clone()).catch(() => {}),
+    );
+  }
 
   return response;
 }

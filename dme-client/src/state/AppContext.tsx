@@ -48,7 +48,7 @@ import {
   decryptChunk,
   computeSha256,
 } from '../crypto/file-crypto';
-import { cacheFile, makeIndexedDbUri } from '../utils/file-cache';
+import { cacheFile, getCachedFileBytes, makeIndexedDbUri } from '../utils/file-cache';
 import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY, DEFAULT_DME_GATEWAY_URL } from '../config';
@@ -116,6 +116,109 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+function uploadBlobWithProgress(
+  pdsUrl: string,
+  accessToken: string,
+  proxyHeader: string | null,
+  data: Uint8Array,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<DmeBlobRef> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const url = pdsUrl.replace(/\/$/, '') + '/xrpc/com.atproto.repo.uploadBlob';
+    xhr.open('POST', url, true);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    if (proxyHeader) {
+      xhr.setRequestHeader('atproto-proxy', proxyHeader);
+    }
+
+    xhr.upload.onprogress = (e: ProgressEvent): void => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(e.loaded, e.total);
+      }
+    };
+
+    xhr.onload = (): void => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          const blob = resp.blob;
+          resolve({
+            $type: 'blob',
+            ref: { $link: blob.ref.$link },
+            mimeType: blob.mimeType,
+            size: blob.size,
+          });
+        } catch (err) {
+          reject(new Error('uploadBlobWithProgress: failed to parse response'));
+        }
+      } else {
+        reject(new Error(`uploadBlobWithProgress: HTTP ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = (): void => {
+      reject(new Error('uploadBlobWithProgress: network error'));
+    };
+
+    xhr.ontimeout = (): void => {
+      reject(new Error('uploadBlobWithProgress: timeout'));
+    };
+
+    xhr.timeout = 60_000;
+    xhr.send(data);
+  });
+}
+
+async function uploadFileChunks(
+  fileSize: number,
+  fileKey: Uint8Array,
+  fileId: Uint8Array,
+  pdsUrl: string,
+  accessToken: string,
+  proxyHeader: string | null,
+  readChunk: (offset: number, readSize: number) => Promise<Uint8Array>,
+  onProgress?: (progress: number) => void,
+): Promise<{ blobRefs: DmeBlobRef[]; sha256: string; chunkCount: number }> {
+  const chunkSize = 5 * 1024 * 1024;
+  const hasher = sha256.create();
+  const blobRefs: DmeBlobRef[] = [];
+  let offset = 0;
+  let chunkIndex = 0;
+  let uploadedBytes = 0;
+  const totalEncryptedBytes = fileSize + Math.ceil(fileSize / chunkSize) * 16;
+
+  while (offset < fileSize) {
+    const readSize = Math.min(chunkSize, fileSize - offset);
+    const block = await readChunk(offset, readSize);
+    hasher.update(block);
+    const encrypted = await encryptChunk(block, fileKey, fileId, chunkIndex);
+    const chunkSizeEncrypted = encrypted.byteLength;
+
+    const blobRef = await uploadBlobWithProgress(
+      pdsUrl,
+      accessToken,
+      proxyHeader,
+      encrypted,
+      (loaded) => {
+        const current = uploadedBytes + loaded;
+        const progress = Math.min(99, Math.round((current / totalEncryptedBytes) * 100));
+        onProgress?.(progress);
+      },
+    );
+
+    blobRefs.push(blobRef);
+    uploadedBytes += chunkSizeEncrypted;
+    const progress = Math.min(99, Math.round((uploadedBytes / totalEncryptedBytes) * 100));
+    onProgress?.(progress);
+    offset += readSize;
+    chunkIndex++;
+  }
+
+  return { blobRefs, sha256: bytesToHex(hasher.digest()), chunkCount: chunkIndex };
+}
+
 // ---------------------------------------------------------------------------
 // Context types
 // ---------------------------------------------------------------------------
@@ -154,6 +257,7 @@ interface AppActions {
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
   sendFileMessage: (conversationId: string, fileUri: string, fileName: string, mimeType: string, fileSize: number) => Promise<void>;
+  retryUploadFileMessage: (conversationId: string, msgId: string) => Promise<void>;
   downloadFile: (conversationId: string, msgId: string) => Promise<void>;
   sendReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   deleteMessage: (conversationId: string, messageId: string) => Promise<void>;
@@ -524,6 +628,25 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         setGroupInfos(storedGroupInfos);
         setBlockList(await tempStorage.getBlockList());
         setSoundEnabledState(await tempStorage.getSoundEnabled());
+
+        try {
+          const transferGroupIds = await tempStorage.listGroups();
+          for (const groupId of transferGroupIds) {
+            const msgs = await tempStorage.getMessages(groupId);
+            for (const msg of msgs) {
+              if (msg.kind !== 'file' || !msg.fileMeta) continue;
+              if (msg.fileMeta.downloadStatus === 'downloading') {
+                await tempStorage.updateFileMessageMeta(groupId, msg.id, { downloadStatus: 'pending', downloadProgress: undefined });
+              }
+              if (msg.fileMeta.uploadStatus === 'uploading') {
+                await tempStorage.updateFileMessageMeta(groupId, msg.id, { uploadStatus: 'failed' });
+              }
+            }
+          }
+        } catch (err) {
+          console.error('AppContext: failed to reset interrupted file transfers', err);
+        }
+
         return true;
       }
 
@@ -825,6 +948,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       try {
         const senderPdsUrl = await resolvePdsUrl(msg.fromDid);
 
+        const totalBlobBytes = blobCids.reduce((sum, b) => sum + b.size, 0) || 1;
+        let downloadedBytes = 0;
+        let lastProgress = -1;
+
         const decryptedChunks: Uint8Array[] = [];
         for (let i = 0; i < blobCids.length; i++) {
           const blobRef = blobCids[i]!;
@@ -834,7 +961,41 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           if (!response.ok) {
             throw new Error(`downloadFile: blob fetch failed ${response.status}`);
           }
-          const encryptedBlob = new Uint8Array(await response.arrayBuffer());
+
+          const reader = response.body?.getReader();
+          let encryptedBlob: Uint8Array;
+          if (reader) {
+            const pieces: Uint8Array[] = [];
+            let received = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (!value) continue;
+              pieces.push(value);
+              received += value.byteLength;
+              const progress = Math.min(99, Math.round(((downloadedBytes + received) / totalBlobBytes) * 100));
+              if (progress !== lastProgress) {
+                lastProgress = progress;
+                await storage.updateFileMessageMeta(conversationId, msgId, { downloadProgress: progress });
+                setChatListVersion((v) => v + 1);
+              }
+            }
+            const totalLen = pieces.reduce((s, c) => s + c.byteLength, 0);
+            encryptedBlob = new Uint8Array(totalLen);
+            let off = 0;
+            for (const p of pieces) { encryptedBlob.set(p, off); off += p.byteLength; }
+            downloadedBytes += totalLen;
+          } else {
+            encryptedBlob = new Uint8Array(await response.arrayBuffer());
+            downloadedBytes += encryptedBlob.byteLength;
+            const progress = Math.min(99, Math.round((downloadedBytes / totalBlobBytes) * 100));
+            if (progress !== lastProgress) {
+              lastProgress = progress;
+              await storage.updateFileMessageMeta(conversationId, msgId, { downloadProgress: progress });
+              setChatListVersion((v) => v + 1);
+            }
+          }
+
           const decrypted = await decryptChunk(encryptedBlob, fileKey, fileId, i);
           decryptedChunks.push(decrypted);
         }
@@ -868,16 +1029,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await storage.updateFileMessageMeta(conversationId, msgId, {
           localPath,
           downloadStatus: 'ready',
+          downloadProgress: undefined,
         });
         setChatListVersion((v) => v + 1);
         return;
 
       } catch (err) {
         lastError = err;
-        attempts++;
         if (attempts >= maxAttempts) {
           await storage.updateFileMessageMeta(conversationId, msgId, {
             downloadStatus: 'failed',
+            downloadProgress: undefined,
           });
           setChatListVersion((v) => v + 1);
           if (lastError instanceof Error) {
@@ -1341,46 +1503,95 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     const fileId = generateFileId();
     const fileKey = generateFileKey();
+    const tempId = generateId();
     const chunkSize = 5 * 1024 * 1024;
-    const hasher = sha256.create();
-    const blobRefs: DmeBlobRef[] = [];
+    const fileIdHex = bytesToHex(fileId);
 
-    let webFileBytes: Uint8Array | null = null;
+    // Save local copy first, then upload from that copy.
+    let senderLocalPath: string;
     if (Platform.OS === 'web') {
       const response = await fetch(fileUri);
-      webFileBytes = new Uint8Array(await response.arrayBuffer());
+      const webFileBytes = new Uint8Array(await response.arrayBuffer());
       if (webFileBytes.byteLength !== fileSize) {
         console.warn(`sendFileMessage: web file size ${webFileBytes.byteLength} != reported ${fileSize}`);
       }
+      await cacheFile(fileIdHex, webFileBytes, mimeType);
+      senderLocalPath = makeIndexedDbUri(fileIdHex);
+    } else {
+      const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      senderLocalPath = `${FileSystem.documentDirectory}${fileIdHex}_${sanitizedFileName}`;
+      const fileBase64 = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await FileSystem.writeAsStringAsync(senderLocalPath, fileBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
     }
 
-    let offset = 0;
-    let chunkIndex = 0;
+    const optimisticMsg: StoredMessage = {
+      id: tempId,
+      fromDid: session.did,
+      toDid: conversationId,
+      plaintext: JSON.stringify({ type: 'file', fileId: fileIdHex, fileName, fileSize, mimeType, sha256: '', chunkCount: 0, chunkSize, fileKey: bytesToBase64url(fileKey) }),
+      createdAt: new Date().toISOString(),
+      sent: false,
+      kind: 'file',
+      fileMeta: {
+        fileId: fileIdHex,
+        fileName,
+        fileSize,
+        mimeType,
+        sha256: '',
+        chunkCount: 0,
+        chunkSize,
+        fileKey: bytesToBase64url(fileKey),
+        localPath: senderLocalPath,
+        downloadStatus: 'pending',
+        uploadStatus: 'uploading',
+      },
+    };
+    await storage.putMessage(optimisticMsg);
+    setChatListVersion((v) => v + 1);
 
-    while (offset < fileSize) {
-      const readSize = Math.min(chunkSize, fileSize - offset);
-      let block: Uint8Array;
-      if (Platform.OS === 'web') {
-        const end = Math.min(offset + readSize, webFileBytes!.length);
-        block = webFileBytes!.subarray(offset, end);
-      } else {
-        const base64 = await FileSystem.readAsStringAsync(fileUri, {
-          position: offset,
-          length: readSize,
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        block = base64ToBytes(base64);
-      }
-      hasher.update(block);
-      const encrypted = await encryptChunk(block, fileKey, fileId, chunkIndex);
-      const blobResult = await session.agent.uploadBlob(new Blob([new Uint8Array(encrypted)]), { encoding: 'application/octet-stream' });
-      blobRefs.push(blobResult.data.blob.toJSON());
-      offset += readSize;
-      chunkIndex++;
+    let uploadResult: { blobRefs: DmeBlobRef[]; sha256: string; chunkCount: number };
+    try {
+      const pdsUrlStr = session.pdsUrlStr;
+      const accessJwt = session.accessJwt;
+      if (!accessJwt) throw new Error('sendFileMessage: no access token');
+      const proxyHeader = session.agent.proxy ?? null;
+
+      uploadResult = await uploadFileChunks(
+        fileSize,
+        fileKey,
+        fileId,
+        pdsUrlStr,
+        accessJwt,
+        proxyHeader,
+        async (offset, readSize) => {
+          if (Platform.OS === 'web') {
+            const bytes = await getCachedFileBytes(fileIdHex);
+            if (!bytes) throw new Error('sendFileMessage: cached file bytes not available');
+            const end = Math.min(offset + readSize, bytes.length);
+            return bytes.subarray(offset, end);
+          }
+          const base64 = await FileSystem.readAsStringAsync(senderLocalPath, {
+            position: offset,
+            length: readSize,
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          return base64ToBytes(base64);
+        },
+        async (progress) => {
+          await storage.updateFileMessageMeta(conversationId, tempId, { uploadProgress: progress });
+          setChatListVersion((v) => v + 1);
+        },
+      );
+    } catch (err) {
+      console.error('sendFileMessage: upload failed', err);
+      await storage.updateFileMessageMeta(conversationId, tempId, { uploadStatus: 'failed', uploadProgress: undefined });
+      setChatListVersion((v) => v + 1);
+      return;
     }
-
-    const fileHash = bytesToHex(hasher.digest());
-    const fileIdHex = bytesToHex(fileId);
 
     const manifestBytes = new TextEncoder().encode(JSON.stringify({
       type: 'file',
@@ -1388,8 +1599,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       fileName,
       fileSize,
       mimeType,
-      sha256: fileHash,
-      chunkCount: chunkIndex,
+      sha256: uploadResult.sha256,
+      chunkCount: uploadResult.chunkCount,
       chunkSize,
       fileKey: bytesToBase64url(fileKey),
     } as FileManifestMessage));
@@ -1400,34 +1611,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       $type: 'dme.queue.envelope',
       queueId: encResult.queueId,
       payload: bytesToBase64url(encResult.ciphertext),
-      blobCids: blobRefs,
+      blobCids: uploadResult.blobRefs,
       createdAt: new Date().toISOString(),
       messageType: 'application',
     });
 
-    let senderLocalPath: string;
-    if (Platform.OS === 'web') {
-      if (!webFileBytes) {
-        throw new Error('sendFileMessage: web file bytes not available');
-      }
-      await cacheFile(fileIdHex, webFileBytes, mimeType);
-      senderLocalPath = makeIndexedDbUri(fileIdHex);
-    } else {
-      const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-      senderLocalPath = `${FileSystem.documentDirectory}${encResult.queueId}_${sanitizedFileName}`;
-      const fileBase64 = await FileSystem.readAsStringAsync(fileUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      await FileSystem.writeAsStringAsync(senderLocalPath, fileBase64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-    }
-
-    const msg: StoredMessage = {
+    await storage.deleteMessage(conversationId, tempId);
+    const finalMsg: StoredMessage = {
       id: encResult.queueId,
       fromDid: session.did,
       toDid: conversationId,
-      plaintext: JSON.stringify({ type: 'file', fileId: fileIdHex, fileName, fileSize, mimeType, sha256: fileHash, chunkCount: chunkIndex, chunkSize, fileKey: bytesToBase64url(fileKey) }),
+      plaintext: JSON.stringify({ type: 'file', fileId: fileIdHex, fileName, fileSize, mimeType, sha256: uploadResult.sha256, chunkCount: uploadResult.chunkCount, chunkSize, fileKey: bytesToBase64url(fileKey) }),
       createdAt: new Date().toISOString(),
       sent: true,
       kind: 'file',
@@ -1436,16 +1630,141 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         fileName,
         fileSize,
         mimeType,
-        sha256: fileHash,
-        chunkCount: chunkIndex,
+        sha256: uploadResult.sha256,
+        chunkCount: uploadResult.chunkCount,
         chunkSize,
         fileKey: bytesToBase64url(fileKey),
-        blobCids: blobRefs,
+        blobCids: uploadResult.blobRefs,
         downloadStatus: 'ready',
+        uploadStatus: 'uploaded',
         localPath: senderLocalPath,
       },
     };
-    await storage.putMessage(msg);
+    await storage.putMessage(finalMsg);
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  const retryUploadFileMessage = useCallback(async (
+    conversationId: string,
+    msgId: string,
+  ): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('retryUploadFileMessage: not fully initialized');
+    }
+    const mlsSession = poller.getSession(conversationId);
+    if (!mlsSession) {
+      throw new Error(`retryUploadFileMessage: no MLS session for ${conversationId}`);
+    }
+
+    const msgs = await storage.getMessages(conversationId);
+    const msg = msgs.find((m) => m.id === msgId);
+    if (!msg || !msg.fileMeta) {
+      throw new Error('retryUploadFileMessage: message or fileMeta not found');
+    }
+    const { fileMeta } = msg;
+    if (!fileMeta.localPath) {
+      throw new Error('retryUploadFileMessage: local copy missing, cannot retry');
+    }
+
+    const fileId = hexToBytes(fileMeta.fileId);
+    const fileKey = base64urlToBytes(fileMeta.fileKey);
+    const fileSize = fileMeta.fileSize;
+    const mimeType = fileMeta.mimeType;
+    const fileName = fileMeta.fileName;
+    const senderLocalPath = fileMeta.localPath;
+    const chunkSize = fileMeta.chunkSize || 5 * 1024 * 1024;
+
+    await storage.updateFileMessageMeta(conversationId, msgId, { uploadStatus: 'uploading' });
+    setChatListVersion((v) => v + 1);
+
+    let uploadResult: { blobRefs: DmeBlobRef[]; sha256: string; chunkCount: number };
+    try {
+      const pdsUrlStr = session.pdsUrlStr;
+      const accessJwt = session.accessJwt;
+      if (!accessJwt) throw new Error('retryUploadFileMessage: no access token');
+      const proxyHeader = session.agent.proxy ?? null;
+
+      uploadResult = await uploadFileChunks(
+        fileSize,
+        fileKey,
+        fileId,
+        pdsUrlStr,
+        accessJwt,
+        proxyHeader,
+        async (offset, readSize) => {
+          if (Platform.OS === 'web') {
+            const bytes = await getCachedFileBytes(fileMeta.fileId);
+            if (!bytes) throw new Error('retryUploadFileMessage: cached file bytes not available');
+            const end = Math.min(offset + readSize, bytes.length);
+            return bytes.subarray(offset, end);
+          }
+          const base64 = await FileSystem.readAsStringAsync(senderLocalPath, {
+            position: offset,
+            length: readSize,
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          return base64ToBytes(base64);
+        },
+        async (progress) => {
+          await storage.updateFileMessageMeta(conversationId, msgId, { uploadProgress: progress });
+          setChatListVersion((v) => v + 1);
+        },
+      );
+    } catch (err) {
+      console.error('retryUploadFileMessage: upload failed', err);
+      await storage.updateFileMessageMeta(conversationId, msgId, { uploadStatus: 'failed', uploadProgress: undefined });
+      setChatListVersion((v) => v + 1);
+      return;
+    }
+
+    const manifestBytes = new TextEncoder().encode(JSON.stringify({
+      type: 'file',
+      fileId: fileMeta.fileId,
+      fileName,
+      fileSize,
+      mimeType,
+      sha256: uploadResult.sha256,
+      chunkCount: uploadResult.chunkCount,
+      chunkSize,
+      fileKey: bytesToBase64url(fileKey),
+    } as FileManifestMessage));
+
+    const encResult = await mlsSession.encrypt(manifestBytes);
+    await storage.putMlsSession(conversationId, mlsSession.serialize());
+    await pds.createEnvelope({
+      $type: 'dme.queue.envelope',
+      queueId: encResult.queueId,
+      payload: bytesToBase64url(encResult.ciphertext),
+      blobCids: uploadResult.blobRefs,
+      createdAt: new Date().toISOString(),
+      messageType: 'application',
+    });
+
+    await storage.deleteMessage(conversationId, msgId);
+    const finalMsg: StoredMessage = {
+      id: encResult.queueId,
+      fromDid: session.did,
+      toDid: conversationId,
+      plaintext: JSON.stringify({ type: 'file', fileId: fileMeta.fileId, fileName, fileSize, mimeType, sha256: uploadResult.sha256, chunkCount: uploadResult.chunkCount, chunkSize, fileKey: bytesToBase64url(fileKey) }),
+      createdAt: new Date().toISOString(),
+      sent: true,
+      kind: 'file',
+      fileMeta: {
+        fileId: fileMeta.fileId,
+        fileName,
+        fileSize,
+        mimeType,
+        sha256: uploadResult.sha256,
+        chunkCount: uploadResult.chunkCount,
+        chunkSize,
+        fileKey: bytesToBase64url(fileKey),
+        blobCids: uploadResult.blobRefs,
+        downloadStatus: 'ready',
+        uploadStatus: 'uploaded',
+        localPath: senderLocalPath,
+      },
+    };
+    await storage.putMessage(finalMsg);
     setChatListVersion((v) => v + 1);
   }, [session, storage, pds, poller]);
 
@@ -2246,6 +2565,7 @@ blockList,
       hasIdentityBackup,
       sendMessage,
       sendFileMessage,
+      retryUploadFileMessage,
       sendReaction,
       downloadFile,
       deleteMessage,
@@ -2281,7 +2601,7 @@ blockList,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
-      sendMessage, sendFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, trackInvitePendingWelcome, deletePendingWelcome, acceptInviteQr,
+      sendMessage, sendFileMessage, retryUploadFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, trackInvitePendingWelcome, deletePendingWelcome, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy, setServerUrl, setGatewayUrl,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,

@@ -62,6 +62,9 @@ export interface DmeEnvelope {
 /** File download status. */
 export type FileDownloadStatus = 'pending' | 'downloading' | 'ready' | 'failed';
 
+/** File upload status. */
+export type FileUploadStatus = 'uploading' | 'uploaded' | 'failed';
+
 /** Metadata for file messages stored locally. Stored in StoredMessage.fileMeta. */
 export interface FileMeta {
   readonly fileId: string;
@@ -74,6 +77,9 @@ export interface FileMeta {
   readonly fileKey: string; // base64url-encoded 32-byte random key
   readonly localPath?: string; // filled after download
   readonly downloadStatus: FileDownloadStatus;
+  readonly uploadStatus?: FileUploadStatus;
+  readonly uploadProgress?: number;
+  readonly downloadProgress?: number;
   readonly blobCids?: DmeBlobRef[];
 }
 

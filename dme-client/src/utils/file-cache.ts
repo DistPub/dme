@@ -71,6 +71,25 @@ export async function getCachedFileUrl(fileId: string): Promise<string | null> {
   }
 }
 
+export async function getCachedFileBytes(fileId: string): Promise<Uint8Array | null> {
+  if (Platform.OS !== 'web') return null;
+  if (typeof indexedDB === 'undefined') return null;
+  const db = await openDb();
+  try {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const cached = await new Promise<CachedFile | undefined>((resolve, reject) => {
+      const request = store.get(fileId);
+      request.onsuccess = () => resolve(request.result as CachedFile | undefined);
+      request.onerror = () => reject(request.error ?? new Error('indexedDB get failed'));
+    });
+    if (!cached) return null;
+    return new Uint8Array(cached.data);
+  } finally {
+    db.close();
+  }
+}
+
 export function makeIndexedDbUri(fileId: string): string {
   return `${INDEXEDDB_PREFIX}${fileId}`;
 }

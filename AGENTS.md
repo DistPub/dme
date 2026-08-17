@@ -44,10 +44,12 @@ dme/
   Client 轮询 batchSize 个 future queueId -> gateway -> dme-server batchGet -> 返回密文 -> 本地解密
 
 发文件:
-  Client 逐块(5MB) AES-256-GCM 加密 -> 每块 uploadBlob 到 PDS -> MLS 加密 file manifest(含 fileKey) + 标准 blob 引用 -> 创建一条 dme.queue.envelope(含加密 payload + blobRefs) -> Jetstream -> dme-server 存入 BadgerDB
+  Client 先存本地副本+乐观消息(uploading) -> 逐块(5MB) AES-256-GCM 加密 -> 每块 XHR 上传 PDS(字节级进度)
+  -> MLS 加密 file manifest(含 fileKey) + 标准 blob 引用 -> 创建一条 dme.queue.envelope(含加密 payload + blobRefs)
+  -> 删除乐观消息写入最终消息(uploaded) -> Jetstream -> dme-server 存入 BadgerDB
 
 收文件:
-  Client poller 解密 MLS manifest -> 从同一 envelope 拿 blobRefs -> 逐片 GET gateway blob CDN
+  Client poller 解密 MLS manifest -> 从同一 envelope 拿 blobRefs -> 逐片流式 GET gateway blob CDN(字节级进度)
   -> AES-256-GCM 解密 -> SHA-256 验证 -> expo-file-system 存本地
 ```
 
@@ -94,8 +96,8 @@ dme/
 | 网关代理 | `dme-gateway/src/index.ts` |
 | 文件加密 | `dme-client/src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
 | 文件协议类型 | `dme-client/src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
-| 文件发送/下载 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `downloadFile`） |
-| 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+文件卡片/图片缩略图/视频/音频+reactions)，与 `MessageBubble` 同款；1:1 不渲染头像列） |
+| 文件发送/下载/重试上传 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `retryUploadFileMessage` + `downloadFile`，字节级进度） |
+| 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+文件卡片/图片缩略图/音频播放卡片+reactions)，上传/下载状态与进度百分比，与 `MessageBubble` 同款；1:1 不渲染头像列） |
 | 图片查看器 | `dme-client/src/ui/ImageViewerScreen.tsx`（全屏查看，点击关闭） |
 | Web 文件缓存 | `dme-client/src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
@@ -166,18 +168,22 @@ dme/
 | `Store` | struct | store.go | BadgerDB Put/Get/GetBatch |
 | `Consumer` | struct | consumer.go | Jetstream WebSocket 消费 |
 | `Handler` | method | server.go | HTTP 路由 + CORS |
-| `sendFileMessage` | action | AppContext.tsx | 逐块读取文件 -> AES-256-GCM 加密 -> uploadBlob -> 单条 manifest envelope(含加密 payload + 标准 blob 引用) |
-| `downloadFile` | action | AppContext.tsx | 从 fileMeta 取 blobRefs -> 逐片 GET gateway blob CDN -> 解密 -> SHA-256 验证 -> 存本地 |
+| `sendFileMessage` | action | AppContext.tsx | 先存本地副本+乐观消息(tempId, uploadStatus:'uploading') -> uploadFileChunks 分片加密上传 -> MLS manifest envelope -> 删除临时消息写入最终消息(id=queueId, uploadStatus:'uploaded') |
+| `retryUploadFileMessage` | action | AppContext.tsx | 重试上传失败文件：从本地副本重读分片重新上传，成功后同样替换为最终消息 |
+| `uploadFileChunks` | func | AppContext.tsx | 分片加密上传 helper，内部调 `uploadBlobWithProgress`，按字节算 uploadProgress |
+| `uploadBlobWithProgress` | func | AppContext.tsx | XMLHttpRequest 直传 PDS `com.atproto.repo.uploadBlob`（带 Authorization + atproto-proxy header），`upload.onprogress` 报告字节级进度（fetch 无上传进度故绕过 agent.uploadBlob） |
+| `downloadFile` | action | AppContext.tsx | 从 fileMeta 取 blobCids -> `response.body.getReader()` 流式读取（字节级 downloadProgress，总量来自 blobCids[].size）-> 解密 -> SHA-256 验证 -> 存本地 |
 | `encryptChunk`/`decryptChunk` | func | file-crypto.ts | 单片 AES-256-GCM 加解密，nonce = fileId 前 8 字节 + chunkIndex 4 字节 BE |
 | `generateFileId`/`generateFileKey` | func | file-crypto.ts | 随机 16 字节 fileId + 32 字节 fileKey |
 | `DmeBlobRef` | interface | types.ts | 标准 ATProtocol blob 引用 `{$type:'blob', ref:{$link}, mimeType, size}`；`blobRef.toJSON()` 产出 |
 | `resolvePdsUrl` | func | did.ts | DID 解析 -> `AtprotoPersonalDataServer` serviceEndpoint |
 | `FileManifestMessage` | interface | types.ts | E2E 加密文件清单（type: 'file'，含 fileKey/fileId/sha256/mimeType 等） |
-| `FileMeta` | interface | types.ts | 本地文件元数据（含 downloadStatus: pending/downloading/ready/failed） |
+| `FileMeta` | interface | types.ts | 本地文件元数据（downloadStatus + uploadStatus + uploadProgress/downloadProgress） |
 | `FileMessageBubble` | component | FileMessageBubble.tsx | 群聊双列布局（头像列 + 内容列：昵称+@handle+文件卡片/图片缩略图/视频播放/音频图标+下载状态+reactions），与 `MessageBubble` 同款；1:1 不渲染头像列 |
 | `ImageViewerScreen` | component | ImageViewerScreen.tsx | 全屏图片查看器，点击或 ✕ 关闭 |
 | `useFileUri` | hook | file-cache.ts | 解析 `indexeddb://` / 普通 URI 为可渲染 blob URL，管理生命周期 |
 | `cacheFile` | func | file-cache.ts | Web 端把文件字节持久化到 IndexedDB |
+| `getCachedFileBytes` | func | file-cache.ts | Web 端从 IndexedDB 读取原始字节（上传/重试的数据源） |
 | `loadRecentMessages` | func | ChatViewScreen.tsx | 进入聊天时加载最近 50 条消息，数据按 newest-first 倒序 |
 | `loadOlderMessages` | func | ChatViewScreen.tsx | 用户滑到顶部时加载更早 50 条，append 到倒序数组末尾 |
 | `messagesRef` | ref | ChatViewScreen.tsx | `useRef<StoredMessage[]>`，供 `chatListVersion` effect 读取当前 messages 长度做 merge |
@@ -209,11 +215,11 @@ dme/
 | 阶段 | 说明 |
 |---|---|
 | 加密 | 发送方生成随机 32 字节 fileKey，逐块 5MB AES-256-GCM 加密，nonce = fileId 前 8 字节 + chunkIndex 4 字节大端 |
-| 上传 | 每块作为 PDS blob 上传（`agent.uploadBlob`），blobCid 存入 `dme.queue.envelope` record 的 `blobCids` 字段（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式，PDS 可识别防 GC） |
+| 上传 | 先保存本地副本（web->IndexedDB / native->documentDirectory）并写入 `uploadStatus:'uploading'` 乐观消息；每块经 `uploadBlobWithProgress`（XHR）上传 PDS（字节级 uploadProgress），blobCid 存入 `dme.queue.envelope` record 的 `blobCids` 字段（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式，PDS 可识别防 GC）；成功后删除临时消息写入最终消息 |
 | 信令 | file manifest（type: 'file'，含 fileKey/fileId/sha256/mimeType 等）通过 MLS application message 加密，与 blobCids 共存在同一条 envelope 中 |
-| 下载 | 接收方从 manifest 拿到 fileKey → 从同一 envelope 的 `blobCids` 取 blob refs → 逐片 GET gateway `/xrpc/dme.file.blob` |
-| 缓存 | Gateway 用 `caches.default` 缓存 blob 响应 7 天，群聊中后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次 |
-| 校验 | 解密后拼接 → SHA-256 验证与 manifest 一致 |
+| 下载 | 接收方从 manifest 拿到 fileKey -> 从同一 envelope 的 `blobCids` 取 blob refs -> 流式 GET gateway `/xrpc/dme.file.blob`（`response.body.getReader()` 字节级 downloadProgress） |
+| 缓存 | Gateway 用 `caches.default` 缓存 blob 响应 7 天（≤100MB，waitUntil 后台写入不阻塞响应），群聊中后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次 |
+| 校验 | 解密后拼接 -> SHA-256 验证与 manifest 一致 |
 | 图片自动下载 | `image/*` 且 ≤ 5MB（1 个 chunk）自动触发下载，其他类型手动点击 |
 
 ### 文件消息类型
@@ -221,16 +227,24 @@ dme/
 | 类型 | 包含 | 用途 |
 |---|---|---|
 | `FileManifestMessage` | type: 'file', fileId, fileName, fileSize, mimeType, sha256, chunkCount, chunkSize, fileKey | MLS 加密传输的文件清单 |
-| `FileMeta` | fileId, fileName, fileSize, mimeType, sha256, chunkCount, chunkSize, fileKey, blobCids?, localPath?, downloadStatus | 本地存储的文件元数据 |
+| `FileMeta` | fileId, fileName, fileSize, mimeType, sha256, chunkCount, chunkSize, fileKey, downloadStatus, uploadStatus?, uploadProgress?, downloadProgress?, blobCids?, localPath? | 本地存储的文件元数据 |
 
 ### 下载状态
 
 | 状态 | 含义 |
 |---|---|
-| `pending` | 刚收到 manifest，尚未开始下载 |
-| `downloading` | 正在下载 blob 分片 |
+| `pending` | 刚收到 manifest，尚未开始下载（点击触发下载） |
+| `downloading` | 正在流式下载 blob 分片（字节级 downloadProgress） |
 | `ready` | 下载完成，已解密校验并存本地 |
-| `failed` | 下载失败（重试 3 次后仍失败） |
+| `failed` | 下载失败（重试 3 次后仍失败），显示重试按钮 |
+
+### 上传状态（仅发送方）
+
+| 状态 | 含义 |
+|---|---|
+| `uploading` | 正在上传（乐观消息已入库，本地副本已保存，XHR 字节级 uploadProgress） |
+| `uploaded` | 上传成功（最终消息，id 替换为 MLS queueId） |
+| `failed` | 上传失败（仅置状态不抛异常），可点击重试从本地副本重传 |
 
 ## 屏蔽列表
 
@@ -345,7 +359,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 ## 注意事项
 
 - **Lexicon key**: envelope 用 `"key": "tid"`（AT Protocol 自动生成时间戳 rkey）；backup 用 `"key": "literal"`（rkey 固定 `"self"`，putRecord upsert）
-- **Gateway**: Cloudflare Worker，职责 `/xrpc/dme.file.blob`（blob CDN，7 天 `caches.default` 缓存，代理 PDS `com.atproto.sync.getBlob`） + `/xrpc/dme.batch.get`（反代到 `DME_SERVER_URL`，隐藏客户端 IP）。全局 OPTIONS 预检 + `Access-Control-Allow-Origin:*`（含 `proxy()` 响应），以支持浏览器 / Expo web 直连。`wrangler.toml` 的 `DME_SERVER_URL` 变量指向 dme-server。Gateway 留空 → 客户端直连 server，blob 走 PDS `com.atproto.sync.getBlob`。群聊后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次。
+- **Gateway**: Cloudflare Worker，职责 `/xrpc/dme.file.blob`（blob CDN：流式转发 PDS `com.atproto.sync.getBlob`，15s 上游超时（AbortController，失败返回 504），≤100MB 才写 `caches.default` 7 天缓存且经 `ctx.waitUntil` 后台写入不阻塞响应、缓存失败不影响下载；禁止 `arrayBuffer()` 全量缓冲+`clone()`，大文件会撞 Worker 128MB 内存/CPU 限额表现为请求无响应） + `/xrpc/dme.batch.get`（反代到 `DME_SERVER_URL`，隐藏客户端 IP）。全局 OPTIONS 预检 + `Access-Control-Allow-Origin:*`（含 `proxy()` 响应），以支持浏览器 / Expo web 直连。`wrangler.toml` 的 `DME_SERVER_URL` 变量指向 dme-server。Gateway 留空 → 客户端直连 server，blob 走 PDS `com.atproto.sync.getBlob`。群聊后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次。
 - **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text），`SkiaButton.tsx` 保留但无引用
 - **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Block List/Logout 收入头像弹出菜单
 - **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染
@@ -365,12 +379,14 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
 - **expo-document-picker**: 新增依赖 `expo-document-picker@~57.0.1`（Expo 52 兼容），用于文件选择（`getDocumentAsync({type: '*/*'})`），返回 `{uri, name, mimeType, size}`
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
-- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，blobCids 字段引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式，PDS 可识别防 GC）。fileKey 随机生成放在 MLS manifest 中，与 blobCids 共存在同一条 `dme.queue.envelope` 中（单 record）。Gateway 用 `caches.default` 缓存 blob 下载，群聊后续成员走 CF 边缘缓存。下载时 blob fetch 失败指数退避重试 2s/4s/8s，最多 3 次。图片 ≤ 5MB 自动下载，其他类型手动
-- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方消息立即标记 `downloadStatus: 'ready'`（文件已在本机），接收方初始 `downloadStatus: 'pending'`
-- **文件消息 UI**: `FileMessageBubble` 按 mimeType 分支渲染（image → expo-image 缩略图，video → ▶ 按钮，audio → 🔊 图标，其他 → 📎 + 文件名 + 大小）。下载状态：pending → 点击下载，downloading → ActivityIndicator，ready → 点击打开，failed → 重试按钮。群聊时复用与 `MessageBubble` 相同的双列布局（头像列 + 内容列昵称+@handle），1:1 不渲染头像列
+- **文件发送**: 先保存本地副本（web->IndexedDB / native->documentDirectory）再上传；先写入 `uploadStatus:'uploading'` 乐观消息（tempId 为 `generateId()`），成功后删除临时消息写入最终消息（id=MLS queueId，reactions 跨端靠 queueId 匹配）。逐块 5MB AES-256-GCM 加密，经 XHR `uploadBlobWithProgress` 上传 PDS（`upload.onprogress` 字节级 uploadProgress；fetch 无上传进度故绕过 agent.uploadBlob，自带 Authorization + atproto-proxy header，取自 `session.pdsUrlStr`/`session.accessJwt`/`agent.proxy`）。blobCids 字段引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式，PDS 可识别防 GC），与 MLS manifest 共存同一条 `dme.queue.envelope`（单 record）。上传失败仅置 `uploadStatus:'failed'` 不抛异常，可 `retryUploadFileMessage` 从本地副本重试。下载时 blob fetch 失败指数退避重试 2s/4s/8s，最多 3 次。图片 ≤ 5MB 自动下载，其他类型手动
+- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（含 `uploadStatus`/`uploadProgress`/`downloadStatus`/`downloadProgress`）。`updateFileMessageMeta` 局部更新状态/进度/本地路径。发送方上传成功后 `downloadStatus: 'ready'` + `uploadStatus: 'uploaded'`，接收方初始 `downloadStatus: 'pending'`。上传中消息 id 为临时 generateId，成功后替换为 queueId
+- **文件消息 UI**: `FileMessageBubble` 按 mimeType 分支渲染（image -> expo-image 缩略图，video -> ▶ 按钮，audio -> 播放卡片（圆形 ▶/⏸ 按钮，pending 点击触发下载、ready 后点击播放/暂停；web 用 HTMLAudioElement，native 用 expo-av 动态 import；本地 URI 解析中显示禁用态+转圈），其他 -> 📎 + 文件名 + 大小）。上传状态：uploading -> 字节级进度百分比，failed -> 上传失败+重试按钮。下载状态：pending -> 点击下载，downloading -> 字节级进度百分比，ready -> 点击打开，failed -> 重试按钮。群聊时复用与 `MessageBubble` 相同的双列布局（头像列 + 内容列昵称+@handle），1:1 不渲染头像列
 - **文件消息预览**: ChatListScreen 最近消息 `kind === 'file'` 显示 `📎 filename`
 - **文件分片完整性**: 每片独立 AES-256-GCM 加密，nonce 由 fileId 前 8 字节 + chunkIndex 4 字节大端组成，同一 fileKey 下 nonce 不重复。解密后拼接整文件 SHA-256 与 manifest 比对
 - **文件大小限制**: 无硬限制，逐块 5MB 读取加密，内存 O(5MB)。>500MB 弹警告确认。无断点续传，任一 uploadBlob 失败则整个发送失败
 - **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 写入 IndexedDB 并以 `indexeddb://{fileId}` 作为 localPath，组件渲染时通过 `useFileUri` 解析为 blob URL；发送方同样持久化，刷新页面后仍可显示
 - **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
-- **聊天列表分页**: `ChatViewScreen` 使用 `inverted={true}` FlatList，数据 newest-first；进入时只加载最近 50 条，滑到顶部触发 `onEndReached` 加载更早 50 条；`chatListVersion` 变化时 merge 最近 N 条（N = max(50, 已加载数)）以刷新 fileMeta/reactions/readAt 并 prepend 新消息，不再依赖 `scrollToEnd`
+- **聊天列表分页**: `ChatViewScreen` 使用 `inverted={true}` FlatList，数据 newest-first；进入时只加载最近 50 条，滑到顶部触发 `onEndReached` 加载更早 50 条；`chatListVersion` 变化时 merge 最近 N 条（N = max(50, 已加载数)），merge 时会过滤 prev 中已不在 storage 最近窗口的消息（乐观上传消息被最终消息替换后自动从 UI 移除），不再依赖 `scrollToEnd`
+- **中断传输重置**: `restoreSession` 启动恢复后遍历所有会话，把 `downloadStatus:'downloading'` 重置为 `'pending'`（并清 downloadProgress）、`uploadStatus:'uploading'` 重置为 `'failed'`，避免刷新/杀进程后消息永远转圈无法二次触发
+- **进度百分比**: 上传/下载均为字节级。上传 = XHR `upload.onprogress` 已传字节 / 总加密字节（fileSize + 分片数×16）；下载 = `response.body.getReader()` 已读字节累计 / blobCids size 总和（不依赖 content-length）；进度只在整数百分比变化时写 storage + 递增 chatListVersion；进行中上限 99%，完成后清空

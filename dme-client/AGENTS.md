@@ -45,7 +45,7 @@ dme-client/
 | 改 PDS/DID 交互 | `src/atproto/` |
 | 文件加密 | `src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
 | 文件协议类型 | `src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
-| 文件发送/下载 | `src/state/AppContext.tsx`（`sendFileMessage` + `downloadFile`） |
+| 文件发送/下载/重试上传 | `src/state/AppContext.tsx`（`sendFileMessage` + `retryUploadFileMessage` + `downloadFile`，XHR/reader 字节级进度） |
 | 文件消息气泡 | `src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片） |
 | PDS URL 解析 | `src/atproto/did.ts`（`resolvePdsUrl`） |
 | 改主题 | `src/ui/theme.ts` |
@@ -63,7 +63,7 @@ dme-client/
 | 表情反应协议 | `src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions 渲染 | `src/ui/MessageBubble.tsx` |
-| 文件消息气泡 + 下载状态 | `src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+图片缩略图/视频播放/音频图标/文件卡片)；1:1 不渲染头像列；pending/downloading/ready/failed 状态 + reactions） |
+| 文件消息气泡 + 上传/下载状态 | `src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+图片缩略图/视频播放/音频播放卡片/文件卡片)；1:1 不渲染头像列；上传 uploading/failed+重试 + 下载 pending/downloading(字节级%)/ready/failed 状态 + reactions） |
 | 图片查看器 | `src/ui/ImageViewerScreen.tsx`（全屏查看，点击或 ✕ 关闭） |
 | Web 文件缓存 | `src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | 文件选择器 | `expo-document-picker`（`getDocumentAsync({type: '*/*'})`） |
@@ -127,8 +127,12 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
 - **UI 头像布局**: ChatListScreen 顶部栏头像右侧展示昵称+@handle；会话列表 1:1/群聊行左侧头像+昵称+时间+@handle+最近消息预览；ChatViewScreen 1:1/群聊 header 左上角展示头像+昵称+@handle + ⋮ 按钮（1:1 跳转私聊管理 `DmSettingsScreen`，群聊跳转群管理 `GroupSettingsScreen`；群聊为 `[Group] 群名` + `@creatorHandle`）
 - **未读 badge**: 1:1 会话列表行 badge 浮在头像右上角（红底白边）；群聊行 badge 紧跟群名文字内联
-- **文件发送**: 逐块 5MB AES-256-GCM 加密，每块作为 PDS blob 上传，blob 引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式）与 MLS 加密的 file manifest 共存在同一条 `dme.queue.envelope`（单 record，PDS 可识别防 GC）。发送完成后 Native 复制到 `documentDirectory`、Web 写入 IndexedDB，使发送方刷新后仍可显示。图片 ≤ 5MB 自动下载，其他类型手动。下载时 blob fetch 失败指数退避重试 2s/4s/8s（最多 3 次）。无文件大小硬限制（>500MB 弹警告确认）
-- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口，含 `blobCids`）。`updateFileMessageMeta` 局部更新下载状态和本地路径。发送方下载状态 `ready`，接收方初始 `pending`
+- **文件发送**: 先保存本地副本（web->IndexedDB / native->documentDirectory）再上传；先写入 `uploadStatus:'uploading'` 乐观消息（tempId 为 `generateId()`），成功后删除临时消息写入最终消息（id=MLS queueId）。逐块 5MB AES-256-GCM 加密，经 XHR `uploadBlobWithProgress` 上传 PDS（字节级 uploadProgress；自带 Authorization + atproto-proxy header），blob 引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式）与 MLS 加密的 file manifest 共存在同一条 `dme.queue.envelope`（单 record，PDS 可识别防 GC）。上传失败仅置 `uploadStatus:'failed'` 不抛异常，可 `retryUploadFileMessage` 从本地副本重试。图片 ≤ 5MB 自动下载，其他类型手动。下载时 blob fetch 失败指数退避重试 2s/4s/8s（最多 3 次）。无文件大小硬限制（>500MB 弹警告确认）
+- **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口，含 `blobCids` + `uploadStatus`/`uploadProgress`/`downloadStatus`/`downloadProgress`）。`updateFileMessageMeta` 局部更新状态/进度/本地路径。发送方上传成功后 `downloadStatus:'ready'`+`uploadStatus:'uploaded'`，接收方初始 `downloadStatus:'pending'`；上传中消息 id 为临时 generateId，成功后替换为 queueId
 - **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 写入 IndexedDB 并以 `indexeddb://{fileId}` 作为 localPath，组件渲染时通过 `useFileUri` 解析为 blob URL；发送方同样持久化，刷新页面后仍可显示
 - **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
-- **聊天列表分页**: `ChatViewScreen` 使用 `inverted={true}` FlatList，数据 newest-first；进入时只加载最近 50 条，滑到顶部触发 `onEndReached` 加载更早 50 条；`chatListVersion` 变化时 merge 最近 N 条（N = max(50, 已加载数)）以刷新 fileMeta/reactions/readAt 并 prepend 新消息，不再依赖 `scrollToEnd`
+- **聊天列表分页**: `ChatViewScreen` 使用 `inverted={true}` FlatList，数据 newest-first；进入时只加载最近 50 条，滑到顶部触发 `onEndReached` 加载更早 50 条；`chatListVersion` 变化时 merge 最近 N 条（N = max(50, 已加载数)），merge 时过滤 prev 中已不在 storage 最近窗口的消息（乐观上传消息被替换后自动移除），刷新 fileMeta/reactions/readAt 并 prepend 新消息
+- **音频消息播放**: `FileMessageBubble` 音频卡片内置播放器--web 用 `HTMLAudioElement`、native 用 expo-av `Audio.Sound`（动态 import）；pending 点击触发下载、ready 后点击播放/暂停（▶/⏸）；`resolvedUri` 变化（如刷新后重新解析 IndexedDB）时释放旧音频对象并重置播放态；本地 URI 解析中播放按钮禁用+转圈
+- **进度百分比**: 上传/下载均为字节级。上传走 XHR `upload.onprogress`（fetch 无上传进度）；下载走 `response.body.getReader()`，总量来自 `blobCids[].size`（不依赖 content-length）；进度只在整数百分比变化时写 storage + 递增 chatListVersion；进行中上限 99%，完成后清空
+- **中断传输重置**: `restoreSession` 启动时把 `downloadStatus:'downloading'` 重置为 `'pending'`（清 downloadProgress）、`uploadStatus:'uploading'` 重置为 `'failed'`，避免刷新/杀进程后消息永远转圈
+- **Web 上传数据源**: web 端上传/重试从 IndexedDB 读原始字节（`getCachedFileBytes(fileId)`），native 端从本地副本 `FileSystem.readAsStringAsync`（position/length 分段）；禁止用 document picker 的原始 fileUri 做上传数据源（刷新/重试后可能失效）

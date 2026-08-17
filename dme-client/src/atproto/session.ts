@@ -148,6 +148,14 @@ export class DmeSession {
     return this.session?.session ?? null;
   }
 
+  get pdsUrlStr(): string {
+    return this.pdsUrl;
+  }
+
+  get accessJwt(): string | null {
+    return this.session?.session?.accessJwt ?? null;
+  }
+
   /**
    * 创建 CredentialSession 并注册 persistSession 回调。
    *

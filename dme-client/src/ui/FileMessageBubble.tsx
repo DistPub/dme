@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Pressable, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { theme } from './theme';
 import { Button } from './Button';
@@ -17,6 +17,7 @@ interface FileMessageBubbleProps {
   senderAvatarUrl?: string | null;
   senderAvatarError?: boolean;
   onRetry?: () => void;
+  onRetryUpload?: () => void;
   onDownload?: () => void;
   onImagePress?: () => void;
   onReactionPress?: (emoji: string) => void;
@@ -39,22 +40,100 @@ export function FileMessageBubble({
   senderAvatarUrl,
   senderAvatarError,
   onRetry,
+  onRetryUpload,
   onDownload,
   onImagePress,
   onReactionPress,
   onOpenPicker,
 }: FileMessageBubbleProps): React.JSX.Element {
-  const { fileName, fileSize, mimeType, downloadStatus, localPath } = fileMeta;
+  const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, uploadProgress, downloadProgress } = fileMeta;
   const resolvedUri = useFileUri(localPath);
   const isImage = mimeType.startsWith('image/');
   const isVideo = mimeType.startsWith('video/');
   const isAudio = mimeType.startsWith('audio/');
   const emojiBtnRef = useRef<View>(null);
   const [avatarError, setAvatarError] = useState(false);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const webAudioRef = useRef<HTMLAudioElement | null>(null);
+  const nativeSoundRef = useRef<any>(null);
 
   useEffect(() => {
     setAvatarError(false);
   }, [senderAvatarUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (Platform.OS === 'web') {
+        if (webAudioRef.current) {
+          webAudioRef.current.pause();
+          webAudioRef.current.src = '';
+          webAudioRef.current = null;
+        }
+      } else if (nativeSoundRef.current) {
+        nativeSoundRef.current.unloadAsync().catch(() => {});
+        nativeSoundRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      if (webAudioRef.current) {
+        webAudioRef.current.pause();
+        webAudioRef.current.src = '';
+        webAudioRef.current = null;
+      }
+    } else if (nativeSoundRef.current) {
+      nativeSoundRef.current.unloadAsync().catch(() => {});
+      nativeSoundRef.current = null;
+    }
+    setIsPlayingAudio(false);
+  }, [resolvedUri]);
+
+  const handleAudioPress = useCallback(async () => {
+    if (downloadStatus === 'pending') {
+      onDownload?.();
+      return;
+    }
+    if (downloadStatus !== 'ready' || !resolvedUri) return;
+
+    try {
+      if (Platform.OS === 'web') {
+        if (!webAudioRef.current) {
+          webAudioRef.current = new Audio(resolvedUri);
+          webAudioRef.current.onended = () => setIsPlayingAudio(false);
+        }
+        if (isPlayingAudio) {
+          webAudioRef.current.pause();
+          setIsPlayingAudio(false);
+        } else {
+          await webAudioRef.current.play();
+          setIsPlayingAudio(true);
+        }
+      } else {
+        const { Audio } = await import('expo-av');
+        if (!nativeSoundRef.current) {
+          const sound = new Audio.Sound();
+          await sound.loadAsync({ uri: resolvedUri });
+          sound.setOnPlaybackStatusUpdate((status: any) => {
+            if (status?.didFinish) {
+              setIsPlayingAudio(false);
+            }
+          });
+          nativeSoundRef.current = sound;
+        }
+        if (isPlayingAudio) {
+          await nativeSoundRef.current.pauseAsync();
+          setIsPlayingAudio(false);
+        } else {
+          await nativeSoundRef.current.playAsync();
+          setIsPlayingAudio(true);
+        }
+      }
+    } catch (err) {
+      console.error('Audio playback failed:', err);
+    }
+  }, [downloadStatus, resolvedUri, onDownload, isPlayingAudio]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, { emoji: string; count: number; includesMe: boolean }>();
@@ -96,6 +175,67 @@ export function FileMessageBubble({
   };
 
   const renderFileContent = () => {
+    if (uploadStatus === 'uploading') {
+      const pct = uploadProgress && uploadProgress > 0 ? `${uploadProgress}%` : '';
+      return (
+        <View style={styles.statusRow}>
+          <ActivityIndicator size="small" color={theme.colors.textSecondary}/>
+          <Text style={styles.statusText}>{`上传中...${pct}`}</Text>
+        </View>
+      );
+    }
+
+    if (uploadStatus === 'failed') {
+      return (
+        <View style={styles.fileCard}>
+          <Text style={styles.fileIcon}>{isVideo ? '▶' : isAudio ? '🔊' : '📎'}</Text>
+          <View style={styles.fileInfo}>
+            <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+            <Text style={styles.statusText}>上传失败</Text>
+          </View>
+          {onRetryUpload && (
+            <Button label="重试" onPress={onRetryUpload} variant="primary" style={styles.retryBtn} />
+          )}
+        </View>
+      );
+    }
+
+    if (isAudio) {
+      const resolvingUri = downloadStatus === 'ready' && !resolvedUri;
+      const showSpinner = downloadStatus === 'downloading' || resolvingUri;
+      const showRetry = downloadStatus === 'failed';
+      const disabled = showSpinner || showRetry;
+      return (
+        <TouchableOpacity
+          onPress={disabled ? undefined : handleAudioPress}
+          style={styles.audioCard}
+          activeOpacity={disabled ? 1 : 0.7}
+        >
+          <View style={[styles.audioPlayBtn, disabled && styles.audioPlayBtnDisabled]}>
+            <Text style={styles.audioPlayIcon}>{isPlayingAudio ? '⏸' : '▶'}</Text>
+          </View>
+          <View style={styles.fileInfo}>
+            <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+          </View>
+          {showSpinner && (
+            <>
+              <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+              <Text style={styles.statusText}>
+                {downloadStatus === 'downloading' && downloadProgress && downloadProgress > 0
+                  ? `下载中... ${downloadProgress}%`
+                  : '下载中...'}
+              </Text>
+            </>
+          )}
+          {showRetry && onRetry && (
+            <Button label="Retry" onPress={onRetry} variant="primary" style={styles.retryBtn} />
+          )}
+        </TouchableOpacity>
+      );
+    }
+
     if (downloadStatus === 'ready' && resolvedUri && isImage) {
       return (
         <Pressable onPress={onImagePress} disabled={!onImagePress}>
@@ -109,10 +249,14 @@ export function FileMessageBubble({
     }
 
     if (downloadStatus === 'downloading') {
+      let statusText = '下载中...';
+      if (downloadProgress && downloadProgress > 0) {
+        statusText = `下载中... ${downloadProgress}%`;
+      }
       return (
         <View style={styles.statusRow}>
           <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-          <Text style={styles.statusText}>Downloading...</Text>
+          <Text style={styles.statusText}>{statusText}</Text>
         </View>
       );
     }
@@ -303,6 +447,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+  },
+  audioCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  audioPlayBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  audioPlayBtnDisabled: {
+    opacity: 0.5,
+  },
+  audioPlayIcon: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    marginLeft: 2,
   },
   fileIcon: {
     fontSize: 24,

@@ -23,6 +23,7 @@ import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { getProfileCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { RootStackParamList } from '../types/navigation';
+import { useI18n } from '../i18n/I18nContext';
 
 type DmSettingsRouteProp = NativeStackScreenProps<RootStackParamList, 'DmSettings'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -38,6 +39,7 @@ export function DmSettingsScreen(): React.JSX.Element {
   const route = useRoute<DmSettingsRouteProp>();
   const navigation = useNavigation<Navigation>();
   const { friendDid } = route.params;
+  const { t } = useI18n();
 
   const [profile, setProfile] = useState<FriendProfile>({
     handle: friendDid,
@@ -138,7 +140,7 @@ export function DmSettingsScreen(): React.JSX.Element {
     return (
       <View style={styles.container}>
         <ScreenBackground />
-        <Text style={styles.statusText}>Loading...</Text>
+        <Text style={styles.statusText}>{t('common.loading')}</Text>
       </View>
     );
   }
@@ -150,12 +152,12 @@ export function DmSettingsScreen(): React.JSX.Element {
       <View style={styles.content}>
         <View style={styles.header}>
           <Button
-            label="Back"
+            label={t('common.back')}
             onPress={() => navigation.goBack()}
             variant="secondary"
             style={styles.backBtn}
           />
-          <Text style={styles.title} numberOfLines={1}>聊天管理</Text>
+          <Text style={styles.title} numberOfLines={1}>{t('dmsettings.title')}</Text>
         </View>
 
         {/* 对方信息 */}
@@ -189,21 +191,21 @@ export function DmSettingsScreen(): React.JSX.Element {
         {/* 屏蔽状态提示 */}
         {isBlocked && (
           <Text style={styles.blockedHint}>
-            已屏蔽该用户，屏蔽后将不再接收对方的消息。
+            {t('dmsettings.blockedHint')}
           </Text>
         )}
 
         {/* 屏蔽/取消屏蔽按钮 */}
         {isBlocked ? (
           <Button
-            label="取消屏蔽"
+            label={t('dmsettings.unblockUser')}
             onPress={handleUnblock}
             variant="primary"
             style={styles.fullButton}
           />
         ) : (
           <Button
-            label="屏蔽用户"
+            label={t('dmsettings.blockUser')}
             onPress={handleBlock}
             variant="secondary"
             style={styles.fullButton}
@@ -224,24 +226,25 @@ export function DmSettingsScreen(): React.JSX.Element {
           onPress={() => setBlockTarget(null)}
         >
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>屏蔽用户</Text>
+            <Text style={styles.modalTitle}>{t('dmsettings.blockUser')}</Text>
             <Text style={styles.modalMessage}>
-              屏蔽 {blockTarget?.handle
-                ? blockTarget.handle === blockTarget.displayName
-                  ? `@${blockTarget.handle}`
-                  : `${blockTarget.displayName}（@${blockTarget.handle}）`
-                : blockTarget?.displayName
-              }? 屏蔽后将不再接收该用户的消息。
+              {t('dmsettings.blockModalMessage', {
+                name: blockTarget?.handle
+                  ? blockTarget.handle === blockTarget.displayName
+                    ? `@${blockTarget.handle}`
+                    : `${blockTarget.displayName}（@${blockTarget.handle}）`
+                  : blockTarget?.displayName ?? '',
+              })}
             </Text>
             <View style={styles.modalButtons}>
               <Button
-                label="取消"
+                label={t('common.cancel')}
                 onPress={() => setBlockTarget(null)}
                 variant="secondary"
                 style={styles.modalBtn}
               />
               <Button
-                label="屏蔽"
+                label={t('common.block')}
                 onPress={confirmBlock}
                 variant="primary"
                 style={styles.modalBtn}

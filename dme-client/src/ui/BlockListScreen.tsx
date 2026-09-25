@@ -21,6 +21,7 @@ import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { getProfilesCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { RootStackParamList } from '../types/navigation';
+import { useI18n } from '../i18n/I18nContext';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 
@@ -40,6 +41,7 @@ interface ProfileEntry {
 export function BlockListScreen(): React.JSX.Element {
   const app = useApp();
   const navigation = useNavigation<Navigation>();
+  const { t } = useI18n();
   const [rows, setRows] = useState<readonly BlockedRow[]>([]);
   const [loading, setLoading] = useState(true);
   const profileCacheRef = useRef<Record<string, ProfileEntry>>({});
@@ -145,23 +147,23 @@ export function BlockListScreen(): React.JSX.Element {
       <View style={styles.content}>
         <View style={styles.header}>
           <Button
-            label="Back"
+            label={t('common.back')}
             onPress={() => navigation.goBack()}
             variant="secondary"
             style={styles.backBtn}
           />
-          <Text style={styles.title} numberOfLines={1}>Block List</Text>
+          <Text style={styles.title} numberOfLines={1}>{t('blocklist.title')}</Text>
         </View>
 
         {loading ? (
-          <Text style={styles.statusText}>Loading...</Text>
+          <Text style={styles.statusText}>{t('common.loading')}</Text>
         ) : (
           <FlatList
             style={styles.list}
             data={[...rows]}
             keyExtractor={(item) => item.did}
             ListEmptyComponent={
-              <Text style={styles.emptyText}>No blocked users</Text>
+              <Text style={styles.emptyText}>{t('blocklist.empty')}</Text>
             }
             renderItem={({ item }) => (
               <View style={styles.row}>
@@ -190,7 +192,7 @@ export function BlockListScreen(): React.JSX.Element {
                   ) : null}
                 </View>
                 <Button
-                  label="Unblock"
+                  label={t('common.unblock')}
                   onPress={() => handleUnblock(item.did)}
                   variant="secondary"
                   style={styles.unblockBtn}

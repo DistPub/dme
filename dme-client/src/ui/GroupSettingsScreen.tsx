@@ -22,6 +22,7 @@ import { useApp } from '../state/AppContext';
 import { getProfilesCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { GroupMember } from '../protocol/group-message';
 import type { RootStackParamList } from '../types/navigation';
+import { useI18n } from '../i18n/I18nContext';
 
 type GroupSettingsRouteProp = NativeStackScreenProps<RootStackParamList, 'GroupSettings'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -37,6 +38,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
   const route = useRoute<GroupSettingsRouteProp>();
   const navigation = useNavigation<Navigation>();
   const { groupId } = route.params;
+  const { t } = useI18n();
 
   const [groupName, setGroupName] = useState('');
   const [members, setMembers] = useState<readonly GroupMember[]>([]);
@@ -153,7 +155,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
     return (
       <View style={styles.container}>
         <ScreenBackground />
-        <Text style={styles.statusText}>Loading...</Text>
+        <Text style={styles.statusText}>{t('common.loading')}</Text>
       </View>
     );
   }
@@ -165,7 +167,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
       <View style={styles.content}>
         <View style={styles.header}>
           <Button
-            label="Back"
+            label={t('common.back')}
             onPress={() => navigation.goBack()}
             variant="secondary"
             style={styles.backBtn}
@@ -176,10 +178,10 @@ export function GroupSettingsScreen(): React.JSX.Element {
         {dissolved || removed || left ? (
           <>
             <Text style={styles.dissolvedHint}>
-              {dissolved ? '群聊已解散' : removed ? '你已被移出群聊' : '你已离开群聊'}
+              {dissolved ? t('groupsettings.dissolved') : removed ? t('groupsettings.removed') : t('groupsettings.left')}
             </Text>
             <Button
-              label="Delete Conversation"
+              label={t('groupsettings.deleteConversation')}
               onPress={() => {
                 app.deleteFriend(groupId);
                 navigation.navigate('ChatList');
@@ -190,7 +192,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
           </>
         ) : (
           <>
-            <Text style={styles.sectionLabel}>Members ({members.length})</Text>
+            <Text style={styles.sectionLabel}>{t('groupsettings.members', { n: members.length })}</Text>
 
             <FlatList
               style={styles.list}
@@ -226,7 +228,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
                             {displayName}
                           </Text>
                           {item.role === 'creator' && (
-                            <Text style={styles.creatorTag}> (Creator)</Text>
+                            <Text style={styles.creatorTag}>{t('common.creatorTag')}</Text>
                           )}
                         </View>
                         {handle ? (
@@ -239,7 +241,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
                     <View style={styles.memberActions}>
                       {canBlock && !isBlocked && (
                         <Button
-                          label="Block"
+                          label={t('common.block')}
                           onPress={() => handleBlockMember(item.did, displayName, handle)}
                           variant="secondary"
                           style={styles.blockBtn}
@@ -247,7 +249,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
                       )}
                       {canBlock && isBlocked && (
                         <Button
-                          label="Unblock"
+                          label={t('common.unblock')}
                           onPress={() => app.unblockMember(item.did)}
                           variant="secondary"
                           style={styles.blockBtn}
@@ -255,7 +257,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
                       )}
                       {isCreator && item.role !== 'creator' && (
                         <Button
-                          label="Remove"
+                          label={t('common.remove')}
                           onPress={() => handleRemoveMember(item.did)}
                           variant="secondary"
                           style={styles.removeBtn}
@@ -269,7 +271,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
 
             {isCreator && (
               <Button
-                label="Invite New Member"
+                label={t('groupsettings.inviteNewMember')}
                 onPress={() => navigation.navigate('CreateGroup', { groupId })}
                 variant="primary"
                 style={styles.fullButton}
@@ -278,7 +280,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
 
             {isCreator ? (
               <Button
-                label="Dissolve Group"
+                label={t('groupsettings.dissolveGroup')}
                 onPress={() => {
                   app.dissolveGroup(groupId);
                   navigation.goBack();
@@ -288,7 +290,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
               />
             ) : (
               <Button
-                label="Leave Group"
+                label={t('groupsettings.leaveGroup')}
                 onPress={() => {
                   app.leaveGroup(groupId);
                   navigation.goBack();
@@ -313,24 +315,25 @@ export function GroupSettingsScreen(): React.JSX.Element {
           onPress={() => setBlockTarget(null)}
         >
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>屏蔽成员</Text>
+            <Text style={styles.modalTitle}>{t('groupsettings.blockMember')}</Text>
             <Text style={styles.modalMessage}>
-              屏蔽 {blockTarget?.handle
-                ? blockTarget.handle === blockTarget.displayName
-                  ? `@${blockTarget.handle}`
-                  : `${blockTarget.displayName}（@${blockTarget.handle}）`
-                : blockTarget?.displayName
-              }? 屏蔽后将不再接收该成员的消息。
+              {t('groupsettings.blockModalMessage', {
+                name: blockTarget?.handle
+                  ? blockTarget.handle === blockTarget.displayName
+                    ? `@${blockTarget.handle}`
+                    : `${blockTarget.displayName}（@${blockTarget.handle}）`
+                  : blockTarget?.displayName ?? '',
+              })}
             </Text>
             <View style={styles.modalButtons}>
               <Button
-                label="取消"
+                label={t('common.cancel')}
                 onPress={() => setBlockTarget(null)}
                 variant="secondary"
                 style={styles.modalBtn}
               />
               <Button
-                label="屏蔽"
+                label={t('common.block')}
                 onPress={confirmBlock}
                 variant="primary"
                 style={styles.modalBtn}

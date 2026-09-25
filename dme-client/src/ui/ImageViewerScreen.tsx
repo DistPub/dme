@@ -18,7 +18,7 @@ type ImageViewerRouteProp = NativeStackScreenProps<RootStackParamList, 'ImageVie
 export function ImageViewerScreen(): React.JSX.Element {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<ImageViewerRouteProp>();
-  const { uri, fileName } = route.params;
+  const { uri, fileName: _fileName } = route.params;
   const resolvedUri = useFileUri(uri);
 
   return (
@@ -38,12 +38,6 @@ export function ImageViewerScreen(): React.JSX.Element {
       <Pressable style={styles.closeButton} onPress={() => navigation.goBack()}>
         <Text style={styles.closeText}>✕</Text>
       </Pressable>
-
-      {fileName ? (
-        <View style={styles.footer} pointerEvents="none">
-          <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -77,19 +71,5 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 20,
     fontWeight: '600',
-  },
-  footer: {
-    position: 'absolute',
-    bottom: theme.spacing.lg,
-    left: theme.spacing.lg,
-    right: theme.spacing.lg,
-    alignItems: 'center',
-  },
-  fileName: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.caption,
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
   },
 });

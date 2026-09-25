@@ -27,6 +27,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
+import { useI18n } from '../i18n/I18nContext';
 import {
   getProfileCached,
   getProfilesCached,
@@ -98,25 +99,28 @@ const SwipeableRow = React.memo(function SwipeableRow({
   );
 });
 
-function formatTimeAgo(isoString: string | undefined): string {
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+function formatTimeAgo(isoString: string | undefined, t: Translate): string {
   if (!isoString) return '';
   const now = Date.now();
   const then = new Date(isoString).getTime();
   const diffMs = now - then;
   if (diffMs < 0) return '';
   const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return '刚刚';
-  if (diffMin < 60) return `${diffMin}分钟前`;
+  if (diffMin < 1) return t('chatlist.timeJustNow');
+  if (diffMin < 60) return t('chatlist.timeMinutes', { n: diffMin });
   const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return `${diffHour}小时前`;
+  if (diffHour < 24) return t('chatlist.timeHours', { n: diffHour });
   const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 7) return `${diffDay}天前`;
+  if (diffDay < 7) return t('chatlist.timeDays', { n: diffDay });
   const d = new Date(isoString);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+  return t('chatlist.timeDate', { M: d.getMonth() + 1, D: d.getDate() });
 }
 
 export function ChatListScreen(): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
   const navigation = useNavigation<Navigation>();
   const route = useRoute<ChatListRouteProp>();
   const forwardText = route.params?.forwardText;
@@ -430,12 +434,12 @@ const resolveProfiles = useCallback(async (
 
   const handleLogoutConfirm = useCallback(async (): Promise<void> => {
     if (!backupPwd) {
-      setLogoutError('请输入密码');
+      setLogoutError(t('chatlist.enterPassword'));
       setLogoutStatus('error');
       return;
     }
     if (backupPwd !== backupPwdConfirm) {
-      setLogoutError('两次密码不一致');
+      setLogoutError(t('chatlist.passwordMismatch'));
       setLogoutStatus('error');
       return;
     }
@@ -446,10 +450,10 @@ const resolveProfiles = useCallback(async (
       setLogoutModalVisible(false);
       await app.logout();
     } catch (err) {
-      setLogoutError(err instanceof Error ? err.message : '备份失败');
+      setLogoutError(err instanceof Error ? err.message : t('chatlist.backupFailed'));
       setLogoutStatus('error');
     }
-  }, [app, backupPwd, backupPwdConfirm]);
+  }, [app, backupPwd, backupPwdConfirm, t]);
 
   const onDeleteWelcome = useCallback((queueId: string) => {
     app.deletePendingWelcome(queueId).catch((err: unknown) => console.error('deletePendingWelcome failed:', err));
@@ -464,16 +468,16 @@ const resolveProfiles = useCallback(async (
           <View style={styles.inviteInfo}>
             <Text style={styles.inviteHandle} numberOfLines={1}>{label}</Text>
             <Text style={styles.inviteStatus}>
-              Waiting for welcome… {formatTimeAgo(welcome.createdAt)}
+              {t('chatlist.waitingWelcome', { time: formatTimeAgo(welcome.createdAt, t) })}
             </Text>
           </View>
           <TouchableOpacity onPress={() => onDeleteWelcome(welcome.queueId)} style={styles.inviteBtn}>
-            <Text style={[styles.inviteBtnText, { color: theme.colors.error }]}>Delete</Text>
+            <Text style={[styles.inviteBtnText, { color: theme.colors.error }]}>{t('common.delete')}</Text>
           </TouchableOpacity>
         </View>
       );
     },
-    [onDeleteWelcome, welcomeHandles],
+    [onDeleteWelcome, welcomeHandles, t],
   );
 
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
@@ -492,12 +496,12 @@ const resolveProfiles = useCallback(async (
       return (
         <RNAnimated.View style={[styles.deleteBtnContainer, { transform: [{ translateX: trans }] }]}>
           <TouchableOpacity style={styles.deleteBtn} onPress={onDelete} activeOpacity={0.8}>
-            <Text style={styles.deleteBtnText}>删除</Text>
+            <Text style={styles.deleteBtnText}>{t('common.delete')}</Text>
           </TouchableOpacity>
         </RNAnimated.View>
       );
     },
-    [],
+    [t],
   );
 
   const renderItem = useCallback(
@@ -524,15 +528,15 @@ const resolveProfiles = useCallback(async (
           : null;
 
       const preview = lastFromBlocked
-        ? '已屏蔽'
+        ? t('chatlist.blocked')
         : item.lastMessage
           ? inviteGroupName
-            ? `@${item.handle}邀请你加入群聊：${inviteGroupName}`
+            ? t('chatlist.invitePreview', { handle: item.handle, group: inviteGroupName })
             : item.lastMessage.kind === 'file' && item.lastMessage.fileMeta
-              ? `📎 ${item.lastMessage.fileMeta.fileName}`
+              ? t('chatlist.filePreview', { name: item.lastMessage.fileMeta.fileName })
               : item.lastMessage.plaintext.slice(0, 40) +
                 (item.lastMessage.plaintext.length > 40 ? '…' : '')
-          : 'No messages yet';
+          : t('chatlist.noMessages');
       return (
         <SwipeableRow
           isOpen={openGroupId === item.groupId}
@@ -570,11 +574,11 @@ const resolveProfiles = useCallback(async (
               <View style={styles.dmTextStack}>
                 <View style={styles.dmHeader}>
                   <Text style={styles.dmName} numberOfLines={1}>
-                    {item.isGroup ? '[Group] ' : ''}{item.displayName}
+                    {item.isGroup ? t('common.groupPrefix') : ''}{item.displayName}
                   </Text>
                   {item.lastMessage ? (
                     <Text style={styles.dmTime} numberOfLines={1}>
-                      {formatTimeAgo(item.lastMessage.createdAt)}
+                      {formatTimeAgo(item.lastMessage.createdAt, t)}
                     </Text>
                   ) : null}
                 </View>
@@ -592,7 +596,7 @@ const resolveProfiles = useCallback(async (
         </SwipeableRow>
       );
     },
-    [navigateToChat, openGroupId, app.deleteFriend, renderRightActions, app.blockList],
+    [navigateToChat, openGroupId, app.deleteFriend, renderRightActions, app.blockList, t],
   );
 
   return (
@@ -603,26 +607,26 @@ const resolveProfiles = useCallback(async (
         {forwardText ? (
           <>
             <Button
-              label="取消"
+              label={t('common.cancel')}
               onPress={() => navigation.goBack()}
               variant="secondary"
               style={styles.iconBtn}
             />
-            <Text style={styles.title}>选择转发目标</Text>
+            <Text style={styles.title}>{t('chatlist.selectForwardTarget')}</Text>
             <View style={styles.topButtons} />
           </>
         ) : (
           <>
-            <Text style={styles.title}>隐世</Text>
+            <Text style={styles.title}>{t('chatlist.title')}</Text>
             <View style={styles.topButtons}>
               <Button
-                label="+ Group"
+                label={t('chatlist.addGroup')}
                 onPress={navigateToCreateGroup}
                 variant="secondary"
                 style={styles.iconBtn}
               />
               <Button
-                label="+ Friend"
+                label={t('chatlist.addFriend')}
                 onPress={navigateToQrDisplay}
                 variant="secondary"
                 style={styles.iconBtn}
@@ -673,23 +677,25 @@ const resolveProfiles = useCallback(async (
           <>
             {app.receivedGroupInvites.filter((i) => i.status === 'pending').length > 0 && (
               <View style={styles.inviteSection}>
-                <Text style={styles.sectionTitle}>Group Invitations</Text>
+                <Text style={styles.sectionTitle}>{t('chatlist.groupInvitations')}</Text>
                 {app.receivedGroupInvites
                   .filter((i) => i.status === 'pending')
                   .map((invite) => (
                     <View key={invite.inviteId} style={styles.inviteRow}>
                       <View style={styles.inviteInfo}>
                         <Text style={styles.inviteHandle} numberOfLines={1}>{invite.groupName}</Text>
-                        <Text style={styles.inviteStatus}>From @{inviterHandles[invite.inviterDid] ?? invite.inviterDid}</Text>
+                        <Text style={styles.inviteStatus}>
+                          {t('chatlist.fromHandle', { handle: inviterHandles[invite.inviterDid] ?? invite.inviterDid })}
+                        </Text>
                       </View>
                       <Button
-                        label="Accept"
+                        label={t('common.accept')}
                         onPress={() => app.respondToGroupInvite(invite.inviteId, true)}
                         variant="primary"
                         style={styles.inviteBtn}
                       />
                       <Button
-                        label="Decline"
+                        label={t('common.decline')}
                         onPress={() => app.respondToGroupInvite(invite.inviteId, false)}
                         variant="secondary"
                         style={styles.inviteBtn}
@@ -702,7 +708,7 @@ const resolveProfiles = useCallback(async (
             {app.pendingInvites.filter((i) => i.status === 'pending' || i.status === 'accepted').length > 0 && (
               <View style={styles.inviteSection}>
                 <Text style={styles.sectionTitle}>
-                  Pending Group Invites
+                  {t('chatlist.pendingGroupInvites')}
                 </Text>
                 {(() => {
                   const active = app.pendingInvites.filter((i) => i.status === 'pending' || i.status === 'accepted');
@@ -723,12 +729,12 @@ const resolveProfiles = useCallback(async (
                             {invites[0]?.groupName}
                           </Text>
                           <Text style={styles.inviteStatus}>
-                            {acceptedCount} accepted, {pendingCount} pending
+                            {t('chatlist.inviteStatus', { accepted: acceptedCount, pending: pendingCount })}
                           </Text>
                         </View>
                         {acceptedCount > 0 && (
                           <Button
-                            label={isExistingGroup ? 'Add' : 'Create'}
+                            label={isExistingGroup ? t('chatlist.add') : t('chatlist.create')}
                             onPress={() =>
                               isExistingGroup
                                 ? app.addAcceptedMembersToGroup(gid)
@@ -739,7 +745,7 @@ const resolveProfiles = useCallback(async (
                           />
                         )}
                         <Button
-                          label="Cancel"
+                          label={t('common.cancel')}
                           onPress={() => {
                             for (const inv of invites) {
                               app.cancelGroupInvite(inv.inviteId);
@@ -757,7 +763,7 @@ const resolveProfiles = useCallback(async (
 
             {app.pendingWelcomes.length > 0 ? (
               <View style={styles.inviteSection}>
-                <Text style={styles.sectionTitle}>Pending Welcomes ({app.pendingWelcomes.length})</Text>
+                <Text style={styles.sectionTitle}>{t('chatlist.pendingWelcomes', { count: app.pendingWelcomes.length })}</Text>
                 {app.pendingWelcomes.map((welcome) => (
                   <View key={welcome.queueId}>{renderWelcomeRow(welcome)}</View>
                 ))}
@@ -768,9 +774,9 @@ const resolveProfiles = useCallback(async (
         ListEmptyComponent={
           !loading ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyText}>No conversations yet</Text>
+              <Text style={styles.emptyText}>{t('chatlist.noConversations')}</Text>
               <Text style={styles.emptySubtext}>
-                Tap +Friend to add a friend, or open the profile menu to Scan
+                {t('chatlist.noConversationsHint')}
               </Text>
             </View>
           ) : null
@@ -793,7 +799,7 @@ const resolveProfiles = useCallback(async (
               style={styles.menuItem}
               activeOpacity={0.7}
             >
-              <Text style={styles.menuItemText}>Scan</Text>
+              <Text style={styles.menuItemText}>{t('chatlist.scan')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => {
@@ -803,7 +809,7 @@ const resolveProfiles = useCallback(async (
               style={styles.menuItem}
               activeOpacity={0.7}
             >
-              <Text style={styles.menuItemText}>Settings</Text>
+              <Text style={styles.menuItemText}>{t('chatlist.settings')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => {
@@ -813,14 +819,14 @@ const resolveProfiles = useCallback(async (
               style={styles.menuItem}
               activeOpacity={0.7}
             >
-              <Text style={styles.menuItemText}>Block List</Text>
+              <Text style={styles.menuItemText}>{t('chatlist.blockList')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={handleLogoutPress}
               style={styles.menuItem}
               activeOpacity={0.7}
             >
-              <Text style={[styles.menuItemText, { color: theme.colors.error }]}>Logout</Text>
+              <Text style={[styles.menuItemText, { color: theme.colors.error }]}>{t('chatlist.logout')}</Text>
             </TouchableOpacity>
           </View>
         </>
@@ -839,15 +845,15 @@ const resolveProfiles = useCallback(async (
             onPress={() => setLogoutModalVisible(false)}
           />
           <View style={styles.logoutCard}>
-            <Text style={styles.logoutTitle}>退出登录</Text>
+            <Text style={styles.logoutTitle}>{t('chatlist.logoutTitle')}</Text>
             <Text style={styles.logoutMessage}>
-              设备上的数据为了安全将会删除，是否备份私钥数据到 PDS？
+              {t('chatlist.logoutMessage')}
             </Text>
             <TextInput
               style={styles.logoutInput}
               value={backupPwd}
               onChangeText={setBackupPwd}
-              placeholder="密码"
+              placeholder={t('chatlist.passwordPlaceholder')}
               placeholderTextColor={theme.colors.textSecondary}
               secureTextEntry
               autoCapitalize="none"
@@ -858,7 +864,7 @@ const resolveProfiles = useCallback(async (
               style={styles.logoutInput}
               value={backupPwdConfirm}
               onChangeText={setBackupPwdConfirm}
-              placeholder="确认密码"
+              placeholder={t('chatlist.confirmPasswordPlaceholder')}
               placeholderTextColor={theme.colors.textSecondary}
               secureTextEntry
               autoCapitalize="none"
@@ -870,13 +876,13 @@ const resolveProfiles = useCallback(async (
             ) : null}
             <View style={styles.logoutButtons}>
               <Button
-                label="取消"
+                label={t('common.cancel')}
                 onPress={() => setLogoutModalVisible(false)}
                 variant="secondary"
                 style={styles.logoutBtn}
               />
               <Button
-                label={logoutStatus === 'backing_up' ? '备份中…' : '备份并退出'}
+                label={logoutStatus === 'backing_up' ? t('chatlist.backingUp') : t('chatlist.backupAndLogout')}
                 onPress={() => { void handleLogoutConfirm(); }}
                 variant="primary"
                 style={styles.logoutBtn}

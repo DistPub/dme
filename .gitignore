@@ -15,3 +15,7 @@ dist
 /.omo
 /dme-client/.expo
 dme-client/.omo/
+
+# Python
+__pycache__/
+*.pyc

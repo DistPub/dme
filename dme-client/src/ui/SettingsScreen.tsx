@@ -8,6 +8,8 @@ import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../config';
 import type { RootStackParamList } from '../types/navigation';
+import { useI18n } from '../i18n/I18nContext';
+import { LANGUAGES } from '../i18n/translations';
 
 interface Props {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Settings'>;
@@ -15,6 +17,7 @@ interface Props {
 
 export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const app = useApp();
+  const { language, setLanguage, t } = useI18n();
   const [draft, setDraft] = useState(String(app.pollBatchSize));
   const [saved, setSaved] = useState(false);
 
@@ -82,11 +85,11 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const handleBackup = async (): Promise<void> => {
     setBackupError(null);
     if (!backupPwd) {
-      setBackupError('请输入密码');
+      setBackupError(t('settings.enterPassword'));
       return;
     }
     if (backupPwd !== backupPwdConfirm) {
-      setBackupError('两次密码不一致');
+      setBackupError(t('settings.passwordMismatch'));
       return;
     }
     setBackupStatus('backing_up');
@@ -97,7 +100,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       setBackupPwdConfirm('');
       setTimeout(() => setBackupStatus('idle'), 2000);
     } catch (err) {
-      setBackupError(err instanceof Error ? err.message : '备份失败');
+      setBackupError(err instanceof Error ? err.message : t('settings.backupFailed'));
       setBackupStatus('error');
       setTimeout(() => setBackupStatus('idle'), 2000);
     }
@@ -108,12 +111,23 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       <ScreenBackground />
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>Settings</Text>
+        <Text style={styles.title}>{t('settings.title')}</Text>
 
-        <Text style={styles.label}>Poll Batch Size</Text>
-        <Text style={styles.hint}>
-          How many future messages to check per poll cycle (1-20).
-        </Text>
+        <Text style={styles.title}>{t('settings.language')}</Text>
+        <View style={styles.rowButtons}>
+          {LANGUAGES.map((lang) => (
+            <Button
+              key={lang.code}
+              label={lang.label}
+              onPress={() => { void setLanguage(lang.code); }}
+              variant={language === lang.code ? 'primary' : 'secondary'}
+              style={styles.halfButton}
+            />
+          ))}
+        </View>
+
+        <Text style={styles.label}>{t('settings.pollBatchSize')}</Text>
+        <Text style={styles.hint}>{t('settings.pollBatchSizeHint')}</Text>
         <TextInput
           style={styles.input}
           value={draft}
@@ -124,16 +138,14 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         />
 
         <Button
-          label={saved ? 'Saved!' : 'Save'}
+          label={saved ? t('common.saved') : t('common.save')}
           onPress={handleSave}
           variant="primary"
           style={styles.fullButton}
         />
 
-        <Text style={styles.title}>AppView Proxy</Text>
-        <Text style={styles.hint}>
-          atproto-proxy header sent to PDS when writing records.
-        </Text>
+        <Text style={styles.title}>{t('settings.appViewProxy')}</Text>
+        <Text style={styles.hint}>{t('settings.appViewProxyHint')}</Text>
         <TextInput
           style={styles.input}
           value={proxyDraft}
@@ -145,23 +157,21 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         />
         <View style={styles.rowButtons}>
           <Button
-            label={proxySaved ? 'Saved!' : 'Save'}
+            label={proxySaved ? t('common.saved') : t('common.save')}
             onPress={handleSaveProxy}
             variant="primary"
             style={styles.halfButton}
           />
           <Button
-            label="Reset"
+            label={t('common.reset')}
             onPress={handleResetProxy}
             variant="secondary"
             style={styles.halfButton}
           />
         </View>
 
-        <Text style={styles.title}>Server</Text>
-        <Text style={styles.hint}>
-          DME server base URL used for message polling.
-        </Text>
+        <Text style={styles.title}>{t('settings.server')}</Text>
+        <Text style={styles.hint}>{t('settings.serverHint')}</Text>
         <TextInput
           style={styles.input}
           value={serverDraft}
@@ -173,50 +183,48 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         />
         <View style={styles.rowButtons}>
           <Button
-            label={serverSaved ? 'Saved!' : 'Save'}
+            label={serverSaved ? t('common.saved') : t('common.save')}
             onPress={handleSaveServer}
             variant="primary"
             style={styles.halfButton}
           />
           <Button
-            label="Reset"
+            label={t('common.reset')}
             onPress={handleResetServer}
             variant="secondary"
             style={styles.halfButton}
           />
         </View>
 
-        <Text style={styles.title}>Gateway</Text>
-        <Text style={styles.hint}>
-          DME gateway (Cloudflare Worker) URL for IP-privacy polling and blob CDN. Leave empty to use server directly.
-        </Text>
+        <Text style={styles.title}>{t('settings.gateway')}</Text>
+        <Text style={styles.hint}>{t('settings.gatewayHint')}</Text>
         <TextInput
           style={styles.input}
           value={gatewayDraft}
           onChangeText={setGatewayDraft}
-          placeholder="https://gateway.example.com"
+          placeholder={t('settings.gatewayPlaceholder')}
           placeholderTextColor={theme.colors.textSecondary}
           autoCapitalize="none"
           autoCorrect={false}
         />
         <View style={styles.rowButtons}>
           <Button
-            label={gatewaySaved ? 'Saved!' : 'Save'}
+            label={gatewaySaved ? t('common.saved') : t('common.save')}
             onPress={handleSaveGateway}
             variant="primary"
             style={styles.halfButton}
           />
           <Button
-            label="Reset"
+            label={t('common.reset')}
             onPress={handleResetGateway}
             variant="secondary"
             style={styles.halfButton}
           />
         </View>
 
-        <Text style={styles.title}>Sound</Text>
+        <Text style={styles.title}>{t('settings.sound')}</Text>
         <View style={styles.switchRow}>
-          <Text style={styles.label}>Message notifications</Text>
+          <Text style={styles.label}>{t('settings.notifications')}</Text>
           <Switch
             value={app.soundEnabled}
             onValueChange={(v) => { void app.setSoundEnabled(v); }}
@@ -225,15 +233,13 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           />
         </View>
 
-        <Text style={styles.title}>Identity Backup</Text>
-        <Text style={styles.hint}>
-          Backup your identity keys to PDS. Restore on other devices with the same password.
-        </Text>
+        <Text style={styles.title}>{t('settings.identityBackup')}</Text>
+        <Text style={styles.hint}>{t('settings.backupHint')}</Text>
         <TextInput
           style={styles.input}
           value={backupPwd}
           onChangeText={setBackupPwd}
-          placeholder="Password"
+          placeholder={t('settings.passwordPlaceholder')}
           placeholderTextColor={theme.colors.textSecondary}
           secureTextEntry
           autoCapitalize="none"
@@ -244,7 +250,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           style={styles.input}
           value={backupPwdConfirm}
           onChangeText={setBackupPwdConfirm}
-          placeholder="Confirm Password"
+          placeholder={t('settings.confirmPasswordPlaceholder')}
           placeholderTextColor={theme.colors.textSecondary}
           secureTextEntry
           autoCapitalize="none"
@@ -254,10 +260,10 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         <Button
           label={
             backupStatus === 'backing_up'
-              ? 'Backing up...'
+              ? t('settings.backingUp')
               : backupStatus === 'done'
-                ? 'Backed up!'
-                : 'Backup'
+                ? t('settings.backedUp')
+                : t('settings.backup')
           }
           onPress={handleBackup}
           variant="primary"
@@ -269,7 +275,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         ) : null}
 
         <Button
-          label="Back"
+          label={t('common.back')}
           onPress={() => navigation.goBack()}
           variant="secondary"
           style={styles.fullButton}

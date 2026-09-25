@@ -20,6 +20,7 @@ import { MessageBubble } from './MessageBubble';
 import { EmojiPicker } from './EmojiPicker';
 import { MessageActionMenu } from './MessageActionMenu';
 import { FileMessageBubble } from './FileMessageBubble';
+import { exportFileToDevice } from '../utils/file-export';
 import { useApp } from '../state/AppContext';
 import {
   getProfileCached,
@@ -501,6 +502,11 @@ export function ChatViewScreen(): React.JSX.Element {
               navigation.navigate('VideoViewer', {
                 uri: localPath,
                 fileName: fileMeta.fileName,
+              });
+            } : undefined}
+            onSave={fileMeta.downloadStatus === 'ready' && localPath ? () => {
+              void exportFileToDevice(localPath, fileMeta.fileName, fileMeta.mimeType).catch((err: unknown) => {
+                console.error('Export file failed:', err);
               });
             } : undefined}
             onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}

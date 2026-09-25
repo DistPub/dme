@@ -19,6 +19,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
+import { useI18n } from '../i18n/I18nContext';
 import { getProfilesCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { RootStackParamList } from '../types/navigation';
 
@@ -42,6 +43,7 @@ interface ProfileEntry {
 
 export function CreateGroupScreen(): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
   const navigation = useNavigation<Navigation>();
   const route = useRoute<NativeStackScreenProps<RootStackParamList, 'CreateGroup'>['route']>();
 
@@ -176,7 +178,7 @@ export function CreateGroupScreen(): React.JSX.Element {
       setPhase('done');
       setTimeout(() => navigation.goBack(), 1500);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed');
+      setErrorMsg(err instanceof Error ? err.message : t('creategroup.failed'));
       setPhase('select');
     }
   }, [groupName, friends, app, navigation, existingGroupId]);
@@ -235,7 +237,7 @@ export function CreateGroupScreen(): React.JSX.Element {
         {phase === 'select' && (
           <>
             <Text style={styles.title}>
-              {existingGroupId ? 'Invite Members' : 'Create Group'}
+              {existingGroupId ? t('creategroup.inviteMembers') : t('creategroup.create')}
             </Text>
 
             {!existingGroupId && (
@@ -243,7 +245,7 @@ export function CreateGroupScreen(): React.JSX.Element {
                 style={styles.input}
                 value={groupName}
                 onChangeText={setGroupName}
-                placeholder="Group name"
+                placeholder={t('creategroup.groupNamePlaceholder')}
                 placeholderTextColor={theme.colors.placeholder}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -251,7 +253,7 @@ export function CreateGroupScreen(): React.JSX.Element {
             )}
 
             <Text style={styles.sectionLabel}>
-              Select friends ({selectedCount} selected)
+              {t('creategroup.selectFriends', { n: selectedCount })}
             </Text>
 
             <FlatList
@@ -260,7 +262,7 @@ export function CreateGroupScreen(): React.JSX.Element {
               keyExtractor={(item) => item.did}
               renderItem={renderFriend}
               ListEmptyComponent={
-                <Text style={styles.emptyText}>No friends to invite</Text>
+                <Text style={styles.emptyText}>{t('creategroup.noFriends')}</Text>
               }
             />
 
@@ -269,14 +271,14 @@ export function CreateGroupScreen(): React.JSX.Element {
             ) : null}
 
             <Button
-              label={`Send Invites (${selectedCount})`}
+              label={t('creategroup.sendInvites', { n: selectedCount })}
               onPress={onCreate}
               variant="primary"
               disabled={!canCreate}
               style={styles.fullButton}
             />
             <Button
-              label="Cancel"
+              label={t('common.cancel')}
               onPress={() => navigation.goBack()}
               variant="secondary"
               style={styles.fullButton}
@@ -285,11 +287,11 @@ export function CreateGroupScreen(): React.JSX.Element {
         )}
 
         {phase === 'sending' && (
-          <Text style={styles.statusText}>Sending invites...</Text>
+          <Text style={styles.statusText}>{t('creategroup.sending')}</Text>
         )}
 
         {phase === 'done' && (
-          <Text style={styles.statusText}>Invites sent!</Text>
+          <Text style={styles.statusText}>{t('creategroup.sent')}</Text>
         )}
       </View>
     </View>

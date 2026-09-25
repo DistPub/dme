@@ -19,6 +19,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
+import { useI18n } from '../i18n/I18nContext';
 import { decodeQrPayload } from '../handshake/qr-encode';
 import { resolveHandleCached } from '../atproto/profile-cache';
 import type { RootStackParamList } from '../types/navigation';
@@ -29,6 +30,7 @@ type Status = 'idle' | 'scanning' | 'confirm' | 'processing' | 'error';
 
 export function QrScanScreen(): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
   const navigation = useNavigation<Navigation>();
 
   const [status, setStatus] = useState<Status>('idle');
@@ -92,14 +94,14 @@ export function QrScanScreen(): React.JSX.Element {
 
       const payload = decodeQrPayload(decoded);
       if (payload.aliceDid === app.session?.did) {
-        throw new Error('Cannot accept your own invite');
+        throw new Error(t('qrscan.cantAcceptSelf'));
       }
       const handle = await resolveHandle(payload.aliceDid);
       setAliceHandle(handle);
       setQrString(decoded);
       setStatus('confirm');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to scan QR';
+      const msg = err instanceof Error ? err.message : t('qrscan.failedScan');
       console.error('[QrScan] scan error:', msg, err);
       setError(msg);
       setStatus('error');
@@ -114,7 +116,7 @@ export function QrScanScreen(): React.JSX.Element {
       await app.acceptInviteQr(qrString);
       navigation.goBack();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to accept invite';
+      const msg = err instanceof Error ? err.message : t('qrscan.failedAccept');
       console.error('[QrScan] accept error:', msg, err);
       setError(msg);
       setStatus('error');
@@ -126,22 +128,22 @@ export function QrScanScreen(): React.JSX.Element {
       <ScreenBackground />
 
       <View style={styles.content}>
-        <Text style={styles.title}>Scan QR Code</Text>
+        <Text style={styles.title}>{t('qrscan.title')}</Text>
 
         {status === 'scanning' && (
-          <Text style={styles.statusText}>Opening gallery...</Text>
+          <Text style={styles.statusText}>{t('qrscan.opening')}</Text>
         )}
 
         {status === 'processing' && (
-          <Text style={styles.statusText}>Accepting invite...</Text>
+          <Text style={styles.statusText}>{t('qrscan.accepting')}</Text>
         )}
 
         {status === 'confirm' && (
           <>
             <Text style={styles.statusText}>
-              {aliceHandle} wants to add you as a friend.
+              {t('qrscan.confirmMessage', { handle: aliceHandle })}
             </Text>
-            <Text style={styles.subStatus}>Accept this friend request?</Text>
+            <Text style={styles.subStatus}>{t('qrscan.confirmSub')}</Text>
           </>
         )}
 
@@ -151,7 +153,7 @@ export function QrScanScreen(): React.JSX.Element {
 
         {status !== 'processing' && status !== 'confirm' && (
           <Button
-            label={status === 'scanning' ? 'Scanning...' : 'Scan QR from Gallery'}
+            label={status === 'scanning' ? t('qrscan.scanning') : t('qrscan.scanFromGallery')}
             onPress={onScan}
             variant="primary"
             style={styles.fullButton}
@@ -161,13 +163,13 @@ export function QrScanScreen(): React.JSX.Element {
         {status === 'confirm' && (
           <>
             <Button
-              label="Accept"
+              label={t('common.accept')}
               onPress={onAccept}
               variant="primary"
               style={styles.fullButton}
             />
             <Button
-              label="Decline"
+              label={t('common.decline')}
               onPress={() => {
                 setQrString(null);
                 setAliceHandle('');
@@ -181,7 +183,7 @@ export function QrScanScreen(): React.JSX.Element {
 
         {status === 'error' && (
           <Button
-            label="Try Again"
+            label={t('common.tryAgain')}
             onPress={() => setStatus('idle')}
             variant="secondary"
             style={styles.fullButton}
@@ -189,7 +191,7 @@ export function QrScanScreen(): React.JSX.Element {
         )}
 
         <Button
-          label="Back"
+          label={t('common.back')}
           onPress={() => navigation.goBack()}
           variant="secondary"
           style={styles.fullButton}

@@ -19,6 +19,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
+import { useI18n } from '../i18n/I18nContext';
 import {
   checkBobDmeStatus,
   generateQrPngBytes,
@@ -43,6 +44,7 @@ const QR_SIZE = 220;
 
 export function QrDisplayScreen(): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const [handle, setHandle] = useState('');
@@ -71,7 +73,7 @@ export function QrDisplayScreen(): React.JSX.Element {
       const resolvedDid = result.data.did;
 
       if (resolvedDid === app.session.did) {
-        setErrorMsg('You cannot invite yourself');
+        setErrorMsg(t('qrdisplay.cantInviteSelf'));
         setPhase('error');
         return;
       }
@@ -95,7 +97,7 @@ export function QrDisplayScreen(): React.JSX.Element {
         setPhase('already_friend');
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to check Bob\'s status');
+      setErrorMsg(err instanceof Error ? err.message : t('qrdisplay.failedCheck'));
       setPhase('error');
     }
   }, [handle, app.session, app.storage, app.generateInviteQr]);
@@ -119,7 +121,7 @@ export function QrDisplayScreen(): React.JSX.Element {
       setPhase('published');
       setTimeout(() => navigation.goBack(), 1500);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to publish invite');
+      setErrorMsg(err instanceof Error ? err.message : t('qrdisplay.failedPublish'));
       setPhase('error');
     }
   }, [phase, bobStatus, qrValue, postText, app, bobDid, navigation]);
@@ -151,12 +153,12 @@ export function QrDisplayScreen(): React.JSX.Element {
       <ScreenBackground />
 
       <View style={styles.content}>
-        <Text style={styles.title}>Invite to DME</Text>
+        <Text style={styles.title}>{t('qrdisplay.title')}</Text>
 
         {phase === 'input' && (
           <>
             <Text style={styles.hint}>
-              Enter Bob's handle to invite them to DME.
+              {t('qrdisplay.hint')}
             </Text>
             <TextInput
               style={styles.input}
@@ -164,19 +166,19 @@ export function QrDisplayScreen(): React.JSX.Element {
               onChangeText={setHandle}
               onSubmitEditing={onCheckBob}
               returnKeyType="go"
-              placeholder="Bob's handle (e.g. bob.bsky.social)"
+              placeholder={t('qrdisplay.handlePlaceholder')}
               placeholderTextColor={theme.colors.placeholder}
               autoCapitalize="none"
               autoCorrect={false}
             />
             <Button
-              label="Check & Generate"
+              label={t('qrdisplay.checkGenerate')}
               onPress={onCheckBob}
               variant="primary"
               style={styles.fullButton}
             />
             <Button
-              label="Back"
+              label={t('common.back')}
               onPress={onCancel}
               variant="secondary"
               style={styles.fullButton}
@@ -185,13 +187,13 @@ export function QrDisplayScreen(): React.JSX.Element {
         )}
 
         {phase === 'checking' && (
-          <Text style={styles.hint}>Checking Bob's DME status...</Text>
+          <Text style={styles.hint}>{t('qrdisplay.checking')}</Text>
         )}
 
         {phase === 'preview' && (
           <>
             <View style={styles.previewBox}>
-              <Text style={styles.previewLabel}>Post Preview (editable):</Text>
+              <Text style={styles.previewLabel}>{t('qrdisplay.previewLabel')}</Text>
               <TextInput
                 style={styles.previewInput}
                 value={postText}
@@ -215,13 +217,13 @@ export function QrDisplayScreen(): React.JSX.Element {
             ) : null}
 
             <Button
-              label="Publish to Bluesky"
+              label={t('qrdisplay.publish')}
               onPress={onPublish}
               variant="primary"
               style={styles.fullButton}
             />
             <Button
-              label="Cancel"
+              label={t('common.cancel')}
               onPress={onCancel}
               variant="secondary"
               style={styles.fullButton}
@@ -231,15 +233,15 @@ export function QrDisplayScreen(): React.JSX.Element {
 
         {phase === 'already_friend' && (
           <>
-            <Text style={styles.hint}>{bobHandle} is already your DME friend!</Text>
+            <Text style={styles.hint}>{t('qrdisplay.alreadyFriend', { handle: bobHandle })}</Text>
             <Button
-              label="Go to Chat"
+              label={t('qrdisplay.goToChat')}
               onPress={onGoToChat}
               variant="primary"
               style={styles.fullButton}
             />
             <Button
-              label="Back"
+              label={t('common.back')}
               onPress={onCancel}
               variant="secondary"
               style={styles.fullButton}
@@ -248,14 +250,14 @@ export function QrDisplayScreen(): React.JSX.Element {
         )}
 
         {phase === 'publishing' && (
-          <Text style={styles.hint}>Publishing to Bluesky...</Text>
+          <Text style={styles.hint}>{t('qrdisplay.publishing')}</Text>
         )}
 
         {phase === 'published' && (
           <>
-            <Text style={styles.hint}>Invite published!</Text>
+            <Text style={styles.hint}>{t('qrdisplay.published')}</Text>
             <Button
-              label="Back to Chats"
+              label={t('qrdisplay.backToChats')}
               onPress={() => navigation.goBack()}
               variant="primary"
               style={styles.fullButton}
@@ -267,13 +269,13 @@ export function QrDisplayScreen(): React.JSX.Element {
           <>
             <Text style={[styles.hint, { color: theme.colors.error }]}>{errorMsg}</Text>
             <Button
-              label="Try Again"
+              label={t('common.tryAgain')}
               onPress={onRetry}
               variant="primary"
               style={styles.fullButton}
             />
             <Button
-              label="Back"
+              label={t('common.back')}
               onPress={onCancel}
               variant="secondary"
               style={styles.fullButton}

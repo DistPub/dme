@@ -44,7 +44,7 @@ const QR_SIZE = 220;
 
 export function QrDisplayScreen(): React.JSX.Element {
   const app = useApp();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const [handle, setHandle] = useState('');
@@ -84,14 +84,14 @@ export function QrDisplayScreen(): React.JSX.Element {
       setBobStatus(status);
 
       if (status === 'not_registered') {
-        setPostText(generateInvitePostText(trimmed));
+        setPostText(generateInvitePostText(trimmed, language));
         setPhase('preview');
       } else if (status === 'registered_not_friend') {
         const { qrString, keyPackageSerialized, welcomeQueueId } = await app.generateInviteQr(resolvedDid);
         setQrValue(qrString);
         keyPackageSerializedRef.current = keyPackageSerialized;
         welcomeQueueIdRef.current = welcomeQueueId;
-        setPostText(generateAddFriendPostText(trimmed));
+        setPostText(generateAddFriendPostText(trimmed, language));
         setPhase('preview');
       } else {
         setPhase('already_friend');
@@ -100,7 +100,7 @@ export function QrDisplayScreen(): React.JSX.Element {
       setErrorMsg(err instanceof Error ? err.message : t('qrdisplay.failedCheck'));
       setPhase('error');
     }
-  }, [handle, app.session, app.storage, app.generateInviteQr]);
+  }, [handle, app.session, app.storage, app.generateInviteQr, language]);
 
   const onPublish = useCallback(async (): Promise<void> => {
     if (!app.session || phase !== 'preview') return;
@@ -111,7 +111,7 @@ export function QrDisplayScreen(): React.JSX.Element {
         ? generateQrPngBytes(qrValue)
         : null;
 
-      await createDmeInvitePost(app.session.agent, postText, qrBytes);
+      await createDmeInvitePost(app.session.agent, postText, qrBytes, language);
 
       // Only start waiting for the handshake after the invite post is published.
       if (bobStatus === 'registered_not_friend' && bobDid && keyPackageSerializedRef.current && welcomeQueueIdRef.current) {
@@ -124,7 +124,7 @@ export function QrDisplayScreen(): React.JSX.Element {
       setErrorMsg(err instanceof Error ? err.message : t('qrdisplay.failedPublish'));
       setPhase('error');
     }
-  }, [phase, bobStatus, qrValue, postText, app, bobDid, navigation]);
+  }, [phase, bobStatus, qrValue, postText, app, bobDid, navigation, language]);
 
   const onCancel = useCallback((): void => {
     navigation.goBack();

@@ -15,6 +15,8 @@ import { ImageFormat, Skia } from '@shopify/react-native-skia';
 import QRCodeLib from 'qrcode';
 
 import { getRemoteEncryptionKey } from '../atproto/did';
+import { t } from '../i18n/format';
+import type { Language } from '../i18n/translations';
 import type { DmeStorage } from '../storage/db';
 
 export type BobStatus = 'not_registered' | 'registered_not_friend' | 'already_friend';
@@ -92,21 +94,21 @@ export function generateQrPngBytes(data: string): Uint8Array | null {
   return bytes as Uint8Array;
 }
 
-export function generateInvitePostText(bobHandle: string): string {
+export function generateInvitePostText(bobHandle: string, lang: Language): string {
   return [
-    `@${bobHandle} 想要通过 DME 与你进行端到端加密通信。`,
+    t(lang, 'post.inviteLine1', { handle: bobHandle }),
     '',
-    '请安装 DME 客户端并注册一个账号，然后在 DME 中使用 Scan 功能扫描后续的二维码来建立加密对话。',
+    t(lang, 'post.inviteLine2'),
     '',
-    '#DME #加密通信',
+    t(lang, 'post.hashtag'),
   ].join('\n');
 }
 
-export function generateAddFriendPostText(bobHandle: string): string {
+export function generateAddFriendPostText(bobHandle: string, lang: Language): string {
   return [
-    `@${bobHandle} 扫描下方二维码，通过 DME 建立端到端加密对话。`,
+    t(lang, 'post.addFriendLine1', { handle: bobHandle }),
     '',
-    '#DME #加密通信',
+    t(lang, 'post.hashtag'),
   ].join('\n');
 }
 
@@ -119,6 +121,7 @@ export async function createDmeInvitePost(
   agent: Agent,
   text: string,
   qrPngBytes: Uint8Array | null,
+  lang: Language,
 ): Promise<InvitePostResult> {
   const rt = new RichText({ text });
   await rt.detectFacets(agent);
@@ -135,7 +138,7 @@ export async function createDmeInvitePost(
     record.embed = {
       $type: 'app.bsky.embed.images',
       images: [{
-        alt: 'DME 加密通信二维码',
+        alt: t(lang, 'post.qrAlt'),
         image: blob.data.blob,
       }],
     };

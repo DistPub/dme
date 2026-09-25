@@ -9,6 +9,7 @@ import React, { useState } from 'react';
 import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from './theme';
+import { useI18n } from '../i18n/I18nContext';
 
 export interface MessageActionMenuProps {
   visible: boolean;
@@ -29,6 +30,7 @@ export function MessageActionMenu({
   onDelete,
   onClose,
 }: MessageActionMenuProps): React.JSX.Element {
+  const { t } = useI18n();
   const [panelSize, setPanelSize] = useState({ width: 0, height: 0 });
   const screen = Dimensions.get('window');
 
@@ -69,15 +71,15 @@ export function MessageActionMenu({
           onPress={(e) => e.stopPropagation()}
         >
           <Pressable style={styles.item} onPress={() => handlePress(onCopy)}>
-            <Text style={styles.itemText}>复制</Text>
+            <Text style={styles.itemText}>{t('menu.copy')}</Text>
           </Pressable>
           <View style={styles.divider} />
           <Pressable style={styles.item} onPress={() => handlePress(onForward)}>
-            <Text style={styles.itemText}>转发</Text>
+            <Text style={styles.itemText}>{t('menu.forward')}</Text>
           </Pressable>
           <View style={styles.divider} />
           <Pressable style={styles.item} onPress={() => handlePress(onDelete)}>
-            <Text style={[styles.itemText, styles.deleteText]}>删除</Text>
+            <Text style={[styles.itemText, styles.deleteText]}>{t('menu.delete')}</Text>
           </Pressable>
         </Pressable>
       </Pressable>

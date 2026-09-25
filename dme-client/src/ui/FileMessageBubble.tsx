@@ -6,6 +6,7 @@ import { Button } from './Button';
 import type { FileMeta } from '../protocol/types';
 import type { Reaction } from '../storage/db';
 import { useFileUri } from '../utils/file-cache';
+import { useI18n } from '../i18n/I18nContext';
 
 interface FileMessageBubbleProps {
   fileMeta: FileMeta;
@@ -26,10 +27,13 @@ interface FileMessageBubbleProps {
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function formatFileSize(
+  bytes: number,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  if (bytes < 1024) return t('bubble.sizeB', { n: bytes });
+  if (bytes < 1024 * 1024) return t('bubble.sizeKB', { n: (bytes / 1024).toFixed(1) });
+  return t('bubble.sizeMB', { n: (bytes / (1024 * 1024)).toFixed(1) });
 }
 
 export function FileMessageBubble({
@@ -50,6 +54,7 @@ export function FileMessageBubble({
   onOpenPicker,
   onSave,
 }: FileMessageBubbleProps): React.JSX.Element {
+  const { t } = useI18n();
   const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, thumbnailPath, uploadProgress, downloadProgress } = fileMeta;
   const resolvedUri = useFileUri(localPath);
   const thumbUri = useFileUri(thumbnailPath);
@@ -185,7 +190,7 @@ export function FileMessageBubble({
       return (
         <View style={styles.statusRow}>
           <ActivityIndicator size="small" color={theme.colors.textSecondary}/>
-          <Text style={styles.statusText}>{`上传中...${pct}`}</Text>
+          <Text style={styles.statusText}>{t('bubble.uploading', { pct })}</Text>
         </View>
       );
     }
@@ -196,11 +201,11 @@ export function FileMessageBubble({
           <Text style={styles.fileIcon}>{isVideo ? '▶' : isAudio ? '🔊' : '📎'}</Text>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
-            <Text style={styles.statusText}>上传失败</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize, t)}</Text>
+            <Text style={styles.statusText}>{t('bubble.uploadFailed')}</Text>
           </View>
           {onRetryUpload && (
-            <Button label="重试" onPress={onRetryUpload} variant="primary" style={styles.retryBtn} />
+            <Button label={t('bubble.retry')} onPress={onRetryUpload} variant="primary" style={styles.retryBtn} />
           )}
         </View>
       );
@@ -222,20 +227,20 @@ export function FileMessageBubble({
           </View>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize, t)}</Text>
           </View>
           {showSpinner && (
             <>
               <ActivityIndicator size="small" color={theme.colors.textSecondary} />
               <Text style={styles.statusText}>
                 {downloadStatus === 'downloading' && downloadProgress && downloadProgress > 0
-                  ? `下载中... ${downloadProgress}%`
-                  : '下载中...'}
+                  ? t('bubble.downloading', { pct: downloadProgress })
+                  : t('bubble.downloadingShort')}
               </Text>
             </>
           )}
           {showRetry && onRetry && (
-            <Button label="Retry" onPress={onRetry} variant="primary" style={styles.retryBtn} />
+            <Button label={t('common.retry')} onPress={onRetry} variant="primary" style={styles.retryBtn} />
           )}
         </TouchableOpacity>
       );
@@ -273,16 +278,16 @@ export function FileMessageBubble({
           <Text style={styles.fileIcon}>▶</Text>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize, t)}</Text>
           </View>
         </TouchableOpacity>
       );
     }
 
     if (downloadStatus === 'downloading') {
-      let statusText = '下载中...';
+      let statusText = t('bubble.downloadingShort');
       if (downloadProgress && downloadProgress > 0) {
-        statusText = `下载中... ${downloadProgress}%`;
+        statusText = t('bubble.downloading', { pct: downloadProgress });
       }
       return (
         <View style={styles.statusRow}>
@@ -298,10 +303,10 @@ export function FileMessageBubble({
           <Text style={styles.fileIcon}>📎</Text>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize, t)}</Text>
           </View>
           {onRetry && (
-            <Button label="Retry" onPress={onRetry} variant="primary" style={styles.retryBtn} />
+            <Button label={t('common.retry')} onPress={onRetry} variant="primary" style={styles.retryBtn} />
           )}
         </View>
       );
@@ -313,10 +318,10 @@ export function FileMessageBubble({
           <Text style={styles.fileIcon}>{isVideo ? '▶' : isAudio ? '🔊' : '📎'}</Text>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize, t)}</Text>
           </View>
           {onDownload && (
-            <Button label="下载" onPress={onDownload} variant="primary" style={styles.retryBtn} />
+            <Button label={t('bubble.download')} onPress={onDownload} variant="primary" style={styles.retryBtn} />
           )}
         </View>
       );
@@ -327,7 +332,7 @@ export function FileMessageBubble({
         <Text style={styles.fileIcon}>{isVideo ? '▶' : isAudio ? '🔊' : '📎'}</Text>
         <View style={styles.fileInfo}>
           <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-          <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+          <Text style={styles.fileSize}>{formatFileSize(fileSize, t)}</Text>
         </View>
       </View>
     );

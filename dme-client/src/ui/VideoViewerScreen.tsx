@@ -12,6 +12,7 @@ import { Button } from './Button';
 import { theme } from './theme';
 import { useFileUri } from '../utils/file-cache';
 import { exportFileToDevice } from '../utils/file-export';
+import { useI18n } from '../i18n/I18nContext';
 import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -56,6 +57,7 @@ export function VideoViewerScreen(): React.JSX.Element {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<VideoViewerRouteProp>();
   const { uri, fileName } = route.params;
+  const { t } = useI18n();
   const resolvedUri = useFileUri(uri);
   const [hasError, setHasError] = useState(false);
   const [decoding, setDecoding] = useState<'checking' | 'ok' | 'unsupported'>(
@@ -169,9 +171,9 @@ export function VideoViewerScreen(): React.JSX.Element {
         ) : decoding === 'unsupported' || hasError ? (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>
-              浏览器不支持视频解码，请下载到本地用其他播放器播放
+              {t('videoviewer.unsupported')}
             </Text>
-            <Button label="下载" onPress={handleDownload} variant="primary" style={styles.downloadButton} />
+            <Button label={t('videoviewer.download')} onPress={handleDownload} variant="primary" style={styles.downloadButton} />
           </View>
         ) : (
           <VideoPlayback uri={resolvedUri} onError={handleError} />

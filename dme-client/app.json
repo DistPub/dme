@@ -7,18 +7,33 @@
     "userInterfaceStyle": "dark",
     "scheme": "dme",
     "platforms": ["ios", "android", "web"],
+    "icon": "./assets/images/icon-1024.png",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.dme.client"
     },
     "android": {
-      "package": "com.dme.client"
+      "package": "com.dme.client",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-foreground-1024.png",
+        "backgroundColor": "#87CEEB"
+      }
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./assets/images/favicon-48.png"
     },
     "plugins": [
-      "expo-image-picker"
+      "expo-image-picker",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon-512.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#0a0a0a"
+        }
+      ]
     ]
   }
 }

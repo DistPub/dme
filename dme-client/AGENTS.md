@@ -103,6 +103,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **阶段机**: 每个屏幕用联合类型 `Phase` 控制条件渲染
 - **Skia 范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text）
 - **字体**: `FontProvider` 一次性加载 Roboto-Regular.ttf，`useAppFont(size)` 返回 SkFont
+- **资产目录分工**: 根级 `assets/images/` = 品牌/图标/启动屏构建资产（由 `app.json` 消费，如 icon / adaptiveIcon / favicon / splash），`src/assets/` = 运行时资源（代码 `require`），两者勿混
 - **主题**: `theme.ts` 单一 `as const` 对象，暗色（#0a0a0a），无切换
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理

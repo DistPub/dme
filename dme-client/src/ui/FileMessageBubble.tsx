@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Pressable, Platform } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Pressable, Platform, type TextStyle } from 'react-native';
 import { Image } from 'expo-image';
 import { theme } from './theme';
 import { Button } from './Button';
@@ -498,10 +498,8 @@ const styles = StyleSheet.create({
   videoPlayIcon: {
     fontSize: 40,
     color: '#FFFFFF',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
+    textShadow: '0px 1px 4px rgba(0,0,0,0.6)',
+  } as TextStyle & { textShadow?: string },
   fileCard: {
     flexDirection: 'row',
     alignItems: 'center',

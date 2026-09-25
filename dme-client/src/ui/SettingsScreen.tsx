@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View, TextInput, ScrollView, Switch } from 'react-native';
-import { Canvas, Fill } from '@shopify/react-native-skia';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
 import { Button } from './Button';
+import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../config';
 import type { RootStackParamList } from '../types/navigation';
@@ -105,9 +105,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
   return (
     <View style={styles.container}>
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill color={theme.colors.background} />
-      </Canvas>
+      <ScreenBackground />
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Settings</Text>

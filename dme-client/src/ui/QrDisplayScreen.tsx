@@ -11,13 +11,13 @@
 
 import React, { useCallback, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
-import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import QRCode from 'react-native-qrcode-skia';
 
 import { theme } from './theme';
 import { Button } from './Button';
+import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import {
   checkBobDmeStatus,
@@ -148,9 +148,7 @@ export function QrDisplayScreen(): React.JSX.Element {
 
   return (
     <View style={styles.container}>
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill color={theme.colors.background} />
-      </Canvas>
+      <ScreenBackground />
 
       <View style={styles.content}>
         <Text style={styles.title}>Invite to DME</Text>

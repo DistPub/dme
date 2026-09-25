@@ -19,13 +19,13 @@ import {
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Swipeable } from 'react-native-gesture-handler';
 
 import { theme } from './theme';
 import { Button } from './Button';
+import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import {
   getProfileCached,
@@ -597,9 +597,7 @@ const resolveProfiles = useCallback(async (
 
   return (
     <View style={styles.container}>
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill color={theme.colors.background} />
-      </Canvas>
+      <ScreenBackground />
 
       <View style={styles.topBar}>
         {forwardText ? (

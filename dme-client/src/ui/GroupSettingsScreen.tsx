@@ -12,12 +12,12 @@ import {
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { Canvas, Fill } from '@shopify/react-native-skia';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
 import { Button } from './Button';
+import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { getProfilesCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { GroupMember } from '../protocol/group-message';
@@ -152,9 +152,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
   if (loading) {
     return (
       <View style={styles.container}>
-        <Canvas style={StyleSheet.absoluteFill}>
-          <Fill color={theme.colors.background} />
-        </Canvas>
+        <ScreenBackground />
         <Text style={styles.statusText}>Loading...</Text>
       </View>
     );
@@ -162,9 +160,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
 
   return (
     <View style={styles.container}>
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill color={theme.colors.background} />
-      </Canvas>
+      <ScreenBackground />
 
       <View style={styles.content}>
         <View style={styles.header}>

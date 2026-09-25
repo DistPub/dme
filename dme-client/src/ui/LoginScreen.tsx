@@ -1,16 +1,16 @@
 /**
  * ui/LoginScreen.tsx - Login screen with flexbox layout.
  *
- * Canvas only renders background fill. All interactive elements
- * use RN Views/TextInput with flexbox positioning.
+ * Screen backdrop is a solid-color View via ScreenBackground (no Skia).
+ * All interactive elements use RN Views/TextInput with flexbox positioning.
  */
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Canvas, Fill } from '@shopify/react-native-skia';
 
 import { theme } from './theme';
 import { Button } from './Button';
+import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { PDS_URL } from '../config';
 
@@ -46,9 +46,7 @@ export function LoginScreen(): React.JSX.Element {
 
   return (
     <View style={styles.container}>
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill color={theme.colors.background} />
-      </Canvas>
+      <ScreenBackground />
 
       <View style={styles.content}>
         <Text style={styles.title}>DME</Text>

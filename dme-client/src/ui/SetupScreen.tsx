@@ -13,11 +13,11 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View, TextInput } from 'react-native';
-import { Canvas, Fill } from '@shopify/react-native-skia';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
 import { Button } from './Button';
+import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { requestPlcSignature, getDidMethod, generateDidWebUpdate, getRemoteEncryptionKey, type DidWebEntry } from '../atproto/did';
 import type { RootStackParamList } from '../types/navigation';
@@ -197,9 +197,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
 
   return (
     <View style={styles.container}>
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill color={theme.colors.background} />
-      </Canvas>
+      <ScreenBackground />
 
       <View style={styles.content}>
         <Text style={styles.title}>Setup Identity</Text>

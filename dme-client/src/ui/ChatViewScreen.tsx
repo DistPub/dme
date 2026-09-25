@@ -22,6 +22,7 @@ import { MessageActionMenu } from './MessageActionMenu';
 import { FileMessageBubble } from './FileMessageBubble';
 import { exportFileToDevice } from '../utils/file-export';
 import { useApp } from '../state/AppContext';
+import { useI18n } from '../i18n/I18nContext';
 import {
   getProfileCached,
   getProfilesCached,
@@ -45,6 +46,7 @@ interface SenderProfile {
 
 export function ChatViewScreen(): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
   const route = useRoute<ChatViewRouteProp>();
   const navigation = useNavigation<Navigation>();
 
@@ -72,7 +74,7 @@ export function ChatViewScreen(): React.JSX.Element {
   const [loadingMore, setLoadingMore] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [displayName, setDisplayName] = useState(isGroup ? 'Loading...' : conversationId);
+  const [displayName, setDisplayName] = useState(isGroup ? t('common.loading') : conversationId);
   const [groupCreatorHandle, setGroupCreatorHandle] = useState('');
   const [friendAvatarUrl, setFriendAvatarUrl] = useState<string | null>(null);
   const [friendAvatarError, setFriendAvatarError] = useState(false);
@@ -425,7 +427,7 @@ export function ChatViewScreen(): React.JSX.Element {
       }
 
       if (item.kind === 'group_invite') {
-        let groupName = 'Group';
+        let groupName: string | null = null;
         let inviteId = '';
         try {
           const parsed = JSON.parse(item.plaintext) as GroupInviteRequest;
@@ -440,19 +442,21 @@ export function ChatViewScreen(): React.JSX.Element {
 
         return (
           <View style={styles.inviteCard}>
-            <Text style={styles.inviteTitle} numberOfLines={1}>群聊邀请：{groupName}</Text>
+            <Text style={styles.inviteTitle} numberOfLines={1}>
+              {t('chatview.groupInviteTitle', { group: groupName ?? t('chatview.defaultGroupName') })}
+            </Text>
             {alreadyResponded ? (
-              <Text style={styles.inviteResponded}>Responded</Text>
+              <Text style={styles.inviteResponded}>{t('chatview.responded')}</Text>
             ) : (
               <View style={styles.inviteButtons}>
                 <Button
-                  label="Accept"
+                  label={t('common.accept')}
                   onPress={() => respondToGroupInvite(inviteId, true)}
                   variant="primary"
                   style={styles.inviteBtn}
                 />
                 <Button
-                  label="Decline"
+                  label={t('common.decline')}
                   onPress={() => respondToGroupInvite(inviteId, false)}
                   variant="secondary"
                   style={styles.inviteBtn}
@@ -532,7 +536,7 @@ export function ChatViewScreen(): React.JSX.Element {
         />
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, retryUploadFileMessage, senderIdentityFor],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, retryUploadFileMessage, senderIdentityFor, t],
   );
 
   const keyExtractor = useCallback(
@@ -544,7 +548,7 @@ export function ChatViewScreen(): React.JSX.Element {
     <View style={styles.container}>
       <View style={styles.header}>
         <Button
-          label="Back"
+          label={t('common.back')}
           onPress={() => {
             navigation.goBack();
           }}
@@ -560,7 +564,7 @@ export function ChatViewScreen(): React.JSX.Element {
             </View>
             <View style={styles.friendInfoText}>
               <Text style={styles.friendDisplayName} numberOfLines={1}>
-                [Group] {displayName}
+                {t('common.groupPrefix')}{displayName}
               </Text>
               {groupCreatorHandle ? (
                 <Text style={styles.friendHandle} numberOfLines={1}>
@@ -629,7 +633,7 @@ export function ChatViewScreen(): React.JSX.Element {
       {dissolved || removed || left ? (
         <View style={styles.inputBar}>
           <Text style={styles.dissolvedText}>
-            {dissolved ? '群聊已解散，无法发送消息' : removed ? '你已被移出群聊，无法发送消息' : '你已离开群聊，无法发送消息'}
+            {dissolved ? t('chatview.dissolved') : removed ? t('chatview.removed') : t('chatview.left')}
           </Text>
         </View>
       ) : (
@@ -642,7 +646,7 @@ export function ChatViewScreen(): React.JSX.Element {
             style={styles.input}
             value={text}
             onChangeText={setText}
-            placeholder="Type a message..."
+            placeholder={t('chatview.typeMessage')}
             placeholderTextColor={theme.colors.placeholder}
             autoCapitalize="none"
             autoCorrect={false}
@@ -650,7 +654,7 @@ export function ChatViewScreen(): React.JSX.Element {
             returnKeyType="send"
           />
           <Button
-            label={sending ? '…' : 'Send'}
+            label={sending ? '…' : t('chatview.send')}
             onPress={onSend}
             variant="primary"
             style={styles.sendBtn}

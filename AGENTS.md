@@ -77,8 +77,10 @@ dme/
 | PDS 记录写入 | `dme-client/src/atproto/pds.ts` (envelope + identity backup + AppView proxy) |
 | AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
 | 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton） |
-| 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题"隐世"，顶部栏用户头像右侧上下展示昵称+handle；列表行 1:1 头像+昵称+时间+@handle+预览，群聊同样布局 + 头像占位 + creator handle） |
-| 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Poll Batch Size + AppView Proxy + Server URL + Gateway URL + Sound 开关 + Identity Backup） |
+| 多语言 (i18n) | `dme-client/src/i18n/I18nContext.tsx`（`I18nProvider` + `useI18n`）+ `i18n/translations.ts`（zh/en 字典，202 key）+ `i18n/format.ts`（`t()` 内插） |
+| Web 页面标题 | `dme-client/src/utils/web-title.ts`（`setWebTitle` + `useWebTitle`，Web 注入 `document.title = "<标题> - DME"`，Native no-op） |
+| 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题 i18n `chatlist.title`，默认中文「隐世」；顶部栏用户头像右侧上下展示昵称+handle；列表行 1:1 头像+昵称+时间+@handle+预览，群聊同样布局 + 头像占位 + creator handle；时间/预览文案走 `t()`） |
+| 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Language 语言切换（zh/en）+ Poll Batch Size + AppView Proxy + Server URL + Gateway URL + Sound 开关 + Identity Backup；顶部返回按钮 + 标题栏） |
 | 消息提示音 | `dme-client/src/utils/sound.ts`（运行时生成 3 声 880Hz WAV；Web 用 Web Audio API，Native 用 expo-av） |
 | 创建群聊 | `dme-client/src/ui/CreateGroupScreen.tsx` |
 | 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx`（成员行头像+昵称+@handle；Block 按钮弹模态确认；已 block 成员显示 Unblock） |
@@ -89,7 +91,7 @@ dme/
 | 消息气泡 + reactions + 群聊头像 | `dme-client/src/ui/MessageBubble.tsx`（群聊消息双列布局：头像列 + 内容列(昵称+@handle+气泡+reactions)） |
 | 表情选择器 | `dme-client/src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 消息操作菜单 | `dme-client/src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除） |
-| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle + ⋮（跳转私聊管理），群聊 头像占位+[Group] 群名+@creator handle + ⋮（跳转群管理）；群聊消息行双列布局：发言人头像单独成列，收到的消息左侧头像+昵称+@handle，自己发的消息右侧头像；FlatList `inverted={true}` + newest-first 分页，进入自动显示最新消息） |
+| 1:1 / 群聊视图 | `dme-client/src/ui/ChatViewScreen.tsx`（header 左侧 1:1 头像+昵称+@handle + ⋮（跳转私聊管理），群聊 头像占位+[Group] 群名+@creator handle + ⋮（跳转群管理）；群聊消息行双列布局：发言人头像单独成列，收到的消息左侧头像+昵称+@handle，自己发的消息右侧头像；FlatList `inverted={true}` + newest-first 分页，进入自动显示最新消息；Web 标签页标题经 `useWebTitle` 动态设为昵称/群名） |
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
@@ -192,6 +194,14 @@ dme/
 | `getServerUrl` | method | pds.ts | 返回 DmePds.serverUrl（直连 server） |
 | `getBaseUrl`/`getBlobUrl` | method | pds.ts | 客户端面向端点：`getBaseUrl()` = gateway||server 用于 batch.get；`getBlobUrl(pds,did,cid)` 网关走 file.blob CDN、直连退化为 PDS `com.atproto.sync.getBlob` |
 | `updateFileMessageMeta` | method | db.ts | 局部更新某条文件消息的 fileMeta（如 downloadStatus/localPath） |
+| `I18nProvider` | component | I18nContext.tsx | 语言 Context Provider（`language`/`setLanguage`/`t`），挂载在 App 根部（AppProvider 外层），启动从 AsyncStorage key `dme:language` 读取偏好，默认 `zh` |
+| `useI18n` | hook | I18nContext.tsx | 读取 `{ language, setLanguage, t }`；未包裹 Provider 时抛错 |
+| `t` | func | format.ts | `t(lang, key, params?)` 纯函数翻译：查字典（en 缺失回退 zh，再回退 key），按 `{name}` 占位符内插参数 |
+| `Language` / `LANGUAGES` | type / const | translations.ts | `'zh' \| 'en'`；`LANGUAGES` 为 Settings 语言选项 `[{code:'zh',label:'中文'},{code:'en',label:'English'}]` |
+| `setWebTitle` | func | web-title.ts | 设置浏览器标签标题为 `"<title> - DME"`，仅 Web 生效（`Platform.OS==='web'` 且有 `document`），Native no-op |
+| `useWebTitle` | hook | web-title.ts | 通过 `useFocusEffect` 在页面聚焦/`title` 变化时重设标题（用于会话名异步解析、群设置返回不重挂载、语言切换场景），Native no-op |
+| `generateQrSvgDataUri` | func | invite.ts | 用 `qrcode` 库 `toString(type:'svg')` 生成 QR SVG 并编码为 data URI，供 Web/跨平台预览（绕过 Skia 图形上下文缺失） |
+| `generateQrPngBytes` | func | invite.ts | 生成 QR PNG 字节（**async**）：Web 走 SVG->`<img>`->canvas 光栅化，Native 走 Skia 离屏 Surface |
 
 ## 群聊协议
 
@@ -302,6 +312,37 @@ dme/
 | `removed: true` | 被群主移除 | 保留消息，禁止发送 |
 | `left: true` | 主动离开 | 保留消息，禁止发送 |
 
+## 多语言 (i18n)
+
+客户端支持 简体中文 (`zh`) / English (`en`) 双语，运行时切换，无需重启。
+
+| 组成 | 位置 | 说明 |
+|---|---|---|
+| Provider | `src/i18n/I18nContext.tsx` | `I18nProvider` 持有 `language` state；挂载在 `App.tsx` 最外层（`AppProvider` 之外，因 `AppContext` 也要用 `t()`）。启动从 AsyncStorage key `dme:language` 读取偏好，默认 `zh`；`setLanguage` 写回 AsyncStorage 并更新 state |
+| Hook | `src/i18n/I18nContext.tsx` | `useI18n()` 返回 `{ language, setLanguage, t }`；`t` 已被当前语言柯里化，组件内直接 `t('key')` |
+| 字典 + 类型 | `src/i18n/translations.ts` | `Language = 'zh' \| 'en'`；`LANGUAGES` 为语言选项；`zh`/`en` 两个 `Record<string,string>` 字典（各 202 key，键命名 `<screen>.<name>`，通用键归 `common.*`） |
+| 格式化 | `src/i18n/format.ts` | 纯函数 `t(lang, key, params?)`：查 `en` -> 回退 `zh` -> 回退 key 本身；`{name}` 占位符按 `String(v)` 替换 |
+
+- **切换入口**：Settings 页顶部 `Language` 区块，`LANGUAGES` 渲染为一排按钮，当前语言 `variant="primary"`；`setLanguage(code)` 立即生效（`t` 依赖 `language` 重建，全 UI 重渲染）。
+- **覆盖范围**：全部 UI 屏幕（Login/Setup/ChatList/ChatView/CreateGroup/GroupSettings/DmSettings/BlockList/Settings/QrDisplay/QrScan/ImageViewer/VideoViewer）+ 消息气泡 / 操作菜单 / 表情 / 文件卡片 + 群系统消息文案 + 时间格式化 + Bluesky 邀请帖正文与 QR alt 文本。
+- **非 UI 文案**：
+  - 群聊系统消息（accepted/rejected/joined/membersUpdated/dissolved/removed/memberLeft/youInvited/youLeft/newGroup）在**生成时**用当前 `language` 渲染并存入 `plaintext`（历史消息保持生成时的语言，不随切换改变）；`AppContext` 的 `handleIncomingMessage` 等 `useCallback` 依赖数组含 `language`。
+  - 邀请帖 `generateInvitePostText` / `generateAddFriendPostText` / `createDmeInvitePost` 接收 `lang` 参数，正文与 `post.qrAlt` 走 `t(lang, ...)`。
+- **新增文案流程**：同时在 `zh` 和 `en` 字典登记同一 key（否则 en 回退 zh），组件内用 `useI18n().t('key')` 或 `t('key', { name })` 取用，禁止硬编码中/英文。
+- **参数内插**：`t('chatlist.timeMinutes', { n: 5 })` -> 字典 `'{n}分钟前'`；复杂拼接（如屏蔽模态的 displayName/handle 组合）在调用处算好再作为参数传入。
+
+## Web 页面标题
+
+Web 端浏览器标签标题统一为 `"<页面标题> - DME"`，由 `src/utils/web-title.ts` 管理；Native 为 no-op。
+
+| 场景 | 机制 |
+|---|---|
+| 静态路由 | `App.tsx` 的 `ROUTE_TITLE_KEYS: Record<keyof RootStackParamList, string>` 把路由名映射到 i18n key，`NavigationContainer` 的 `onStateChange={updateTitle}` 在每次导航后 `setWebTitle(t(key))`；`documentTitle={{ enabled: false }}` 关闭 RN Navigation 自带标题 |
+| 会话级动态标题 | `ChatView`（昵称/群名）、`GroupSettings`、`DmSettings` 的标题依赖异步解析的 profile / per-screen state，加入 `SCREEN_MANAGED_TITLES` 集合，由屏幕自身 `useWebTitle(...)` 管理（不走集中映射） |
+| 语言切换 | `NavigationRoot` 里 `useEffect(() => updateTitle(), [t])` 在 `t` 变化时重设标题（用 `tRef` 避免 `onStateChange` 捕获旧闭包） |
+| 返回不重挂载 | `useWebTitle` 基于 `useFocusEffect`：从 GroupSettings/DmSettings 返回时屏幕实例未重挂载，聚焦仍会重设标题 |
+
+
 ## 约定
 
 - **加密**: MLS (RFC 9420) + ts-mls 库。密码套件 `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`
@@ -313,7 +354,9 @@ dme/
 - **消息操作菜单**: 长按（原生）/右键（web）消息气泡弹出 `MessageActionMenu`（复制/转发/删除）；复制走 `expo-clipboard`，转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，删除仅本地删除（PDS 密文不变）
 - **消息提示音**: `playMessageSound()`（`src/utils/sound.ts`）播放「嘀嘀嘀」3 声 880Hz；Web 用 Web Audio API 振荡器，Native 用 `expo-av` 播放运行时生成的 WAV（写入 `expo-file-system` 临时文件，首次生成后缓存）；`handleIncomingMessage` 对 `kind: 'text'` 和 `kind: 'group_invite'` 消息触发，`kind: 'group_system'` 和 `type: 'reaction'` 不触发；`activeConversationRef`（ref，不触发重渲染）追踪当前 ChatView 会话 ID 决定是否播放，`soundEnabled`（state）控制全局开关
 - **成员离开**: MLS 禁止自身 removeMember，通过 `group_member_left` 通知其他成员，群主收到后执行 removeMember
-- **Skia 渲染范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`
+- **i18n**: 全部 UI 文案走 `useI18n().t('key')` / `t('key', {params})`，禁止硬编码中英文字符串；字典键命名 `<screen>.<name>`（通用键 `common.*`），新增 key 必须同时登记 `zh` 与 `en`；`en` 缺失时回退 `zh` 再回退 key，占位符用 `{name}`；群聊系统消息与邀请帖正文在**生成时**按当前 `language` 渲染后存入 `plaintext`（历史消息不随语言切换改变）
+- **Web 页面标题**: `document.title` 统一为 `"<标题> - DME"`，仅 Web 生效；静态路由经 `App.tsx` 的 `ROUTE_TITLE_KEYS` 集中映射，会话级动态标题（ChatView/GroupSettings/DmSettings）由屏幕自身 `useWebTitle` 管理，语言切换时通过 `useEffect([t])` 重设
+- **Skia 渲染范围**: 屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`；**QR 预览/生成不再用 Skia**——Web 上 Skia `<QRCode>` 与 `Skia.Surface.MakeOffscreen` 需要图形上下文，部分 Web 环境缺失会导致预览空白或崩溃，故预览改走 `generateQrSvgDataUri`（`qrcode` 库 SVG -> data URI -> `expo-image` 渲染），上传帖子的 PNG 字节 `generateQrPngBytes` 在 Web 上走 SVG->`<img>`->canvas 光栅化，Native 才走 Skia
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
 - **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
 - **DID 解析**: 统一使用 `atproto/resolver.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
@@ -363,6 +406,11 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text），`SkiaButton.tsx` 保留但无引用
 - **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Block List/Logout 收入头像弹出菜单
 - **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染
+- **i18n Provider 层级**: `I18nProvider` 必须包在 `AppProvider` 外层（`AppContext` 内部用 `t()` 渲染群系统消息文案）；`AppProvider` 里 `useI18n()` 取 `language`，凡生成文案的 `useCallback` 依赖数组须含 `language`
+- **i18n 字典键数**: `zh` 与 `en` 字典各 202 key，键命名 `<screen>.<name>`，新增时两语言同时登记；`en` 缺失回退 `zh`，再回退 key
+- **QR 渲染去 Skia**: 预览与 PNG 生成在 Web 上绕过 Skia（`Skia.Surface.MakeOffscreen` 需图形上下文，部分 Web 环境缺失致预览空白/崩溃）；`generateQrSvgDataUri` 走 `qrcode` SVG -> data URI -> `expo-image`，`generateQrPngBytes` 在 Web 走 SVG->`<img>`->canvas，Native 才用 Skia。`generateQrPngBytes` 现为 **async**（返回 `Promise<Uint8Array | null>`）
+- **Bluesky 邀请帖多语言**: 邀请帖正文（`generateInvitePostText` / `generateAddFriendPostText`）与 embed 图片 alt（`post.qrAlt`）随发帖时 `language` 渲染，需显式传 `lang` 参数
+- **Web 页面标题**: `document.title` 统一 `"<标题> - DME"`，仅 Web 生效；静态路由由 `App.tsx` 的 `ROUTE_TITLE_KEYS` + `onStateChange` 集中管理，会话级动态标题（ChatView/GroupSettings/DmSettings）加入 `SCREEN_MANAGED_TITLES` 由屏幕自身 `useWebTitle` 管理；RN Navigation 自带标题以 `documentTitle={{ enabled: false }}` 关闭
 - **备份恢复**: 恢复后 MLS 会话+KeyPackage池+群聊元数据+屏蔽列表完整恢复，无需重新握手；消息历史不备份
 - **退出登录**: ChatListScreen 头像菜单点击 Logout 弹模态对话框，要求用户输入密码先备份（`backupIdentity`）再退出；退出时 `storage.clear()` 删除设备上所有 `dme:<did>:` 前缀的 AsyncStorage 数据；不备份则取消留在当前会话
 - **Go 模块路径**: `dme/dme-server`（本地路径，非 GitHub）

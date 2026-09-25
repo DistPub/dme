@@ -21,6 +21,7 @@ interface FileMessageBubbleProps {
   onDownload?: () => void;
   onImagePress?: () => void;
   onVideoPress?: () => void;
+  onSave?: () => void;
   onReactionPress?: (emoji: string) => void;
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
 }
@@ -47,6 +48,7 @@ export function FileMessageBubble({
   onVideoPress,
   onReactionPress,
   onOpenPicker,
+  onSave,
 }: FileMessageBubbleProps): React.JSX.Element {
   const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, thumbnailPath, uploadProgress, downloadProgress } = fileMeta;
   const resolvedUri = useFileUri(localPath);
@@ -359,6 +361,9 @@ export function FileMessageBubble({
             isOutgoing ? styles.outgoing : styles.incoming,
           ]}>
             {renderFileContent()}
+            {downloadStatus === 'ready' && onSave && (
+              <Button label="保存" onPress={onSave} variant="secondary" style={styles.saveBtn} />
+            )}
           </View>
           {!isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
@@ -542,6 +547,12 @@ const styles = StyleSheet.create({
   retryBtn: {
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 4,
+  },
+  saveBtn: {
+    marginTop: theme.spacing.sm,
+    height: 32,
+    paddingHorizontal: theme.spacing.md,
+    alignSelf: 'flex-start',
   },
   downloadHint: {
     color: theme.colors.textSecondary,

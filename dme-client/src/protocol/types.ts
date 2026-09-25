@@ -76,6 +76,11 @@ export interface FileMeta {
   readonly chunkSize: number;
   readonly fileKey: string; // base64url-encoded 32-byte random key
   readonly localPath?: string; // filled after download
+  /**
+   * 下载/发送后生成的视频首帧缩略图 URI（web 为 indexeddb://，native 为 documentDirectory 文件 URI）；
+   * 缺失时 UI 回退 ▶ 卡片。
+   */
+  readonly thumbnailPath?: string;
   readonly downloadStatus: FileDownloadStatus;
   readonly uploadStatus?: FileUploadStatus;
   readonly uploadProgress?: number;

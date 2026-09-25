@@ -497,6 +497,12 @@ export function ChatViewScreen(): React.JSX.Element {
                 fileName: fileMeta.fileName,
               });
             } : undefined}
+            onVideoPress={localPath ? () => {
+              navigation.navigate('VideoViewer', {
+                uri: localPath,
+                fileName: fileMeta.fileName,
+              });
+            } : undefined}
             onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
             onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
           />

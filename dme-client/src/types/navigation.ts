@@ -13,6 +13,7 @@ export type RootStackParamList = {
   DmSettings: { friendDid: string };
   BlockList: undefined;
   ImageViewer: { uri: string; fileName?: string };
+  VideoViewer: { uri: string; fileName?: string };
 };
 
 /** DID 文档中用于 handle 解析的最小结构。 */

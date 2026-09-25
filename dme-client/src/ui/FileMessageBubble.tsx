@@ -20,6 +20,7 @@ interface FileMessageBubbleProps {
   onRetryUpload?: () => void;
   onDownload?: () => void;
   onImagePress?: () => void;
+  onVideoPress?: () => void;
   onReactionPress?: (emoji: string) => void;
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
 }
@@ -43,11 +44,13 @@ export function FileMessageBubble({
   onRetryUpload,
   onDownload,
   onImagePress,
+  onVideoPress,
   onReactionPress,
   onOpenPicker,
 }: FileMessageBubbleProps): React.JSX.Element {
-  const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, uploadProgress, downloadProgress } = fileMeta;
+  const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, thumbnailPath, uploadProgress, downloadProgress } = fileMeta;
   const resolvedUri = useFileUri(localPath);
+  const thumbUri = useFileUri(thumbnailPath);
   const isImage = mimeType.startsWith('image/');
   const isVideo = mimeType.startsWith('video/');
   const isAudio = mimeType.startsWith('audio/');
@@ -248,6 +251,32 @@ export function FileMessageBubble({
       );
     }
 
+    if (downloadStatus === 'ready' && isVideo && onVideoPress) {
+      if (thumbUri) {
+        return (
+          <Pressable onPress={onVideoPress} style={styles.videoPreviewWrap}>
+            <Image
+              source={{ uri: thumbUri }}
+              style={styles.imagePreview}
+              contentFit="cover"
+            />
+            <View style={styles.videoPlayOverlay}>
+              <Text style={styles.videoPlayIcon}>▶</Text>
+            </View>
+          </Pressable>
+        );
+      }
+      return (
+        <TouchableOpacity onPress={onVideoPress} style={styles.fileCard} activeOpacity={0.7}>
+          <Text style={styles.fileIcon}>▶</Text>
+          <View style={styles.fileInfo}>
+            <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
+            <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
     if (downloadStatus === 'downloading') {
       let statusText = '下载中...';
       if (downloadProgress && downloadProgress > 0) {
@@ -278,17 +307,16 @@ export function FileMessageBubble({
 
     if (downloadStatus === 'pending') {
       return (
-        <TouchableOpacity onPress={onDownload} style={styles.fileCard} activeOpacity={0.7}>
+        <View style={styles.fileCard}>
           <Text style={styles.fileIcon}>{isVideo ? '▶' : isAudio ? '🔊' : '📎'}</Text>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
             <Text style={styles.fileSize}>{formatFileSize(fileSize)}</Text>
           </View>
-          <ActivityIndicator size="small" color={theme.colors.textSecondary} />
           {onDownload && (
-            <Text style={styles.downloadHint}>Tap to download</Text>
+            <Button label="下载" onPress={onDownload} variant="primary" style={styles.retryBtn} />
           )}
-        </TouchableOpacity>
+        </View>
       );
     }
 
@@ -442,6 +470,21 @@ const styles = StyleSheet.create({
     width: 200,
     height: 150,
     borderRadius: theme.borderRadius.sm,
+  },
+  videoPreviewWrap: {
+    position: 'relative',
+  },
+  videoPlayOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoPlayIcon: {
+    fontSize: 40,
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   fileCard: {
     flexDirection: 'row',

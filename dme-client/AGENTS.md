@@ -29,8 +29,8 @@ dme-client/
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
     ├── state/AppContext.tsx  # 全局状态（17 字段，28 action）
     ├── protocol/         # types.ts + group-message.ts + reaction.ts + lexicons/ JSON
-    ├── utils/            # sound.ts（消息提示音，运行时生成 WAV）+ file-cache.ts（IndexedDB 文件缓存 / useFileUri）
-    ├── ui/               # 21 个文件（11 屏幕 + 10 组件，含 BlockListScreen + DmSettingsScreen + MessageBubble + EmojiPicker + MessageActionMenu + FileMessageBubble + ImageViewerScreen）
+    ├── utils/            # sound.ts（消息提示音，运行时生成 WAV）+ file-cache.ts（IndexedDB 文件缓存 / useFileUri）+ video-thumbnail.ts（视频首帧缩略图）
+    ├── ui/               # 22 个文件（12 屏幕 + 10 组件，含 BlockListScreen + DmSettingsScreen + MessageBubble + EmojiPicker + MessageActionMenu + FileMessageBubble + ImageViewerScreen + VideoViewerScreen）
     └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
 
@@ -63,8 +63,11 @@ dme-client/
 | 表情反应协议 | `src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions 渲染 | `src/ui/MessageBubble.tsx` |
-| 文件消息气泡 + 上传/下载状态 | `src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+图片缩略图/视频播放/音频播放卡片/文件卡片)；1:1 不渲染头像列；上传 uploading/failed+重试 + 下载 pending/downloading(字节级%)/ready/failed 状态 + reactions） |
+| 文件消息气泡 + 上传/下载状态 | `src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+图片缩略图/视频首帧缩略图+▶遮罩/音频播放卡片/文件卡片)；1:1 不渲染头像列；上传 uploading/failed+重试 + 下载 pending 视频只显示「下载」按钮/downloading(字节级%)/ready 视频显示缩略图+▶/failed 状态 + reactions） |
 | 图片查看器 | `src/ui/ImageViewerScreen.tsx`（全屏查看，点击或 ✕ 关闭） |
+| 视频播放/全屏查看 | `src/ui/VideoViewerScreen.tsx`（`expo-video` 的 `VideoView` + `useVideoPlayer`，web 自动播放 muted，解码不支持时回退下载） |
+| 视频 unsupported codec 提示与下载 | `src/ui/VideoViewerScreen.tsx`（web 预检 `videoWidth/videoHeight=0` 时提示「浏览器不支持视频解码」并提供下载按钮） |
+| 视频首帧缩略图生成 | `src/utils/video-thumbnail.ts`（native 用 `expo-video-thumbnails`，web 用隐藏 `<video>`+`<canvas>` 抓帧） |
 | Web 文件缓存 | `src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | 文件选择器 | `expo-document-picker`（`getDocumentAsync({type: '*/*'})`） |
 | 表情选择器 | `src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
@@ -131,6 +134,14 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（`FileMeta` 接口，含 `blobCids` + `uploadStatus`/`uploadProgress`/`downloadStatus`/`downloadProgress`）。`updateFileMessageMeta` 局部更新状态/进度/本地路径。发送方上传成功后 `downloadStatus:'ready'`+`uploadStatus:'uploaded'`，接收方初始 `downloadStatus:'pending'`；上传中消息 id 为临时 generateId，成功后替换为 queueId
 - **文件本地存储**: 下载后写入本地：Native 以 base64 写入 `expo-file-system` documentDirectory（路径 `{msgId}_{sanitizedFileName}`），Web 写入 IndexedDB 并以 `indexeddb://{fileId}` 作为 localPath，组件渲染时通过 `useFileUri` 解析为 blob URL；发送方同样持久化，刷新页面后仍可显示
 - **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
+- **视频预览**: 视频消息用 `expo-video` 播放，用 `expo-video-thumbnails`（native）或隐藏 `<video>`+`<canvas>`（web）生成首帧缩略图；`sendFileMessage`/`downloadFile`/`retryUploadFileMessage` 在本地文件就绪后为视频生成 `thumbnailPath`
+  - 全屏播放器用 `expo-video` 的 `VideoView` + `useVideoPlayer`
+  - web 自动播放需 `player.muted = true`
+  - web 缩略图生成需把隐藏 `<video>` 插入 DOM（`opacity:0` + 移出可视区 + 640x480），并显式 `video.load()`；不能依赖 detached video 的 `loadedmetadata`
+  - 浏览器不支持的编码会有 duration 但 `videoWidth/videoHeight=0`，应回退提示下载，不转码
+  - `expo-sharing` 无 web 支持，native 分享用 `react-native` 的 `Share`
+  - `useFileUri` 返回的 blob URL 生命周期要小心，避免在 `expo-image` 加载前被 revoke
+  - pending 视频只显示「下载」按钮，不显示 spinner + "Tap to download" 文案
 - **聊天列表分页**: `ChatViewScreen` 使用 `inverted={true}` FlatList，数据 newest-first；进入时只加载最近 50 条，滑到顶部触发 `onEndReached` 加载更早 50 条；`chatListVersion` 变化时 merge 最近 N 条（N = max(50, 已加载数)），merge 时过滤 prev 中已不在 storage 最近窗口的消息（乐观上传消息被替换后自动移除），刷新 fileMeta/reactions/readAt 并 prepend 新消息
 - **音频消息播放**: `FileMessageBubble` 音频卡片内置播放器--web 用 `HTMLAudioElement`、native 用 expo-av `Audio.Sound`（动态 import）；pending 点击触发下载、ready 后点击播放/暂停（▶/⏸）；`resolvedUri` 变化（如刷新后重新解析 IndexedDB）时释放旧音频对象并重置播放态；本地 URI 解析中播放按钮禁用+转圈
 - **进度百分比**: 上传/下载均为字节级。上传走 XHR `upload.onprogress`（fetch 无上传进度）；下载走 `response.body.getReader()`，总量来自 `blobCids[].size`（不依赖 content-length）；进度只在整数百分比变化时写 storage + 递增 chatListVersion；进行中上限 99%，完成后清空

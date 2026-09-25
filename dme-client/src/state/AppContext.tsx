@@ -49,6 +49,7 @@ import {
   computeSha256,
 } from '../crypto/file-crypto';
 import { cacheFile, getCachedFileBytes, makeIndexedDbUri } from '../utils/file-cache';
+import { generateVideoThumbnail } from '../utils/video-thumbnail';
 import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY, DEFAULT_DME_GATEWAY_URL } from '../config';
@@ -1026,10 +1027,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           });
         }
 
+        let thumbnailPath: string | undefined;
+        if (fileMeta.mimeType.startsWith('video/')) {
+          const thumb = await generateVideoThumbnail({
+            sourceUri: localPath,
+            mimeType: fileMeta.mimeType,
+            thumbKey: fileMeta.fileId,
+          });
+          thumbnailPath = thumb ?? undefined;
+        }
+
         await storage.updateFileMessageMeta(conversationId, msgId, {
           localPath,
           downloadStatus: 'ready',
           downloadProgress: undefined,
+          thumbnailPath,
         });
         setChatListVersion((v) => v + 1);
         return;
@@ -1617,6 +1629,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     });
 
     await storage.deleteMessage(conversationId, tempId);
+    let thumb: string | null = null;
+    if (mimeType.startsWith('video/')) {
+      thumb = await generateVideoThumbnail({
+        sourceUri: senderLocalPath,
+        mimeType,
+        thumbKey: fileIdHex,
+      });
+    }
     const finalMsg: StoredMessage = {
       id: encResult.queueId,
       fromDid: session.did,
@@ -1638,6 +1658,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         downloadStatus: 'ready',
         uploadStatus: 'uploaded',
         localPath: senderLocalPath,
+        thumbnailPath: thumb ?? undefined,
       },
     };
     await storage.putMessage(finalMsg);
@@ -1741,6 +1762,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     });
 
     await storage.deleteMessage(conversationId, msgId);
+    let thumb: string | null = null;
+    if (mimeType.startsWith('video/')) {
+      thumb = await generateVideoThumbnail({
+        sourceUri: senderLocalPath,
+        mimeType,
+        thumbKey: fileMeta.fileId,
+      });
+    }
     const finalMsg: StoredMessage = {
       id: encResult.queueId,
       fromDid: session.did,
@@ -1762,6 +1791,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         downloadStatus: 'ready',
         uploadStatus: 'uploaded',
         localPath: senderLocalPath,
+        thumbnailPath: thumb ?? undefined,
       },
     };
     await storage.putMessage(finalMsg);

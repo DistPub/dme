@@ -7,13 +7,13 @@
  * blob URL at render time.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
 const DB_NAME = 'dme-file-cache';
 const STORE_NAME = 'files';
 const DB_VERSION = 1;
-const INDEXEDDB_PREFIX = 'indexeddb://';
+export const INDEXEDDB_PREFIX = 'indexeddb://';
 
 interface CachedFile {
   data: ArrayBuffer;
@@ -108,36 +108,56 @@ export async function resolveFileUri(uri: string): Promise<string | null> {
 
 export function useFileUri(uri: string | undefined): string | undefined {
   const [resolved, setResolved] = useState<string | undefined>(undefined);
+  const objectUrlRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    let objectUrl: string | undefined;
-    let cancelled = false;
+    let active = true;
 
     async function resolve() {
       if (!uri) {
-        setResolved(undefined);
+        const prev = objectUrlRef.current;
+        objectUrlRef.current = undefined;
+        if (prev?.startsWith('blob:')) {
+          URL.revokeObjectURL(prev);
+        }
+        if (active) {
+          setResolved(undefined);
+        }
         return;
       }
+
       const resolvedUri = await resolveFileUri(uri);
-      if (cancelled) {
-        if (resolvedUri && resolvedUri.startsWith('blob:')) {
+      if (!active) {
+        if (resolvedUri?.startsWith('blob:')) {
           URL.revokeObjectURL(resolvedUri);
         }
         return;
       }
-      objectUrl = resolvedUri ?? undefined;
-      setResolved(objectUrl);
+
+      const prev = objectUrlRef.current;
+      objectUrlRef.current = resolvedUri ?? undefined;
+      if (prev?.startsWith('blob:') && prev !== objectUrlRef.current) {
+        URL.revokeObjectURL(prev);
+      }
+      setResolved(objectUrlRef.current);
     }
 
     resolve();
 
     return () => {
-      cancelled = true;
-      if (objectUrl && objectUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(objectUrl);
-      }
+      active = false;
     };
   }, [uri]);
+
+  useEffect(() => {
+    return () => {
+      const current = objectUrlRef.current;
+      objectUrlRef.current = undefined;
+      if (current?.startsWith('blob:')) {
+        URL.revokeObjectURL(current);
+      }
+    };
+  }, []);
 
   return resolved;
 }

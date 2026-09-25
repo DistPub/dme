@@ -349,6 +349,13 @@ export function FileMessageBubble({
           </>
         )}
         <View style={[styles.bubbleRow, isOutgoing ? styles.bubbleRowOutgoing : styles.bubbleRowIncoming]}>
+          {isOutgoing && downloadStatus === 'ready' && onSave && (
+            <View style={styles.emojiBtnWrap}>
+              <Pressable onPress={onSave} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.emojiBtnText}>💾</Text>
+              </Pressable>
+            </View>
+          )}
           {isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
               <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -361,14 +368,18 @@ export function FileMessageBubble({
             isOutgoing ? styles.outgoing : styles.incoming,
           ]}>
             {renderFileContent()}
-            {downloadStatus === 'ready' && onSave && (
-              <Button label="保存" onPress={onSave} variant="secondary" style={styles.saveBtn} />
-            )}
           </View>
           {!isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
               <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Text style={styles.emojiBtnText}>😀</Text>
+              </Pressable>
+            </View>
+          )}
+          {!isOutgoing && downloadStatus === 'ready' && onSave && (
+            <View style={styles.emojiBtnWrap}>
+              <Pressable onPress={onSave} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.emojiBtnText}>💾</Text>
               </Pressable>
             </View>
           )}
@@ -547,12 +558,6 @@ const styles = StyleSheet.create({
   retryBtn: {
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 4,
-  },
-  saveBtn: {
-    marginTop: theme.spacing.sm,
-    height: 32,
-    paddingHorizontal: theme.spacing.md,
-    alignSelf: 'flex-start',
   },
   downloadHint: {
     color: theme.colors.textSecondary,

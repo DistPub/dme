@@ -7,6 +7,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image } from 'expo-image';
 
 import { theme } from './theme';
 import { Button } from './Button';
@@ -51,6 +52,12 @@ export function LoginScreen(): React.JSX.Element {
       <ScreenBackground />
 
       <View style={styles.content}>
+        <Image
+          source={require('../../assets/images/logo.png')}
+          style={styles.logo}
+          contentFit="contain"
+          accessibilityLabel={t('login.title')}
+        />
         <Text style={styles.title}>{t('login.title')}</Text>
 
         <TextInput
@@ -111,6 +118,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: theme.spacing.lg,
+  },
+  logo: {
+    width: 96,
+    height: 96,
+    marginBottom: theme.spacing.md,
   },
   title: {
     color: theme.colors.textPrimary,

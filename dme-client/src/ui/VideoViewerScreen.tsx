@@ -3,15 +3,15 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import * as FileSystem from 'expo-file-system';
 
 import { Button } from './Button';
 import { theme } from './theme';
-import { getCachedFileBytes, INDEXEDDB_PREFIX, isIndexedDbUri, useFileUri } from '../utils/file-cache';
+import { useFileUri } from '../utils/file-cache';
+import { exportFileToDevice } from '../utils/file-export';
 import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -50,50 +50,6 @@ function VideoPlayback({ uri, onError }: VideoPlaybackProps): React.JSX.Element 
       style={styles.video}
     />
   );
-}
-
-async function downloadVideoWeb(
-  sourceUri: string,
-  resolvedUri: string | undefined,
-  fileName: string | undefined,
-): Promise<void> {
-  let blob: Blob;
-  if (isIndexedDbUri(sourceUri)) {
-    const fileId = sourceUri.slice(INDEXEDDB_PREFIX.length);
-    const bytes = await getCachedFileBytes(fileId);
-    if (!bytes) {
-      throw new Error('cached video bytes not found');
-    }
-    if (!(bytes.buffer instanceof ArrayBuffer)) {
-      throw new Error('cached video buffer is not a plain ArrayBuffer');
-    }
-    blob = new Blob([bytes.buffer], { type: 'video/mp4' });
-  } else if (resolvedUri?.startsWith('blob:')) {
-    const response = await fetch(resolvedUri);
-    blob = await response.blob();
-  } else {
-    throw new Error('unsupported video URI for download');
-  }
-
-  const blobUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = blobUrl;
-  anchor.download = fileName ?? 'video.mp4';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(blobUrl);
-}
-
-async function downloadVideoNative(sourceUri: string, fileName: string | undefined): Promise<void> {
-  const info = await FileSystem.getInfoAsync(sourceUri);
-  if (!info.exists) {
-    throw new Error('video file not found');
-  }
-  await Share.share({
-    title: fileName ?? '保存视频',
-    url: sourceUri,
-  });
 }
 
 export function VideoViewerScreen(): React.JSX.Element {
@@ -199,15 +155,11 @@ export function VideoViewerScreen(): React.JSX.Element {
 
   const handleDownload = useCallback(async () => {
     try {
-      if (Platform.OS === 'web') {
-        await downloadVideoWeb(uri, resolvedUri, fileName);
-      } else {
-        await downloadVideoNative(uri, fileName);
-      }
+      await exportFileToDevice(uri, fileName ?? 'video.mp4', 'video/mp4');
     } catch (e) {
       console.warn('download video failed:', e instanceof Error ? e.message : String(e));
     }
-  }, [uri, resolvedUri, fileName]);
+  }, [uri, fileName]);
 
   return (
     <View style={styles.container}>

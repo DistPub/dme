@@ -19,6 +19,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
+import { useI18n } from '../i18n/I18nContext';
 import { requestPlcSignature, getDidMethod, generateDidWebUpdate, getRemoteEncryptionKey, type DidWebEntry } from '../atproto/did';
 import type { RootStackParamList } from '../types/navigation';
 
@@ -33,6 +34,7 @@ interface SetupScreenProps {
 
 export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
 
   const [step, setStep] = useState<'checking' | 'publish' | 'token' | 'declaring' | 'done' | 'check_error' | 'restore_choice' | 'restore_password' | 'web_instructions'>('checking');
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +91,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
       await requestPlcSignature(app.session.agent);
       setStep('token');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to request PLC signature');
+      setError(err instanceof Error ? err.message : t('setup.failedPlcSig'));
     }
   }, [app.session]);
 
@@ -103,7 +105,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
       navigation.replace('ChatList');
     } catch (err) {
       setStep('token');
-      setError(err instanceof Error ? err.message : 'Failed to declare keys');
+      setError(err instanceof Error ? err.message : t('setup.failedDeclare'));
     }
   }, [app, navigation]);
 
@@ -116,10 +118,10 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
         setStep('done');
         navigation.replace('ChatList');
       } else {
-        setError('未找到备份');
+        setError(t('setup.noBackup'));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '恢复失败');
+      setError(err instanceof Error ? err.message : t('setup.restoreFailed'));
     } finally {
       setRestoring(false);
     }
@@ -200,15 +202,15 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
       <ScreenBackground />
 
       <View style={styles.content}>
-        <Text style={styles.title}>Setup Identity</Text>
+        <Text style={styles.title}>{t('setup.title')}</Text>
 
         {step === 'checking' && (
-          <Text style={styles.statusText}>Checking identity key...</Text>
+          <Text style={styles.statusText}>{t('setup.checking')}</Text>
         )}
 
         {step === 'publish' && (
           <Button
-            label="Publish to DID"
+            label={t('setup.publish')}
             onPress={requestSignature}
             variant="primary"
             style={styles.fullButton}
@@ -218,12 +220,12 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
         {step === 'web_instructions' && (
           <>
             <Text style={styles.statusText}>
-              你的账号使用 did:web，需要手动更新 DID 文档。
+              {t('setup.webNote1')}
             </Text>
             {didWebUpdate?.didJson ? (
               <>
                 <Text style={styles.hint}>
-                  将以下内容保存为 .well-known/did.json 上传到你的服务器：
+                  {t('setup.webNote2')}
                 </Text>
                 <ScrollView style={styles.jsonOutput}>
                   {renderJsonWithHighlight(didWebUpdate.didJson)}
@@ -232,7 +234,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
             ) : (
               <>
                 <Text style={styles.hint}>
-                  无法获取当前 DID 文档。请将以下条目添加到你的 did.json 的 verificationMethod 数组中：
+                  {t('setup.webNote3')}
                 </Text>
                 <ScrollView style={styles.jsonOutput}>
                   {renderJsonWithHighlight(JSON.stringify(didWebUpdate?.newEntries ?? [], null, 2), true)}
@@ -240,7 +242,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
               </>
             )}
             <Button
-              label="我已更新，检测"
+              label={t('setup.webCheck')}
               onPress={() => {
                 setError(null);
                 setStep('checking');
@@ -256,16 +258,16 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
         {step === 'restore_choice' && (
           <>
             <Text style={styles.statusText}>
-              检测到此账号已声明密钥，但当前设备没有对应私钥
+              {t('setup.restoreChoice')}
             </Text>
             <Button
-              label="从备份恢复"
+              label={t('setup.restoreFromBackup')}
               onPress={() => setStep('restore_password')}
               variant="primary"
               style={styles.fullButton}
             />
             <Button
-              label="重新声明密钥"
+              label={t('setup.redeclare')}
               onPress={() => setStep('publish')}
               variant="secondary"
               style={styles.fullButton}
@@ -276,13 +278,13 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
         {step === 'restore_password' && (
           <>
             <Text style={styles.statusText}>
-              输入备份密码以恢复身份密钥
+              {t('setup.restorePrompt')}
             </Text>
             <TextInput
               style={styles.input}
               value={backupPassword}
               onChangeText={setBackupPassword}
-              placeholder="备份密码"
+              placeholder={t('setup.backupPasswordPlaceholder')}
               placeholderTextColor={theme.colors.textSecondary}
               secureTextEntry
               autoCapitalize="none"
@@ -290,14 +292,14 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
               editable={!restoring}
             />
             <Button
-              label={restoring ? '恢复中...' : '恢复'}
+              label={restoring ? t('setup.restoring') : t('setup.restore')}
               onPress={() => handleRestore(backupPassword)}
               variant="primary"
               style={styles.fullButton}
               disabled={restoring}
             />
             <Button
-              label="返回"
+              label={t('common.back')}
               onPress={() => {
                 setError(null);
                 setBackupPassword('');
@@ -312,19 +314,19 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
         {step === 'token' && (
           <>
             <Text style={styles.statusText}>
-              Enter the PLC token sent to your email:
+              {t('setup.tokenPrompt')}
             </Text>
             <TextInput
               style={styles.input}
               value={plcToken}
               onChangeText={setPlcToken}
-              placeholder="PLC token"
+              placeholder={t('setup.tokenPlaceholder')}
               placeholderTextColor={theme.colors.textSecondary}
               autoCapitalize="none"
               autoCorrect={false}
             />
             <Button
-              label="Declare Keys"
+              label={t('setup.declareKeys')}
               onPress={() => declareKeys(plcToken)}
               variant="primary"
               style={styles.fullButton}
@@ -333,13 +335,13 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
         )}
 
         {step === 'declaring' && (
-          <Text style={styles.statusText}>Declaring keys...</Text>
+          <Text style={styles.statusText}>{t('setup.declaring')}</Text>
         )}
 
         {step === 'check_error' && (
           <>
             <Button
-              label="Retry Check"
+              label={t('setup.retryCheck')}
               onPress={() => {
                 setError(null);
                 setStep('checking');
@@ -350,7 +352,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
               style={styles.fullButton}
             />
             <Button
-              label="Back to Login"
+              label={t('setup.backToLogin')}
               onPress={() => app.logout().catch((err: unknown) => console.error('Logout failed:', err))}
               variant="secondary"
               style={styles.fullButton}
@@ -360,7 +362,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
 
         {step !== 'checking' && step !== 'check_error' && step !== 'declaring' && (
           <Button
-            label="Cancel"
+            label={t('common.cancel')}
             onPress={() => app.logout().catch((err: unknown) => console.error('Logout failed:', err))}
             variant="secondary"
             style={styles.fullButton}

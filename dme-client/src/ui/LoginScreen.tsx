@@ -12,6 +12,7 @@ import { theme } from './theme';
 import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
+import { useI18n } from '../i18n/I18nContext';
 import { PDS_URL } from '../config';
 
 function readWebQuery(key: string): string | null {
@@ -21,6 +22,7 @@ function readWebQuery(key: string): string | null {
 
 export function LoginScreen(): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
 
   const [pdsUrl, setPdsUrl] = useState(() => readWebQuery('pds') ?? PDS_URL);
   const [handle, setHandle] = useState(() => readWebQuery('handle') ?? '');
@@ -49,13 +51,13 @@ export function LoginScreen(): React.JSX.Element {
       <ScreenBackground />
 
       <View style={styles.content}>
-        <Text style={styles.title}>DME</Text>
+        <Text style={styles.title}>{t('login.title')}</Text>
 
         <TextInput
           style={styles.input}
           value={pdsUrl}
           onChangeText={setPdsUrl}
-          placeholder="PDS URL (e.g. https://bsky.social)"
+          placeholder={t('login.pdsPlaceholder')}
           placeholderTextColor={theme.colors.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
@@ -65,7 +67,7 @@ export function LoginScreen(): React.JSX.Element {
           style={styles.input}
           value={handle}
           onChangeText={setHandle}
-          placeholder="Handle (e.g. alice.bsky.social)"
+          placeholder={t('login.handlePlaceholder')}
           placeholderTextColor={theme.colors.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
@@ -75,7 +77,7 @@ export function LoginScreen(): React.JSX.Element {
           style={styles.input}
           value={password}
           onChangeText={setPassword}
-          placeholder="App Password"
+          placeholder={t('login.passwordPlaceholder')}
           placeholderTextColor={theme.colors.placeholder}
           secureTextEntry
           autoCapitalize="none"
@@ -85,7 +87,7 @@ export function LoginScreen(): React.JSX.Element {
         />
 
         <Button
-          label={app.loading ? 'Logging in...' : 'Login'}
+          label={app.loading ? t('login.loggingIn') : t('login.button')}
           onPress={onLogin}
           variant="primary"
           style={styles.button}

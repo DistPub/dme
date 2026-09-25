@@ -24,6 +24,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Platform, StyleSheet, View, ActivityIndicator } from 'react-native';
 
 import { AppProvider, useApp } from './src/state/AppContext';
+import { I18nProvider } from './src/i18n/I18nContext';
 import { theme } from './src/ui/theme';
 import { FontProvider } from './src/ui/FontProvider';
 import { LoginScreen } from './src/ui/LoginScreen';
@@ -142,13 +143,15 @@ function NavigationRoot(): React.JSX.Element {
 export default function App(): React.JSX.Element {
   return (
     <GestureHandlerRootView style={styles.root}>
-      <AppProvider>
-        <FontProvider>
-          <SafeAreaProvider>
-            <NavigationRoot />
-          </SafeAreaProvider>
-        </FontProvider>
-      </AppProvider>
+      <I18nProvider>
+        <AppProvider>
+          <FontProvider>
+            <SafeAreaProvider>
+              <NavigationRoot />
+            </SafeAreaProvider>
+          </FontProvider>
+        </AppProvider>
+      </I18nProvider>
     </GestureHandlerRootView>
   );
 }

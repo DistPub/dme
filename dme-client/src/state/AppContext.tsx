@@ -78,6 +78,8 @@ import {
   deserializeAcceptedKeyPackage,
 } from '../handshake/group-invite';
 import { playMessageSound } from '../utils/sound';
+import { useI18n } from '../i18n/I18nContext';
+import { t } from '../i18n/format';
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (Uint8Array <-> base64 via JSON replacer)
@@ -298,6 +300,8 @@ const AppContext = createContext<AppContextValue | null>(null);
 // ---------------------------------------------------------------------------
 
 export function AppProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const { language } = useI18n();
+
   const [session, setSession] = useState<DmeSession | null>(null);
   const [storage, setStorage] = useState<DmeStorage | null>(null);
   const [identityKeys, setIdentityKeys] = useState<IdentityKeys | null>(null);
@@ -501,12 +505,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setBlockList(await correctStorage.getBlockList());
       setSoundEnabledState(await correctStorage.getSoundEnabled());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError(err instanceof Error ? err.message : t(language, 'login.failed'));
       throw err;
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [language]);
 
   const logout = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -653,12 +657,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       return false;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Session restore failed');
+      setError(err instanceof Error ? err.message : t(language, 'login.restoreFailed'));
       return false;
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [language]);
 
   // -------------------------------------------------------------------------
   // Identity
@@ -1136,8 +1140,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             fromDid: msg.senderDid,
             toDid: userDid,
             plaintext: resp.accepted
-              ? `@${senderHandle} 接受了群聊邀请`
-              : `@${senderHandle} 拒绝了群聊邀请`,
+              ? t(language, 'group.invite.accepted', { handle: senderHandle })
+              : t(language, 'group.invite.rejected', { handle: senderHandle }),
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1194,7 +1198,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
             toDid: userDid,
-            plaintext: `你已加入群聊：${welcome.groupName}`,
+            plaintext: t(language, 'group.joined', { group: welcome.groupName }),
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1227,7 +1231,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
             toDid: userDid,
-            plaintext: '群成员已更新',
+            plaintext: t(language, 'group.membersUpdated'),
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1271,7 +1275,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
             toDid: userDid,
-            plaintext: `群聊已解散：${dissolved.groupName}`,
+            plaintext: t(language, 'group.dissolved', { group: dissolved.groupName }),
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1298,7 +1302,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
             toDid: userDid,
-            plaintext: `你已被移出群聊：${removed.groupName}`,
+            plaintext: t(language, 'group.removed', { group: removed.groupName }),
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1364,7 +1368,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
             toDid: userDid,
-            plaintext: `@${senderHandle} 已离开群聊`,
+            plaintext: t(language, 'group.memberLeft', { handle: senderHandle }),
             createdAt: msg.envelope.createdAt,
             sent: false,
             kind: 'group_system',
@@ -1449,7 +1453,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
     }
     setChatListVersion((v) => v + 1);
-  }, [identityKeys, poller, pds, soundEnabled, downloadFile]);
+  }, [identityKeys, poller, pds, soundEnabled, downloadFile, language]);
 
   handleIncomingMessageRef.current = handleIncomingMessage;
 
@@ -1925,7 +1929,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         id: `sys_invite_${inviteId}`,
         fromDid: session.did,
         toDid: friendDid,
-        plaintext: `你邀请了 @${friendHandle} 加入群聊：${groupName}`,
+        plaintext: t(language, 'group.youInvited', { handle: friendHandle, group: groupName }),
         createdAt: new Date().toISOString(),
         sent: true,
         kind: 'group_system',
@@ -1947,7 +1951,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setPendingInvites((prev) => [...prev, ...newPending]);
     setChatListVersion((v) => v + 1);
     return groupId;
-  }, [session, storage, identityKeys, pds, poller]);
+  }, [session, storage, identityKeys, pds, poller, language]);
 
   const respondToGroupInvite = useCallback(async (
     inviteId: string,
@@ -2075,7 +2079,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     const groupInfo: GroupInfo = {
       groupId,
-      groupName: accepted[0]?.groupName ?? 'New Group',
+      groupName: accepted[0]?.groupName ?? t(language, 'group.newGroup'),
       creatorDid: session.did,
       members: memberList,
       createdAt: new Date().toISOString(),
@@ -2166,7 +2170,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     setGroups((prev) => [...prev, groupId]);
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, pendingInvites]);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites, language]);
 
   const cancelGroupInvite = useCallback(async (inviteId: string): Promise<void> => {
     if (!storage) throw new Error('cancelGroupInvite: storage not initialized');
@@ -2230,7 +2234,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       id: `sys_invite_${inviteId}`,
       fromDid: session.did,
       toDid: friendDid,
-        plaintext: `你邀请了 @${friendHandle} 加入群聊：${groupInfo.groupName}`,
+        plaintext: t(language, 'group.youInvited', { handle: friendHandle, group: groupInfo.groupName }),
       createdAt: new Date().toISOString(),
       sent: true,
       kind: 'group_system',
@@ -2248,7 +2252,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.putPendingInvite(invite);
     setPendingInvites((prev) => [...prev, invite]);
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller]);
+  }, [session, storage, identityKeys, pds, poller, language]);
 
   const dissolveGroup = useCallback(async (groupId: string): Promise<void> => {
     if (!session || !storage || !pds || !poller) {
@@ -2513,7 +2517,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       id: `sys_left_${groupId}_${Date.now()}`,
       fromDid: session.did,
       toDid: groupId,
-      plaintext: `你已离开群聊：${groupInfo.groupName}`,
+      plaintext: t(language, 'group.youLeft', { group: groupInfo.groupName }),
       createdAt: new Date().toISOString(),
       sent: true,
       kind: 'group_system',
@@ -2522,7 +2526,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? leftInfo : g));
     setChatListVersion((v) => v + 1);
-  }, [session, storage, pds, poller]);
+  }, [session, storage, pds, poller, language]);
 
   // -------------------------------------------------------------------------
   // Block list

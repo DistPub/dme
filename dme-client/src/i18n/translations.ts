@@ -127,6 +127,7 @@ export const zh: Record<string, string> = {
   'chatlist.backupFailed': '备份失败',
 
   // chatview
+  'chatview.title': '聊天',
   'chatview.typeMessage': '输入消息...',
   'chatview.send': '发送',
   'chatview.defaultGroupName': '群聊',
@@ -137,17 +138,17 @@ export const zh: Record<string, string> = {
   'chatview.left': '你已离开群聊，无法发送消息',
 
   // qrdisplay
-  'qrdisplay.title': '邀请加入 DME',
-  'qrdisplay.hint': '输入 Bob 的 handle 来邀请加入 DME。',
+  'qrdisplay.title': '邀请加入隐世',
+  'qrdisplay.hint': '输入 Bob 的 handle 来邀请加入隐世。',
   'qrdisplay.handlePlaceholder': 'Bob 的 handle (例如 bob.bsky.social)',
   'qrdisplay.checkGenerate': '检查并生成',
-  'qrdisplay.checking': '正在检查 Bob 的 DME 状态...',
+  'qrdisplay.checking': '正在检查 Bob 的隐世状态...',
   'qrdisplay.previewLabel': '帖子预览（可编辑）：',
   'qrdisplay.publish': '发布到 Bluesky',
   'qrdisplay.publishing': '正在发布到 Bluesky...',
   'qrdisplay.published': '邀请已发布！',
   'qrdisplay.backToChats': '返回聊天',
-  'qrdisplay.alreadyFriend': '{handle} 已经是你的 DME 好友！',
+  'qrdisplay.alreadyFriend': '{handle} 已经是你的隐世好友！',
   'qrdisplay.goToChat': '去聊天',
   'qrdisplay.cantInviteSelf': '不能邀请自己',
   'qrdisplay.failedCheck': '检查 Bob 状态失败',
@@ -177,6 +178,7 @@ export const zh: Record<string, string> = {
   'creategroup.failed': '创建群聊失败',
 
   // groupsettings
+  'groupsettings.title': '群聊管理',
   'groupsettings.dissolved': '群聊已解散',
   'groupsettings.removed': '你已被移出群聊',
   'groupsettings.left': '你已离开群聊',
@@ -216,8 +218,12 @@ export const zh: Record<string, string> = {
   'menu.delete': '删除',
 
   // videoviewer
+  'videoviewer.title': '视频查看',
   'videoviewer.unsupported': '浏览器不支持视频解码，请下载到本地用其他播放器播放',
   'videoviewer.download': '下载',
+
+  // imageviewer
+  'imageviewer.title': '图片查看',
 
   // group
   'group.invite.accepted': '@{handle} 接受了群聊邀请',
@@ -232,11 +238,11 @@ export const zh: Record<string, string> = {
   'group.newGroup': '新群聊',
 
   // post
-  'post.inviteLine1': '@{handle} 想要通过 DME 与你进行端到端加密通信。',
-  'post.inviteLine2': '请安装 DME 客户端并注册一个账号，然后在 DME 中使用 Scan 功能扫描后续的二维码来建立加密对话。',
-  'post.addFriendLine1': '@{handle} 扫描下方二维码，通过 DME 建立端到端加密对话。',
-  'post.hashtag': '#DME #加密通信',
-  'post.qrAlt': 'DME 加密通信二维码',
+  'post.inviteLine1': '@{handle} 想要通过隐世与你进行端到端加密通信。',
+  'post.inviteLine2': '请安装隐世客户端并注册一个账号，然后在隐世中使用扫描功能扫描后续的二维码来建立加密对话。',
+  'post.addFriendLine1': '@{handle} 扫描下方二维码，通过隐世建立端到端加密对话。',
+  'post.hashtag': '#DME #隐世 #加密通信',
+  'post.qrAlt': '隐世加密通信二维码',
 };
 
 export const en: Record<string, string> = {
@@ -361,6 +367,7 @@ export const en: Record<string, string> = {
   'chatlist.backupFailed': 'Backup failed',
 
   // chatview
+  'chatview.title': 'Chat',
   'chatview.typeMessage': 'Type a message...',
   'chatview.send': 'Send',
   'chatview.defaultGroupName': 'Group',
@@ -411,6 +418,7 @@ export const en: Record<string, string> = {
   'creategroup.failed': 'Failed',
 
   // groupsettings
+  'groupsettings.title': 'Group Settings',
   'groupsettings.dissolved': 'Group dissolved',
   'groupsettings.removed': 'You were removed',
   'groupsettings.left': 'You left',
@@ -450,8 +458,12 @@ export const en: Record<string, string> = {
   'menu.delete': 'Delete',
 
   // videoviewer
+  'videoviewer.title': 'Video Viewer',
   'videoviewer.unsupported': 'Browser cannot decode this video. Download it to play with another player.',
   'videoviewer.download': 'Download',
+
+  // imageviewer
+  'imageviewer.title': 'Image Viewer',
 
   // group
   'group.invite.accepted': '@{handle} accepted the group invitation',

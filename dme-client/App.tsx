@@ -24,7 +24,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Platform, StyleSheet, View, ActivityIndicator } from 'react-native';
 
 import { AppProvider, useApp } from './src/state/AppContext';
-import { I18nProvider } from './src/i18n/I18nContext';
+import { I18nProvider, useI18n } from './src/i18n/I18nContext';
 import { theme } from './src/ui/theme';
 import { FontProvider } from './src/ui/FontProvider';
 import { LoginScreen } from './src/ui/LoginScreen';
@@ -41,17 +41,49 @@ import { BlockListScreen } from './src/ui/BlockListScreen';
 import { ImageViewerScreen } from './src/ui/ImageViewerScreen';
 import { VideoViewerScreen } from './src/ui/VideoViewerScreen';
 import type { RootStackParamList } from './src/types/navigation';
+import { setWebTitle } from './src/utils/web-title';
 
 export type { RootStackParamList };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
+/**
+ * Conversation-scoped routes whose document.title is managed by their own
+ * screens via useWebTitle (group name / friend profile live in per-screen
+ * state and resolve asynchronously), not by the centralized route mapping.
+ */
+const SCREEN_MANAGED_TITLES: ReadonlySet<keyof RootStackParamList> = new Set([
+  'ChatView',
+  'GroupSettings',
+  'DmSettings',
+]);
+
 function NavigationRoot(): React.JSX.Element {
   const app = useApp();
+  const { t } = useI18n();
   const [isReady, setIsReady] = useState(false);
   const [initialRoute, setInitialRoute] = useState<keyof RootStackParamList>('Login');
   const prevSessionRef = useRef(app.session);
+
+  // Keep latest t in a ref so onStateChange doesn't capture a stale closure.
+  const tRef = useRef(t);
+  tRef.current = t;
+
+  const updateTitle = (): void => {
+    if (!navigationRef.isReady()) return;
+    const route = navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined;
+    if (!route) return;
+    if (SCREEN_MANAGED_TITLES.has(route)) return;
+    const key = ROUTE_TITLE_KEYS[route];
+    if (!key) return;
+    setWebTitle(tRef.current(key));
+  };
+
+  // Re-apply title when language changes.
+  useEffect(() => {
+    updateTitle();
+  }, [t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,7 +146,11 @@ function NavigationRoot(): React.JSX.Element {
   }
 
   return (
-    <NavigationContainer ref={navigationRef}>
+    <NavigationContainer
+      ref={navigationRef}
+      onStateChange={updateTitle}
+      documentTitle={{ enabled: false }}
+    >
       <Stack.Navigator
         initialRouteName={initialRoute}
         screenOptions={{
@@ -139,6 +175,25 @@ function NavigationRoot(): React.JSX.Element {
     </NavigationContainer>
   );
 }
+
+/**
+ * Route name -> i18n key mapping for web document.title.
+ */
+const ROUTE_TITLE_KEYS: Record<keyof RootStackParamList, string> = {
+  Login: 'login.title',
+  Setup: 'setup.title',
+  ChatList: 'chatlist.title',
+  ChatView: 'chatview.title',
+  QrDisplay: 'qrdisplay.title',
+  QrScan: 'qrscan.title',
+  Settings: 'settings.title',
+  CreateGroup: 'creategroup.create',
+  GroupSettings: 'groupsettings.title',
+  DmSettings: 'dmsettings.title',
+  BlockList: 'blocklist.title',
+  ImageViewer: 'imageviewer.title',
+  VideoViewer: 'videoviewer.title',
+};
 
 export default function App(): React.JSX.Element {
   return (

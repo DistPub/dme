@@ -110,9 +110,17 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     <View style={styles.container}>
       <ScreenBackground />
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>{t('settings.title')}</Text>
+      <View style={styles.header}>
+        <Button
+          label={t('common.back')}
+          onPress={() => navigation.goBack()}
+          variant="secondary"
+          style={styles.backButton}
+        />
+        <Text style={styles.headerTitle}>{t('settings.title')}</Text>
+      </View>
 
+      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>{t('settings.language')}</Text>
         <View style={styles.rowButtons}>
           {LANGUAGES.map((lang) => (
@@ -273,13 +281,6 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         {backupError ? (
           <Text style={styles.error}>{backupError}</Text>
         ) : null}
-
-        <Button
-          label={t('common.back')}
-          onPress={() => navigation.goBack()}
-          variant="secondary"
-          style={styles.fullButton}
-        />
       </ScrollView>
     </View>
   );
@@ -298,6 +299,24 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing.xl,
     paddingBottom: theme.spacing.xl,
     gap: theme.spacing.md,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.sm,
+    gap: theme.spacing.md,
+  },
+  backButton: {
+    width: 96,
+    height: 40,
+  },
+  headerTitle: {
+    flex: 1,
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.heading,
+    fontWeight: '700',
   },
   title: {
     color: theme.colors.textPrimary,

@@ -23,6 +23,7 @@ import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { getProfileCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { RootStackParamList } from '../types/navigation';
+import { useWebTitle } from '../utils/web-title';
 import { useI18n } from '../i18n/I18nContext';
 
 type DmSettingsRouteProp = NativeStackScreenProps<RootStackParamList, 'DmSettings'>['route'];
@@ -135,6 +136,8 @@ export function DmSettingsScreen(): React.JSX.Element {
   }, [app, friendDid]);
 
   const displayName = profile.displayName || profile.handle || friendDid;
+
+  useWebTitle(t('dmsettings.title'));
 
   if (loading) {
     return (

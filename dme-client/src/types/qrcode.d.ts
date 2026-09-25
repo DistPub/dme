@@ -3,6 +3,10 @@ declare module 'qrcode' {
     errorCorrectionLevel?: 'L' | 'M' | 'Q' | 'H';
     version?: number;
     maskPattern?: number;
+    margin?: number;
+    width?: number;
+    color?: { dark?: string; light?: string };
+    type?: 'svg' | 'utf8' | 'terminal';
   }
 
   interface QRCodeResult {
@@ -13,6 +17,7 @@ declare module 'qrcode' {
   }
 
   function create(text: string, options?: QRCodeOptions): QRCodeResult;
+  function toString(text: string, options?: QRCodeOptions): Promise<string>;
 
-  export default { create };
+  export default { create, toString };
 }

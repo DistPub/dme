@@ -21,6 +21,7 @@ import { EmojiPicker } from './EmojiPicker';
 import { MessageActionMenu } from './MessageActionMenu';
 import { FileMessageBubble } from './FileMessageBubble';
 import { exportFileToDevice } from '../utils/file-export';
+import { useWebTitle } from '../utils/web-title';
 import { useApp } from '../state/AppContext';
 import { useI18n } from '../i18n/I18nContext';
 import {
@@ -94,6 +95,8 @@ export function ChatViewScreen(): React.JSX.Element {
   const messagesRef = useRef<StoredMessage[]>([]);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+
+  useWebTitle(isGroup ? `${t('common.groupPrefix')}${displayName}` : displayName);
 
   useEffect(() => {
     messagesRef.current = messages;

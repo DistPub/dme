@@ -9,11 +9,11 @@
  * 所有内容用 flexbox 布局。
  */
 
-import React, { useCallback, useRef, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image } from 'expo-image';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import QRCode from 'react-native-qrcode-skia';
 
 import { theme } from './theme';
 import { Button } from './Button';
@@ -23,6 +23,7 @@ import { useI18n } from '../i18n/I18nContext';
 import {
   checkBobDmeStatus,
   generateQrPngBytes,
+  generateQrSvgDataUri,
   generateInvitePostText,
   generateAddFriendPostText,
   createDmeInvitePost,
@@ -55,10 +56,35 @@ export function QrDisplayScreen(): React.JSX.Element {
   const [postText, setPostText] = useState('');
   const [qrValue, setQrValue] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [previewHeight, setPreviewHeight] = useState(0);
 
   const submittedRef = useRef(false);
   const keyPackageSerializedRef = useRef<string>('');
   const welcomeQueueIdRef = useRef<string>('');
+  const [qrDataUri, setQrDataUri] = useState<string | null>(null);
+
+  // Render the QR preview from a pure-JS SVG (qrcode library). We deliberately
+  // avoid Skia here: both the Skia <QRCode> component and Skia.Surface.MakeOffscreen
+  // require a WebGL/graphics context that is unavailable in some web
+  // environments, leaving the preview blank (or crashing the screen).
+  useEffect(() => {
+    if (!qrValue) {
+      setQrDataUri(null);
+      return;
+    }
+    let cancelled = false;
+    generateQrSvgDataUri(qrValue, QR_SIZE)
+      .then((uri) => {
+        if (!cancelled) setQrDataUri(uri);
+      })
+      .catch((err: unknown) => {
+        console.error('Failed to render QR preview:', err);
+        if (!cancelled) setQrDataUri(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [qrValue]);
 
   const onCheckBob = useCallback(async (): Promise<void> => {
     const trimmed = handle.trim();
@@ -108,7 +134,7 @@ export function QrDisplayScreen(): React.JSX.Element {
 
     try {
       const qrBytes = bobStatus === 'registered_not_friend'
-        ? generateQrPngBytes(qrValue)
+        ? await generateQrPngBytes(qrValue)
         : null;
 
       await createDmeInvitePost(app.session.agent, postText, qrBytes, language);
@@ -152,7 +178,11 @@ export function QrDisplayScreen(): React.JSX.Element {
     <View style={styles.container}>
       <ScreenBackground />
 
-      <View style={styles.content}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentInner}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.title}>{t('qrdisplay.title')}</Text>
 
         {phase === 'input' && (
@@ -195,23 +225,27 @@ export function QrDisplayScreen(): React.JSX.Element {
             <View style={styles.previewBox}>
               <Text style={styles.previewLabel}>{t('qrdisplay.previewLabel')}</Text>
               <TextInput
-                style={styles.previewInput}
+                style={[styles.previewInput, previewHeight > 0 ? { minHeight: previewHeight } : null]}
                 value={postText}
                 onChangeText={setPostText}
+                onContentSizeChange={(e) => {
+                  const h = e.nativeEvent.contentSize.height;
+                  setPreviewHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+                }}
                 multiline
+                scrollEnabled={false}
                 autoCapitalize="none"
                 autoCorrect={false}
                 placeholderTextColor={theme.colors.placeholder}
               />
             </View>
 
-            {qrValue ? (
+            {qrDataUri ? (
               <View style={styles.qrWrap}>
-                <QRCode
-                  value={qrValue}
-                  size={QR_SIZE}
-                  color={theme.colors.textPrimary}
+                <Image
+                  source={{ uri: qrDataUri }}
                   style={styles.qr}
+                  contentFit="contain"
                 />
               </View>
             ) : null}
@@ -282,7 +316,7 @@ export function QrDisplayScreen(): React.JSX.Element {
             />
           </>
         )}
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -294,8 +328,11 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentInner: {
     paddingHorizontal: theme.spacing.md,
     paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.lg,
     gap: theme.spacing.md,
   },
   title: {
@@ -340,7 +377,6 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 14,
     lineHeight: 20,
-    flex: 1,
     textAlignVertical: 'top',
     padding: 0,
   },
@@ -349,6 +385,8 @@ const styles = StyleSheet.create({
     marginVertical: theme.spacing.sm,
   },
   qr: {
+    width: QR_SIZE,
+    height: QR_SIZE,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.borderRadius.md,
   },

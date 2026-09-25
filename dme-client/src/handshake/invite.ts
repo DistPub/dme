@@ -13,6 +13,7 @@
 import { Agent, RichText } from '@atproto/api';
 import { ImageFormat, Skia } from '@shopify/react-native-skia';
 import QRCodeLib from 'qrcode';
+import { Platform } from 'react-native';
 
 import { getRemoteEncryptionKey } from '../atproto/did';
 import { t } from '../i18n/format';
@@ -54,13 +55,14 @@ export async function checkBobDmeStatus(
   return 'registered_not_friend';
 }
 
-export function generateQrPngBytes(data: string): Uint8Array | null {
+export async function generateQrPngBytes(data: string): Promise<Uint8Array | null> {
   const qr = QRCodeLib.create(data, { errorCorrectionLevel: 'L' });
-  const modules = qr.modules;
-  const moduleCount = modules.size;
+  const moduleCount = qr.modules.size;
+  const size = (moduleCount + QR_MARGIN_MODULES * 2) * QR_MODULE_SIZE;
 
-  const totalModules = moduleCount + QR_MARGIN_MODULES * 2;
-  const size = totalModules * QR_MODULE_SIZE;
+  if (Platform.OS === 'web') {
+    return rasterizeSvgToPng(await renderQrSvg(data, size, moduleCount), size);
+  }
 
   const surface = Skia.Surface.MakeOffscreen(size, size);
   if (!surface) return null;
@@ -73,7 +75,7 @@ export function generateQrPngBytes(data: string): Uint8Array | null {
 
   for (let row = 0; row < moduleCount; row++) {
     for (let col = 0; col < moduleCount; col++) {
-      if (modules.get(row, col)) {
+      if (qr.modules.get(row, col)) {
         canvas.drawRect(
           Skia.XYWHRect(
             (col + QR_MARGIN_MODULES) * QR_MODULE_SIZE,
@@ -92,6 +94,62 @@ export function generateQrPngBytes(data: string): Uint8Array | null {
   surface.dispose();
 
   return bytes as Uint8Array;
+}
+
+function renderQrSvg(data: string, size: number, moduleCount: number): Promise<string> {
+  return QRCodeLib.toString(data, {
+    type: 'svg',
+    errorCorrectionLevel: 'L',
+    margin: Math.max(1, Math.round(moduleCount / 8)),
+    width: size,
+  });
+}
+
+function rasterizeSvgToPng(svg: string, size: number): Promise<Uint8Array | null> {
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    img.onload = (): void => {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        URL.revokeObjectURL(url);
+        resolve(null);
+        return;
+      }
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, size, size);
+      ctx.drawImage(img, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          resolve(null);
+          return;
+        }
+        blob.arrayBuffer().then((buf) => resolve(new Uint8Array(buf))).catch(() => resolve(null));
+      }, 'image/png');
+    };
+    img.onerror = (): void => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
+  });
+}
+
+/**
+ * Render a QR code as an SVG data URI (pure JS, no Skia/canvas).
+ *
+ * Skia's offscreen surface needs a graphics context that is missing on some
+ * web builds, so this is the safe cross-platform path for on-screen previews.
+ */
+export async function generateQrSvgDataUri(data: string, size: number): Promise<string> {
+  const moduleCount = QRCodeLib.create(data, { errorCorrectionLevel: 'L' }).modules.size;
+  const svg = await renderQrSvg(data, size, moduleCount);
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 export function generateInvitePostText(bobHandle: string, lang: Language): string {

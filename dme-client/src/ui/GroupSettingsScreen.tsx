@@ -22,6 +22,7 @@ import { useApp } from '../state/AppContext';
 import { getProfilesCached, resolveHandleCached } from '../atproto/profile-cache';
 import type { GroupMember } from '../protocol/group-message';
 import type { RootStackParamList } from '../types/navigation';
+import { useWebTitle } from '../utils/web-title';
 import { useI18n } from '../i18n/I18nContext';
 
 type GroupSettingsRouteProp = NativeStackScreenProps<RootStackParamList, 'GroupSettings'>['route'];
@@ -151,6 +152,8 @@ export function GroupSettingsScreen(): React.JSX.Element {
     setBlockTarget(null);
   }, [app, blockTarget]);
 
+  useWebTitle(t('groupsettings.title'));
+
   if (loading) {
     return (
       <View style={styles.container}>
@@ -172,7 +175,7 @@ export function GroupSettingsScreen(): React.JSX.Element {
             variant="secondary"
             style={styles.backBtn}
           />
-          <Text style={styles.title} numberOfLines={1}>{groupName}</Text>
+          <Text style={styles.title} numberOfLines={1}>{t('groupsettings.title')}</Text>
         </View>
 
         {dissolved || removed || left ? (

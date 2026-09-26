@@ -14,24 +14,29 @@ import { theme } from './theme';
 
 const SLOGAN_CHARS = ['大', '隐', '隐', '于', '市'];
 const FLY_OFFSET = 44;
-const CYCLE_MS = 3600;
+const CYCLE_MS = 5000;
 const STAGGER_MS = 300;
 const FLY_IN_MS = 800;
-const HOLD_MS = 500;
+const HOLD_MS = 1800;
 const FLY_OUT_MS = 800;
-const FLY_TOTAL_MS = FLY_IN_MS + HOLD_MS + FLY_OUT_MS; // 2100
+const GROUP_PAUSE_MS = 600;
+const OUT_BASE_MS =
+  (SLOGAN_CHARS.length - 1) * STAGGER_MS + FLY_IN_MS + GROUP_PAUSE_MS;
+const TAIL_BASE_MS = CYCLE_MS - OUT_BASE_MS - FLY_OUT_MS;
 
 function SloganChar({ char, index }: { char: string; index: number }): React.JSX.Element {
   const v = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const lead = CYCLE_MS - FLY_TOTAL_MS - index * STAGGER_MS;
+    const initialWait = index * STAGGER_MS;
+    const tailWait = TAIL_BASE_MS - index * STAGGER_MS;
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.delay(lead),
+        Animated.delay(initialWait),
         Animated.timing(v, { toValue: 1, duration: FLY_IN_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
         Animated.delay(HOLD_MS),
         Animated.timing(v, { toValue: 2, duration: FLY_OUT_MS, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+        Animated.delay(tailWait),
       ])
     );
     loop.start();

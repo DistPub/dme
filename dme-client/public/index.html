@@ -35,6 +35,25 @@
       @keyframes dme-spin {
         to { transform: rotate(360deg); }
       }
+      @keyframes dme-fly {
+        0%   { transform: translateX(44px); opacity: 0; }
+        14%  { opacity: 1; }
+        40%  { transform: translateX(0); opacity: 1; }
+        56%  { transform: translateX(0); opacity: 1; }
+        86%  { transform: translateX(-44px); opacity: 0; }
+        100% { transform: translateX(-44px); opacity: 0; }
+      }
+      .dme-slogan {
+        margin-top: 20px;
+        color: #8E8E93;
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .dme-slogan span {
+        display: inline-block;
+        animation: dme-fly 3.6s linear infinite;
+        will-change: transform, opacity;
+      }
     </style>
   </head>
 
@@ -64,6 +83,9 @@
           <circle cx="16" cy="16" r="14" fill="none" stroke="#007aff" stroke-width="4" opacity="0.2"></circle>
           <circle cx="16" cy="16" r="14" fill="none" stroke="#007aff" stroke-width="4" stroke-dasharray="80" stroke-dashoffset="60" stroke-linecap="round"></circle>
         </svg>
+        <div class="dme-slogan">
+          <span style="animation-delay:0s">大</span><span style="animation-delay:.3s">隐</span><span style="animation-delay:.6s">隐</span><span style="animation-delay:.9s">于</span><span style="animation-delay:1.2s">市</span>
+        </div>
       </div>
     </div>
   </body>

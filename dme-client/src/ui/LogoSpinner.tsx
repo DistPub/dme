@@ -1,16 +1,52 @@
 /**
- * ui/LogoSpinner.tsx - Shared loading indicator (logo + spinner).
+ * ui/LogoSpinner.tsx - Shared loading indicator (logo + spinner + slogan).
  *
  * Pure presentational component used by App.tsx (session restore) and
  * SetupScreen.tsx (identity key check). Provides its own inner layout
  * only; callers supply the full-screen / centered container.
  */
 
-import React from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { ActivityIndicator, Animated, Easing, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 
 import { theme } from './theme';
+
+const SLOGAN_CHARS = ['大', '隐', '隐', '于', '市'];
+const FLY_OFFSET = 44;
+const CYCLE_MS = 3600;
+const STAGGER_MS = 300;
+const FLY_IN_MS = 800;
+const HOLD_MS = 500;
+const FLY_OUT_MS = 800;
+const FLY_TOTAL_MS = FLY_IN_MS + HOLD_MS + FLY_OUT_MS; // 2100
+
+function SloganChar({ char, index }: { char: string; index: number }): React.JSX.Element {
+  const v = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const lead = CYCLE_MS - FLY_TOTAL_MS - index * STAGGER_MS;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(lead),
+        Animated.timing(v, { toValue: 1, duration: FLY_IN_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.delay(HOLD_MS),
+        Animated.timing(v, { toValue: 2, duration: FLY_OUT_MS, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [index, v]);
+
+  const translateX = v.interpolate({ inputRange: [0, 1, 2], outputRange: [FLY_OFFSET, 0, -FLY_OFFSET] });
+  const opacity = v.interpolate({ inputRange: [0, 0.35, 1.6, 2], outputRange: [0, 1, 1, 0] });
+
+  return (
+    <Animated.Text style={[styles.sloganChar, { opacity, transform: [{ translateX }] }]}>
+      {char}
+    </Animated.Text>
+  );
+}
 
 export function LogoSpinner(): React.JSX.Element {
   return (
@@ -21,17 +57,32 @@ export function LogoSpinner(): React.JSX.Element {
         contentFit="contain"
       />
       <ActivityIndicator size="small" color={theme.colors.accent} />
+      <View style={styles.slogan}>
+        {SLOGAN_CHARS.map((c, i) => (
+          <SloganChar key={`${c}-${i}`} char={c} index={i} />
+        ))}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flexDirection: 'column',
     alignItems: 'center',
   },
   logo: {
     width: 96,
     height: 96,
     marginBottom: theme.spacing.md,
+  },
+  slogan: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  sloganChar: {
+    fontSize: theme.typography.caption,
+    color: theme.colors.textSecondary,
   },
 });

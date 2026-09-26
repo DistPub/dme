@@ -12,7 +12,7 @@ import { Image } from 'expo-image';
 
 import { theme } from './theme';
 
-const SLOGAN_CHARS = ['大', '隐', '隐', '于', '市'];
+const SLOGAN_CHARS = ['大', '隐', '隐', '于', '世'];
 const FLY_OFFSET = 44;
 const CYCLE_MS = 5000;
 const STAGGER_MS = 300;

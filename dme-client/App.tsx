@@ -21,13 +21,13 @@ import {
   createNavigationContainerRef,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Platform, StyleSheet, View, ActivityIndicator } from 'react-native';
-import { Image } from 'expo-image';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { AppProvider, useApp } from './src/state/AppContext';
 import { I18nProvider, useI18n } from './src/i18n/I18nContext';
 import { theme } from './src/ui/theme';
 import { FontProvider } from './src/ui/FontProvider';
+import { LogoSpinner } from './src/ui/LogoSpinner';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { SetupScreen } from './src/ui/SetupScreen';
 import { ChatListScreen } from './src/ui/ChatListScreen';
@@ -141,12 +141,7 @@ function NavigationRoot(): React.JSX.Element {
   if (!isReady) {
     return (
       <View style={styles.loading}>
-        <Image
-          source={require('./assets/images/logo.png')}
-          style={styles.logo}
-          contentFit="contain"
-        />
-        <ActivityIndicator size="small" color={theme.colors.accent} />
+        <LogoSpinner />
       </View>
     );
   }
@@ -226,10 +221,5 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  logo: {
-    width: 96,
-    height: 96,
-    marginBottom: theme.spacing.md,
   },
 });

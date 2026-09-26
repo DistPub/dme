@@ -12,13 +12,13 @@
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, View, TextInput, ActivityIndicator } from 'react-native';
-import { Image } from 'expo-image';
+import { Platform, ScrollView, StyleSheet, Text, View, TextInput } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
 import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
+import { LogoSpinner } from './LogoSpinner';
 import { useApp } from '../state/AppContext';
 import { useI18n } from '../i18n/I18nContext';
 import { requestPlcSignature, getDidMethod, generateDidWebUpdate, getRemoteEncryptionKey, type DidWebEntry } from '../atproto/did';
@@ -203,18 +203,11 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
       <ScreenBackground />
 
       <View style={styles.content}>
-        <Text style={styles.title}>{t('setup.title')}</Text>
-
-        {step === 'checking' && (
-          <>
-            <Image
-              source={require('../../assets/images/logo.png')}
-              style={styles.logo}
-              contentFit="contain"
-            />
-            <ActivityIndicator size="large" color={theme.colors.accent} />
-          </>
+        {step !== 'checking' && (
+          <Text style={styles.title}>{t('setup.title')}</Text>
         )}
+
+        {step === 'checking' && <LogoSpinner />}
 
         {step === 'publish' && (
           <Button
@@ -401,12 +394,6 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: theme.typography.heading,
     fontWeight: '700',
-    marginBottom: theme.spacing.md,
-  },
-  logo: {
-    width: 96,
-    height: 96,
-    marginBottom: theme.spacing.md,
   },
   statusText: {
     color: theme.colors.textSecondary,

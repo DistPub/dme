@@ -397,7 +397,7 @@ Web 端浏览器标签标题统一为 `"<页面标题> - DME"`，由 `src/utils/
 # dme-client
 cd dme-client && bun install && bun run dev          # expo start
 cd dme-client && bun run web                          # web only
-cd dme-client && bun run build:web                    # expo export -p web（产物 dist/，用于 Cloudflare Pages 等静态托管）
+cd dme-client && bun run build:web                    # expo export -p web && workbox generateSW（产物 dist/ 含 sw.js/manifest.json/icons，离线 PWA）
 
 # dme-server
 cd dme-server && go run main.go --addr :8080 --db ./dme.db --jetstream wss://jetstream2.fr.hose.cam
@@ -443,7 +443,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本/文件消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
 - **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
 - **expo-document-picker**: 新增依赖 `expo-document-picker@~57.0.1`（Expo 52 兼容），用于文件选择（`getDocumentAsync({type: '*/*'})`），返回 `{uri, name, mimeType, size}`
-- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web`）产物 `dist/` 静态托管；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`；`index.web.js` 用**同步 `require('./App')`**（延迟到 CanvasKit 就绪后执行），`LoadSkiaWeb({ locateFile: (file) => `/${file}` })` 用**绝对路径** `/`；禁止改回动态 `import('./App')`（会产生 async chunk，需 `@expo/metro-runtime` 的 `__loadBundleAsync`，而手写 `public/index.html` 不会注入该运行时，导致 `Requiring unknown module` 报错）
+- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/canvaskit.wasm/字体/图标，离线可启动）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`，并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 dme-client/scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`**（延迟到 CanvasKit 就绪后执行），`LoadSkiaWeb({ locateFile: (file) => `/${file}` })` 用**绝对路径** `/`；禁止改回动态 `import('./App')`（会产生 async chunk，需 `@expo/metro-runtime` 的 `__loadBundleAsync`，而手写 `public/index.html` 不会注入该运行时，导致 `Requiring unknown module` 报错）
 - **iOS 16 Safari 兼容**: ts-mls `nobleCryptoProvider` 的 HKDF 仍走 @hpke WebCrypto（`crypto.subtle.importKey` 在 iOS16 返回 undefined 崩溃），故所有取 CiphersuiteImpl 处改用 `getNobleMlsImpl()`（纯 JS `nobleHkdfSha256`，`@noble/hashes`）；`deriveMessageQueueId` 内部自行取 impl（不再收 impl 参数）；`getMlsImpl` 已无引用保留
 - **CI Release**: `.github/workflows/release.yml` 交叉编译 6 目标（linux amd64/arm64/armv7、darwin amd64/arm64、windows amd64），`CGO_ENABLED=0`，已移除 `docker/setup-qemu-action`（Go 纯 Go 交叉编译无需 QEMU），Build/Verify 步骤显式 `shell: bash`（Windows runner 默认 pwsh 不支持此处语法）；打 `v*` tag 触发 `go build -ldflags="-s -w -X main.version=<tag>"` 并发布 GitHub Release
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径

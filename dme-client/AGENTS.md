@@ -20,6 +20,8 @@ dme-client/
 ├── tsconfig.json         # extends expo/tsconfig.base, strict:true
 ├── app.json              # scheme:dme, dark, 3 平台
 ├── metro.config.js       # unstable_enablePackageExports（@atproto/identity 需要）
+├── scripts/generate-brand-assets.py  # 生成 public/icons/（192/512/maskable/180/favicon）
+├── public/               # _headers + index.html + manifest.json + icons/（sw.js 构建时生成，不入库）
 └── src/
     ├── config.ts         # PDS_URL, DME_SERVER_URL, PLC_DIRECTORY_URL, 轮询间隔
     ├── crypto/           # MLS 加密模块（见 crypto/AGENTS.md）
@@ -151,4 +153,4 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **进度百分比**: 上传/下载均为字节级。上传走 XHR `upload.onprogress`（fetch 无上传进度）；下载走 `response.body.getReader()`，总量来自 `blobCids[].size`（不依赖 content-length）；进度只在整数百分比变化时写 storage + 递增 chatListVersion；进行中上限 99%，完成后清空
 - **中断传输重置**: `restoreSession` 启动时把 `downloadStatus:'downloading'` 重置为 `'pending'`（清 downloadProgress）、`uploadStatus:'uploading'` 重置为 `'failed'`，避免刷新/杀进程后消息永远转圈
 - **Web 上传数据源**: web 端上传/重试从 IndexedDB 读原始字节（`getCachedFileBytes(fileId)`），native 端从本地副本 `FileSystem.readAsStringAsync`（position/length 分段）；禁止用 document picker 的原始 fileUri 做上传数据源（刷新/重试后可能失效）
-- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web`）产物 `dist/` 静态托管；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`；`index.web.js` 用**同步 `require('./App')`**（延迟到 CanvasKit 就绪后执行），`LoadSkiaWeb({ locateFile: (file) => `/${file}` })` 用**绝对路径** `/`；禁止改回动态 `import('./App')`（会产生 async chunk，需 `@expo/metro-runtime` 的 `__loadBundleAsync`，而手写 `public/index.html` 不会注入该运行时，导致 `Requiring unknown module` 报错）
+- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/canvaskit.wasm/字体/图标，离线可启动）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`，并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`**（延迟到 CanvasKit 就绪后执行），`LoadSkiaWeb({ locateFile: (file) => `/${file}` })` 用**绝对路径** `/`；禁止改回动态 `import('./App')`（会产生 async chunk，需 `@expo/metro-runtime` 的 `__loadBundleAsync`，而手写 `public/index.html` 不会注入该运行时，导致 `Requiring unknown module` 报错）

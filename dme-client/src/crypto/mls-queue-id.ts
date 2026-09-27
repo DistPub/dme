@@ -13,13 +13,13 @@
 
 import { mlsExporter, type CiphersuiteImpl } from 'ts-mls';
 import { sha256 } from '@noble/hashes/sha256';
-
+import { getNobleMlsImpl } from './mls-noble-kdf';
+import { bytesToBase64url, bytesToHex } from './utils';
 import {
   MESSAGE_QUEUEID_LABEL,
   QUEUEID_LENGTH,
   WELCOME_QUEUEID_LABEL,
 } from './mls-config';
-import { bytesToBase64url, bytesToHex } from './utils';
 
 /**
  * Derive the Welcome queueId from a KeyPackage initKey.
@@ -53,12 +53,12 @@ export async function deriveMessageQueueId(
   exporterSecret: Uint8Array,
   senderLeafIndex: number,
   generation: number,
-  impl: CiphersuiteImpl,
 ): Promise<string> {
   const context = new Uint8Array(8);
   const view = new DataView(context.buffer);
   view.setUint32(0, senderLeafIndex);
   view.setUint32(4, generation);
+  const impl = await getNobleMlsImpl();
   const derived = await mlsExporter(
     exporterSecret,
     MESSAGE_QUEUEID_LABEL,

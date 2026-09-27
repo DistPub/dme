@@ -29,7 +29,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { utf8ToBytes } from '@noble/hashes/utils';
 
 import { createDidCredential } from './mls-credential';
-import { getMlsImpl } from './mls-config';
+import { getNobleMlsImpl } from './mls-noble-kdf';
 
 /** X25519 public key length. */
 const X25519_KEY_LENGTH = 32;
@@ -68,7 +68,7 @@ export async function generateKeyPackageForUser(
   signingPrivateKey: Uint8Array,
   signingPublicKey: Uint8Array,
 ): Promise<KeyPackagePair> {
-  const impl = await getMlsImpl();
+  const impl = await getNobleMlsImpl();
   const credential = createDidCredential(did);
   return generateKeyPackageWithKey(
     credential,

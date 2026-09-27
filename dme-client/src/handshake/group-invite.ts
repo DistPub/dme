@@ -28,7 +28,7 @@ import type {
 import type { MlsSession } from '../crypto/mls-session';
 import type { IdentityKeys } from '../crypto/identity';
 import { createDidCredential } from '../crypto/mls-credential';
-import { getMlsImpl } from '../crypto/mls-config';
+import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import {
   generateKeyPackageForUser,
   encryptKeyPackage,
@@ -235,7 +235,7 @@ export async function createGroupWithMembers(params: {
 }> {
   const { MlsSession } = await import('../crypto/mls-session');
 
-  const impl = await getMlsImpl();
+  const impl = await getNobleMlsImpl();
   const ownerCredential = createDidCredential(params.ownerDid);
   const ownerKeyPackagePair = await generateKeyPackageForUser(
     params.ownerDid,

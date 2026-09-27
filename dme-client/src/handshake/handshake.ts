@@ -24,7 +24,7 @@ import type { IdentityKeys } from '../crypto/identity';
 import { MlsSession } from '../crypto/mls-session';
 import { createDidCredential } from '../crypto/mls-credential';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
-import { getMlsImpl } from '../crypto/mls-config';
+import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import {
   generateKeyPackageForUser,
   encryptKeyPackage,
@@ -122,7 +122,7 @@ export async function acceptInvite(
     bobIdentityKeys.signing.publicKey,
   );
 
-  const impl = await getMlsImpl();
+  const impl = await getNobleMlsImpl();
   const bobCredential = createDidCredential(bobDid);
   const mlsSession = await MlsSession.createAsFounder(
     bobCredential,
@@ -180,7 +180,7 @@ export async function processWelcome(
   }
 
   const welcome: Welcome = msg.welcome;
-  const impl = await getMlsImpl();
+  const impl = await getNobleMlsImpl();
   const mlsSession = await MlsSession.joinViaWelcome(
     welcome,
     { publicPackage: aliceKeyPackagePublic, privatePackage: aliceKeyPackagePrivate },

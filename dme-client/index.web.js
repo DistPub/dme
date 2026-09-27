@@ -25,7 +25,7 @@ console.error = (...args) => {
 import { LoadSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
 import { registerRootComponent } from 'expo';
 
-LoadSkiaWeb({ locateFile: (file) => `/${file}` })
+LoadSkiaWeb({ locateFile: (file) => `./${file}` })
   .then(() => import('./App'))
   .then(({ default: App }) => {
     registerRootComponent(App);

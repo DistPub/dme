@@ -28,6 +28,7 @@ import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { useI18n } from '../i18n/I18nContext';
+import { unlockWebAudio } from '../utils/sound';
 import {
   getProfileCached,
   getProfilesCached,
@@ -543,7 +544,7 @@ const resolveProfiles = useCallback(async (
           onOpen={() => setOpenGroupId(item.groupId)}
           onClose={() => setOpenGroupId((prev) => (prev === item.groupId ? null : prev))}
           onDelete={() => app.deleteFriend(item.groupId)}
-          onTap={() => navigateToChat(item.groupId, item.isGroup)}
+          onTap={() => { unlockWebAudio(); navigateToChat(item.groupId, item.isGroup); }}
           renderRightActions={renderRightActions}
         >
           <View style={styles.row}>

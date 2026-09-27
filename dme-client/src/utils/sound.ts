@@ -1,9 +1,13 @@
 /**
  * utils/sound.ts - Message notification sound ("嘀嘀嘀").
  *
- * Generates a short 3-beep WAV at runtime and plays it.
- * Web: Web Audio API oscillator (no file needed).
- * Native: writes WAV to temp file, plays via expo-av.
+ * Uses HTML5 <audio> element for iOS Safari compatibility.
+ * Web Audio API is too strict on iOS autoplay policy.
+ *
+ * Strategy:
+ * 1. Pre-create <audio> element with a short beep sound (data URI)
+ * 2. On FIRST user gesture (click/touch), play once to unlock
+ * 3. Subsequent plays just reset currentTime and play()
  */
 
 import { Platform } from 'react-native';
@@ -20,7 +24,7 @@ const BEEP_COUNT = 3;
 const SAMPLE_RATE = 22050;
 
 // ---------------------------------------------------------------------------
-// WAV generation
+// WAV generation (for native expo-av)
 // ---------------------------------------------------------------------------
 
 function writeString(view: DataView, offset: number, str: string): void {
@@ -29,7 +33,6 @@ function writeString(view: DataView, offset: number, str: string): void {
   }
 }
 
-/** Generate a 3-beep WAV file as a base64 string. */
 export function generateBeepWavBase64(): string {
   const totalDuration = BEEP_COUNT * (BEEP_DURATION + BEEP_GAP) - BEEP_GAP;
   const numSamples = Math.floor(SAMPLE_RATE * totalDuration);
@@ -43,17 +46,16 @@ export function generateBeepWavBase64(): string {
   view.setUint32(4, 36 + dataSize, true);
   writeString(view, 8, 'WAVE');
   writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true); // PCM chunk size
-  view.setUint16(20, 1, true); // audio format (PCM)
-  view.setUint16(22, 1, true); // mono
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
   view.setUint32(24, SAMPLE_RATE, true);
-  view.setUint32(28, SAMPLE_RATE * 2, true); // byte rate
-  view.setUint16(32, 2, true); // block align
-  view.setUint16(34, 16, true); // bits per sample
+  view.setUint32(28, SAMPLE_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
   writeString(view, 36, 'data');
   view.setUint32(40, dataSize, true);
 
-  // Generate samples
   let offset = 44;
   const beepPeriod = BEEP_DURATION + BEEP_GAP;
   for (let i = 0; i < numSamples; i++) {
@@ -63,7 +65,6 @@ export function generateBeepWavBase64(): string {
 
     let sample = 0;
     if (offsetInBeep < BEEP_DURATION && beepIndex < BEEP_COUNT) {
-      // Exponential attack/decay envelope for clean "ding"
       const attack = Math.min(1, offsetInBeep * 60);
       const decay = Math.min(1, (BEEP_DURATION - offsetInBeep) * 60);
       const envelope = attack * decay;
@@ -74,7 +75,6 @@ export function generateBeepWavBase64(): string {
     offset += 2;
   }
 
-  // Convert to base64
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]!);
@@ -101,73 +101,102 @@ async function getWavUri(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Playback
+// Web: HTML5 <audio> element (iOS Safari friendly)
 // ---------------------------------------------------------------------------
 
-let webAudioCtx: AudioContext | null = null;
+let webAudioEl: HTMLAudioElement | null = null;
+let webAudioUnlocked = false;
 let nativeSound: any = null;
+
+function generateSilentDataUri(): string {
+  const bytes = new Uint8Array(46);
+  const view = new DataView(bytes.buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 38, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 22050, true);
+  view.setUint32(28, 44100, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, 2, true);
+  view.setUint16(44, 0, true);
+
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+function generateBeepDataUri(): string {
+  const base64 = generateBeepWavBase64();
+  return `data:audio/wav;base64,${base64}`;
+}
+
+function getWebAudioElement(): HTMLAudioElement {
+  if (!webAudioEl && typeof window !== 'undefined') {
+    webAudioEl = new Audio();
+    webAudioEl.preload = 'auto';
+    webAudioEl.src = generateBeepDataUri();
+    webAudioEl.load();
+  }
+  return webAudioEl!;
+}
+
+function getSilentAudioElement(): HTMLAudioElement {
+  const audio = new Audio();
+  audio.preload = 'auto';
+  audio.src = generateSilentDataUri();
+  audio.load();
+  return audio;
+}
+
+export function unlockWebAudio(): void {
+  if (webAudioUnlocked) return;
+  const audio = getSilentAudioElement();
+
+  try {
+    const playPromise = audio.play();
+    if (playPromise) {
+      playPromise.then(() => {
+        webAudioUnlocked = true;
+      }).catch((e) => {
+        console.warn('unlockWebAudio: play failed', e);
+      });
+    }
+  } catch (e) {
+    console.warn('unlockWebAudio: failed', e);
+  }
+}
 
 /**
  * Play the "嘀嘀嘀" notification sound.
- * Call this when a new message arrives and the sound should be heard.
  */
 export async function playMessageSound(): Promise<void> {
   if (Platform.OS === 'web') {
-    playWeb();
+    await playWeb();
   } else {
     await playNative();
   }
 }
 
-function playWeb(): void {
+async function playWeb(): Promise<void> {
   try {
-    const AudioContextClass =
-      (window as unknown as { AudioContext?: typeof AudioContext }).AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const audio = getWebAudioElement();
 
-    if (!AudioContextClass) {
-      console.error('playMessageSound: Web Audio API not supported');
+    if (!webAudioUnlocked) {
+      console.warn('playWeb: not unlocked yet, cannot play');
       return;
     }
 
-    // Close any previous context
-    if (webAudioCtx) {
-      try {
-        webAudioCtx.close();
-      } catch {
-        /* already closed */
-      }
-    }
-    webAudioCtx = new AudioContextClass();
-    const ctx = webAudioCtx;
-
-    for (let i = 0; i < BEEP_COUNT; i++) {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.frequency.value = BEEP_FREQUENCY;
-      osc.type = 'sine';
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      const start = ctx.currentTime + i * (BEEP_DURATION + BEEP_GAP);
-      const end = start + BEEP_DURATION;
-      osc.start(start);
-      osc.stop(end);
-      gain.gain.setValueAtTime(0.3, start);
-      gain.gain.exponentialRampToValueAtTime(0.001, end);
-    }
-
-    // Clean up after playback
-    setTimeout(() => {
-      if (webAudioCtx) {
-        try {
-          webAudioCtx.close();
-        } catch {
-          /* already closed */
-        }
-        webAudioCtx = null;
-      }
-    }, 1000);
+    audio.currentTime = 0;
+    await audio.play();
   } catch (err) {
     console.error('playMessageSound (web):', err);
   }
@@ -177,7 +206,6 @@ async function playNative(): Promise<void> {
   try {
     const { Audio } = await import('expo-av');
 
-    // Unload previous sound
     if (nativeSound) {
       try {
         await nativeSound.unloadAsync();

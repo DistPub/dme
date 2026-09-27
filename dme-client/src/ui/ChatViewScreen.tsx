@@ -631,6 +631,7 @@ export function ChatViewScreen(): React.JSX.Element {
         inverted={true}
         onEndReached={loadOlderMessages}
         onEndReachedThreshold={0.3}
+        keyboardShouldPersistTaps="handled"
       />
 
       {dissolved || removed || left ? (
@@ -654,7 +655,8 @@ export function ChatViewScreen(): React.JSX.Element {
             autoCapitalize="none"
             autoCorrect={false}
             onSubmitEditing={onSend}
-            returnKeyType="send"
+            returnKeyType="default"
+            blurOnSubmit={false}
           />
           <Button
             label={sending ? '…' : t('chatview.send')}

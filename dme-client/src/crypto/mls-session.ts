@@ -171,7 +171,6 @@ export class MlsSession {
       this.state.keySchedule.exporterSecret,
       this.senderLeafIndex,
       generation,
-      this.impl,
     );
     console.log('MlsSession.encrypt: queueId', queueId, 'members', this.getMemberDids());
     const ciphertext = encodeMlsMessage({

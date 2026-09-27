@@ -31,7 +31,8 @@ import type { PendingWelcome, KeyPackagePoolEntry, StoredMessage } from '../stor
 import { generateIdentityKeys } from '../crypto/identity';
 import type { IdentityKeys } from '../crypto/identity';
 import { MlsSession } from '../crypto/mls-session';
-import { getMlsImpl, KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
+import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
+import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
   generateKeyPackageForUser,
   encryptKeyPackage,
@@ -459,7 +460,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       // Restore MLS sessions
       const groupIds = await correctStorage.listGroups();
-      const impl = await getMlsImpl();
+      const impl = await getNobleMlsImpl();
       for (const gid of groupIds) {
         const serialized = await correctStorage.getMlsSession(gid);
         if (serialized) {
@@ -548,6 +549,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const restoreSession = useCallback(async (): Promise<boolean> => {
     setLoading(true);
     setError(null);
+
+    // Request persistent storage on iOS Safari to prevent IndexedDB eviction
+    if (Platform.OS === 'web' && 'storage' in navigator && 'persist' in navigator.storage) {
+      try {
+        await navigator.storage.persist();
+      } catch {
+        // Ignore - not supported or user denied
+      }
+    }
+
     try {
       const keys = await AsyncStorage.getAllKeys();
       const sessionKeys = keys.filter(
@@ -591,7 +602,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         // Restore MLS sessions
         const groupIds = await tempStorage.listGroups();
-        const impl = await getMlsImpl();
+        const impl = await getNobleMlsImpl();
         for (const gid of groupIds) {
           const serialized = await tempStorage.getMlsSession(gid);
           if (serialized) {
@@ -741,7 +752,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     for (const [groupId, serialized] of Object.entries(data.mlsSessions)) {
       await storage.putMlsSession(groupId, serialized);
       try {
-        const impl = await getMlsImpl();
+        const impl = await getNobleMlsImpl();
         const mlsSession = await MlsSession.deserialize(serialized, impl);
         poller.addSession(groupId, mlsSession);
       } catch (err) {
@@ -1117,7 +1128,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             sent: false,
             kind: 'group_invite',
           });
-          if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+          const shouldPlay = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
+          if (shouldPlay) {
             void playMessageSound();
           }
           break;
@@ -1167,7 +1179,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
                 const { decodeMlsMessage } = await import('ts-mls');
                 const { MlsSession } = await import('../crypto/mls-session');
-                const impl = await getMlsImpl();
+                const impl = await getNobleMlsImpl();
                 const welcomeBytes = base64urlToBytes(welcome.welcomePayload);
                 const decoded = decodeMlsMessage(welcomeBytes, 0);
                 if (!decoded) throw new Error('failed to decode welcome');
@@ -1387,7 +1399,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             kind: 'text',
             conversationId: msg.groupId,
           });
-          if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+          const shouldPlay = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
+          if (shouldPlay) {
             void playMessageSound();
           }
       }
@@ -1434,7 +1447,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         });
       }
 
-      if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+const shouldPlayFile = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
+          if (shouldPlayFile) {
         void playMessageSound();
       }
     } else {
@@ -1448,7 +1462,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         kind: 'text',
         conversationId: msg.groupId,
       });
-      if (soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)) {
+const shouldPlayText = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
+          if (shouldPlayText) {
         void playMessageSound();
       }
     }

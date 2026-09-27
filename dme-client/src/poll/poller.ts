@@ -20,7 +20,7 @@ import type { DmePds } from '../atproto/pds';
 import type { DmeStorage, PendingWelcome } from '../storage/db';
 import type { MlsSession } from '../crypto/mls-session';
 import { deriveMessageQueueId } from '../crypto/mls-queue-id';
-import { getMlsImpl } from '../crypto/mls-config';
+import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { base64urlToBytes } from '../crypto/utils';
 
 /** Minimum polling interval in ms (randomized to avoid traffic analysis). */
@@ -116,7 +116,7 @@ export class DmePoller {
     const allQueueIds: string[] = [];
     const queueIdToContext = new Map<string, QueueContext>();
 
-    const impl = await getMlsImpl();
+    const impl = await getNobleMlsImpl();
 
     // 1. Collect queueIds for active MLS conversations.
     //    memberDids[i] has LeafIndex i (NOT tree position i*2).
@@ -143,7 +143,6 @@ export class DmePoller {
               exporterSecret,
               i,
               generation,
-              impl,
             );
             console.log('DmePoller: batch queueId', queueId, 'for leafIndex', i, 'gen', generation);
             allQueueIds.push(queueId);

@@ -255,6 +255,10 @@ export const zh: Record<string, string> = {
   'post.addFriendLine1': '@{handle} 扫描下方二维码，通过隐世建立端到端加密对话。',
   'post.hashtag': '#DME #隐世 #加密通信',
   'post.qrAlt': '隐世加密通信二维码',
+
+  // embed
+  'embed.mismatchTitle': '无法自动集成',
+  'embed.mismatchBody': '检测到 DME 已登录账号与当前 Fatesky 账号不匹配。为保护现有数据，已停止自动集成。请先在独立打开的 DME 中退出该账号，或在 Fatesky 中切换为同一账号后重试。',
 };
 
 export const en: Record<string, string> = {
@@ -507,4 +511,8 @@ export const en: Record<string, string> = {
   'post.addFriendLine1': '@{handle} scan the QR code below to establish an end-to-end encrypted conversation via DME.',
   'post.hashtag': '#DME #E2EE',
   'post.qrAlt': 'DME encrypted communication QR code',
+
+  // embed
+  'embed.mismatchTitle': 'Integration unavailable',
+  'embed.mismatchBody': 'The DME account signed in here does not match your current Fatesky account. To protect your existing data, automatic integration has stopped. Please sign out of that account in the standalone DME app, or switch Fatesky to the same account and retry.',
 };

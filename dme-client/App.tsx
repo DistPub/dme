@@ -21,10 +21,12 @@ import {
   createNavigationContainerRef,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { AppProvider, useApp } from './src/state/AppContext';
 import { I18nProvider, useI18n } from './src/i18n/I18nContext';
+import { isEmbedContext } from './src/embed/protocol';
+import { sendReady } from './src/embed/bridge';
 import { theme } from './src/ui/theme';
 import { FontProvider } from './src/ui/FontProvider';
 import { LogoSpinner } from './src/ui/LogoSpinner';
@@ -61,12 +63,28 @@ const SCREEN_MANAGED_TITLES: ReadonlySet<keyof RootStackParamList> = new Set([
   'DmSettings',
 ]);
 
+/**
+ * Resolve the initial route from session-restore outcome and the optional
+ * `?goto=` query param (standalone web only).
+ */
+function computeGotoRoute(restored: boolean): keyof RootStackParamList {
+  if (!restored) return 'Login';
+  const gotoParam = Platform.OS === 'web'
+    ? new URLSearchParams(window.location.search).get('goto')
+    : null;
+  if (gotoParam === 'QrDisplay' || gotoParam === 'QrScan' || gotoParam === 'ChatList') {
+    return gotoParam;
+  }
+  return 'Setup';
+}
+
 function NavigationRoot(): React.JSX.Element {
   const app = useApp();
   const { t } = useI18n();
   const [isReady, setIsReady] = useState(false);
   const [initialRoute, setInitialRoute] = useState<keyof RootStackParamList>('Login');
   const prevSessionRef = useRef(app.session);
+  const restoredRef = useRef(false);
 
   // Keep latest t in a ref so onStateChange doesn't capture a stale closure.
   const tRef = useRef(t);
@@ -92,19 +110,12 @@ function NavigationRoot(): React.JSX.Element {
 
     async function init(): Promise<void> {
       const restored = await app.restoreSession();
-      if (!cancelled) {
-        let route: keyof RootStackParamList = 'Login';
-        if (restored) {
-          const gotoParam = Platform.OS === 'web'
-            ? new URLSearchParams(window.location.search).get('goto')
-            : null;
-          if (gotoParam === 'QrDisplay' || gotoParam === 'QrScan' || gotoParam === 'ChatList') {
-            route = gotoParam;
-          } else {
-            route = 'Setup';
-          }
-        }
-        setInitialRoute(route);
+      restoredRef.current = restored;
+      if (cancelled) return;
+      if (isEmbedContext()) {
+        sendReady();
+      } else {
+        setInitialRoute(computeGotoRoute(restored));
         setIsReady(true);
       }
     }
@@ -115,6 +126,34 @@ function NavigationRoot(): React.JSX.Element {
       cancelled = true;
     };
   }, []);
+
+  // Embed: readiness is decided by the token outcome (or the timeout below).
+  useEffect(() => {
+    if (!isEmbedContext()) return;
+    if (app.embedMismatch) { setIsReady(true); return; }
+    if (app.embedTokenApplied && app.session) {
+      setInitialRoute('Setup');
+      setIsReady(true);
+    }
+  }, [app.embedTokenApplied, app.embedMismatch, app.session]);
+
+  // Embed: fall back to the standalone entry route if no token arrives in time.
+  useEffect(() => {
+    if (!isEmbedContext()) return;
+    const id = setTimeout(() => {
+      setIsReady(prev => { if (prev) return prev; setInitialRoute(computeGotoRoute(restoredRef.current)); return true; });
+    }, 8000);
+    return () => clearTimeout(id);
+  }, []);
+
+  // Embed: a token applied after the app already mounted on Login still routes
+  // forward to Setup. A mismatch is intentionally a no-op (the prompt stands).
+  useEffect(() => {
+    if (!isEmbedContext() || app.embedMismatch || !app.embedTokenApplied) return;
+    if (navigationRef.isReady() && navigationRef.getCurrentRoute()?.name === 'Login') {
+      navigationRef.navigate('Setup');
+    }
+  }, [app.embedTokenApplied, app.embedMismatch]);
 
   useEffect(() => {
     const hadSession = prevSessionRef.current !== null;
@@ -138,6 +177,15 @@ function NavigationRoot(): React.JSX.Element {
 
     prevSessionRef.current = app.session;
   }, [app.session]);
+
+  if (isEmbedContext() && app.embedMismatch) {
+    return (
+      <View style={styles.mismatchContainer}>
+        <Text style={styles.mismatchTitle}>{t('embed.mismatchTitle')}</Text>
+        <Text style={styles.mismatchBody}>{t('embed.mismatchBody')}</Text>
+      </View>
+    );
+  }
 
   if (!isReady) {
     return (
@@ -224,5 +272,27 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  mismatchContainer: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  mismatchTitle: {
+    maxWidth: 480,
+    color: theme.colors.textPrimary,
+    fontSize: 20,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  mismatchBody: {
+    maxWidth: 480,
+    color: theme.colors.textSecondary,
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
   },
 });

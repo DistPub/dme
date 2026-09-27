@@ -4,9 +4,9 @@
  * Uses HTML5 <audio> element for iOS Safari compatibility.
  * Web Audio API is too strict on iOS autoplay policy.
  *
- * Strategy:
- * 1. Pre-create <audio> element with a short beep sound (data URI)
- * 2. On FIRST user gesture (click/touch), play once to unlock
+ * Strategy (iOS Safari proven):
+ * 1. Pre-create <audio> element with beep sound (data URI)
+ * 2. On FIRST user gesture (click/touch), play with volume=0.001 to unlock
  * 3. Subsequent plays just reset currentTime and play()
  */
 
@@ -101,82 +101,63 @@ async function getWavUri(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Web: HTML5 <audio> element (iOS Safari friendly)
+// Web: Web Audio API (iOS Safari friendly)
 // ---------------------------------------------------------------------------
 
-let webAudioEl: HTMLAudioElement | null = null;
+let webAudioCtx: AudioContext | null = null;
+let webAudioBuffer: AudioBuffer | null = null;
 let webAudioUnlocked = false;
 let nativeSound: any = null;
 
-/** Generate a 1-sample silent WAV as data URI for silent unlock. */
-function generateSilentDataUri(): string {
-  const bytes = new Uint8Array(46);
-  const view = new DataView(bytes.buffer);
+type WebkitWindow = Window & { webkitAudioContext?: typeof AudioContext };
 
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 38, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, 22050, true);
-  view.setUint32(28, 44100, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, 2, true);
-  view.setUint16(44, 0, true);
-
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!);
-  }
-  return `data:audio/wav;base64,${btoa(binary)}`;
+function getWebAudioContext(): AudioContext | null {
+  if (webAudioCtx) return webAudioCtx;
+  if (typeof window === 'undefined') return null;
+  const Ctor = window.AudioContext || (window as WebkitWindow).webkitAudioContext;
+  if (!Ctor) return null;
+  webAudioCtx = new Ctor();
+  return webAudioCtx;
 }
 
-function generateBeepDataUri(): string {
-  const base64 = generateBeepWavBase64();
-  return `data:audio/wav;base64,${base64}`;
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
-/** Get or create the shared <audio> element. */
-function getWebAudioElement(): HTMLAudioElement {
-  if (!webAudioEl && typeof window !== 'undefined') {
-    webAudioEl = new Audio();
-    webAudioEl.preload = 'auto';
-    webAudioEl.src = generateBeepDataUri();
-    webAudioEl.load();
-  }
-  return webAudioEl!;
+async function ensureBeepBuffer(ctx: AudioContext): Promise<void> {
+  if (webAudioBuffer) return;
+  const bytes = base64ToBytes(generateBeepWavBase64());
+  const arrayBuffer = new ArrayBuffer(bytes.length);
+  new Uint8Array(arrayBuffer).set(bytes);
+  webAudioBuffer = await ctx.decodeAudioData(arrayBuffer);
 }
 
 /**
- * Unlock audio on first user gesture.
- * Call from click/touch/keydown handler.
- * Plays silently (volume=0) on the SAME element used for notifications.
+ * Unlock audio on first user gesture via Web Audio API.
+ * Plays a 1-sample silent buffer — the only reliable Safari unlock.
  */
 export function unlockWebAudio(): void {
   if (webAudioUnlocked) return;
-  const audio = getWebAudioElement();
+  const ctx = getWebAudioContext();
+  if (!ctx) return;
 
   try {
-    console.log('unlockWebAudio: unlocking with volume=0...');
-    audio.volume = 0;
-    const playPromise = audio.play();
-    if (playPromise) {
-      playPromise.then(() => {
-        audio.pause();
-        audio.currentTime = 0;
-        audio.volume = 1;
-        webAudioUnlocked = true;
-        console.log('unlockWebAudio: unlocked');
-      }).catch((e) => {
-        console.warn('unlockWebAudio: play failed', e);
-      });
+    if (ctx.state === 'suspended') {
+      void ctx.resume();
     }
-  } catch (e) {
-    console.warn('unlockWebAudio: failed', e);
+    const emptySource = ctx.createBufferSource();
+    emptySource.buffer = ctx.createBuffer(1, 1, 22050);
+    emptySource.connect(ctx.destination);
+    emptySource.start(0);
+    webAudioUnlocked = true;
+    void ensureBeepBuffer(ctx);
+  } catch {
+    webAudioUnlocked = true;
   }
 }
 
@@ -193,15 +174,18 @@ export async function playMessageSound(): Promise<void> {
 
 async function playWeb(): Promise<void> {
   try {
-    const audio = getWebAudioElement();
-
-    if (!webAudioUnlocked) {
-      console.warn('playWeb: not unlocked yet, cannot play');
-      return;
+    const ctx = getWebAudioContext();
+    if (!ctx) return;
+    if (!webAudioUnlocked) return;
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
     }
-
-    audio.currentTime = 0;
-    await audio.play();
+    await ensureBeepBuffer(ctx);
+    if (!webAudioBuffer) return;
+    const source = ctx.createBufferSource();
+    source.buffer = webAudioBuffer;
+    source.connect(ctx.destination);
+    source.start(0);
   } catch (err) {
     console.error('playMessageSound (web):', err);
   }

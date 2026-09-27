@@ -215,16 +215,20 @@ export function FileMessageBubble({
       const resolvingUri = downloadStatus === 'ready' && !resolvedUri;
       const showSpinner = downloadStatus === 'downloading' || resolvingUri;
       const showRetry = downloadStatus === 'failed';
-      const disabled = showSpinner || showRetry;
+      const showDownload = downloadStatus === 'pending';
+      const canPlay = downloadStatus === 'ready' && !!resolvedUri;
+      const playDisabled = !canPlay;
       return (
-        <TouchableOpacity
-          onPress={disabled ? undefined : handleAudioPress}
-          style={styles.audioCard}
-          activeOpacity={disabled ? 1 : 0.7}
-        >
-          <View style={[styles.audioPlayBtn, disabled && styles.audioPlayBtnDisabled]}>
-            <Text style={styles.audioPlayIcon}>{isPlayingAudio ? '⏸' : '▶'}</Text>
-          </View>
+        <View style={styles.audioCard}>
+          <TouchableOpacity
+            onPress={canPlay ? handleAudioPress : undefined}
+            disabled={playDisabled}
+            activeOpacity={playDisabled ? 1 : 0.7}
+          >
+            <View style={[styles.audioPlayBtn, playDisabled && styles.audioPlayBtnDisabled]}>
+              <Text style={styles.audioPlayIcon}>{isPlayingAudio ? '⏸' : '▶'}</Text>
+            </View>
+          </TouchableOpacity>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
             <Text style={styles.fileSize}>{formatFileSize(fileSize, t)}</Text>
@@ -239,10 +243,13 @@ export function FileMessageBubble({
               </Text>
             </>
           )}
+          {showDownload && onDownload && (
+            <Button label={t('bubble.download')} onPress={onDownload} variant="primary" style={styles.retryBtn} />
+          )}
           {showRetry && onRetry && (
             <Button label={t('common.retry')} onPress={onRetry} variant="primary" style={styles.retryBtn} />
           )}
-        </TouchableOpacity>
+        </View>
       );
     }
 

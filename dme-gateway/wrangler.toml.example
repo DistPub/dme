@@ -4,3 +4,6 @@ compatibility_date = "2024-12-01"
 
 [vars]
 DME_SERVER_URL = "http://localhost:8080"
+
+# 可选：请求头 `dme-server` 可动态覆盖目标 server 地址
+# 例如：curl -H "dme-server: https://dme.example.com" https://gateway.example.com/xrpc/dme.batch.get

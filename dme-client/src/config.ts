@@ -5,7 +5,7 @@ export const PDS_URL = 'https://network.hukoubook.com';
 export const DEFAULT_APPVIEW_PROXY = 'did:web:fatesky.hukoubook.com#fatesky_appview';
 
 /** DME server base URL (direct or via gateway, client doesn't distinguish). */
-export const DME_SERVER_URL = 'http://localhost:8080';
+export const DME_SERVER_URL = 'https://dme.mymutual.fans';
 
 /**
  * DME gateway (Cloudflare Worker) URL - 客户端面向的网关地址。

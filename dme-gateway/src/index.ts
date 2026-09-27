@@ -114,10 +114,23 @@ async function getBlob(url: URL, ctx: ExecutionContext): Promise<Response> {
   return response;
 }
 
+function getTargetServerUrl(request: Request, env: Env): string {
+  const headerUrl = request.headers.get('dme-server');
+  if (headerUrl) {
+    try {
+      new URL(headerUrl);
+      return headerUrl.replace(/\/$/, '');
+    } catch {
+    }
+  }
+  return env.DME_SERVER_URL;
+}
+
 async function proxy(request: Request, env: Env): Promise<Response> {
   const body = await request.arrayBuffer();
+  const targetUrl = getTargetServerUrl(request, env) + '/xrpc/dme.batch.get';
 
-  const serverResponse = await fetch(env.DME_SERVER_URL + '/xrpc/dme.batch.get', {
+  const serverResponse = await fetch(targetUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,

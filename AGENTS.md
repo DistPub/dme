@@ -7,8 +7,6 @@
 
 # DME 项目知识库
 
-**Generated:** 2026-08-15
-
 ## 概述
 
 DME (Decentralized Message Envelope) 是基于 AT Protocol (Bluesky) 的端到端加密私信系统。用户通过 Bluesky 账号登录，在 DID 文档中声明 X25519 + Ed25519 公钥，经 QR 码握手建立 MLS (RFC 9420) 加密会话，密文以 `dme.queue.envelope` 记录写入 PDS，经 Jetstream 被 server 消费索引，客户端轮询盲查获取消息。支持 1v1 和群组聊天。
@@ -95,7 +93,7 @@ dme/
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
-| 网关代理 | `dme-gateway/src/index.ts` |
+| 网关代理 | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN + `/xrpc/dme.batch.get` 反代，**支持 `dme-server` header 动态切目标**） |
 | 文件加密 | `dme-client/src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
 | 文件协议类型 | `dme-client/src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
 | 文件发送/下载/重试上传 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `retryUploadFileMessage` + `downloadFile`，字节级进度） |
@@ -103,7 +101,7 @@ dme/
 | 图片查看器 | `dme-client/src/ui/ImageViewerScreen.tsx`（全屏查看，点击关闭） |
 | Web 文件缓存 | `dme-client/src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
-| Gateway (blob CDN + batch 代理) | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN 缓存 + `/xrpc/dme.batch.get` 反代 dme-server，全局 OPTIONS 预检 + CORS） |
+| Gateway (blob CDN + batch 代理) | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN 缓存 + `/xrpc/dme.batch.get` 反代 dme-server，**支持 `dme-server` header 动态切目标**，全局 OPTIONS 预检 + CORS） |
 
 ## 关键代码符号
 
@@ -407,7 +405,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 ## 注意事项
 
 - **Lexicon key**: envelope 用 `"key": "tid"`（AT Protocol 自动生成时间戳 rkey）；backup 用 `"key": "literal"`（rkey 固定 `"self"`，putRecord upsert）
-- **Gateway**: Cloudflare Worker，职责 `/xrpc/dme.file.blob`（blob CDN：流式转发 PDS `com.atproto.sync.getBlob`，15s 上游超时（AbortController，失败返回 504），≤100MB 才写 `caches.default` 7 天缓存且经 `ctx.waitUntil` 后台写入不阻塞响应、缓存失败不影响下载；禁止 `arrayBuffer()` 全量缓冲+`clone()`，大文件会撞 Worker 128MB 内存/CPU 限额表现为请求无响应） + `/xrpc/dme.batch.get`（反代到 `DME_SERVER_URL`，隐藏客户端 IP）。全局 OPTIONS 预检 + `Access-Control-Allow-Origin:*`（含 `proxy()` 响应），以支持浏览器 / Expo web 直连。`wrangler.toml` 的 `DME_SERVER_URL` 变量指向 dme-server。Gateway 留空 → 客户端直连 server，blob 走 PDS `com.atproto.sync.getBlob`。群聊后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次。
+- **Gateway**: Cloudflare Worker，职责 `/xrpc/dme.file.blob`（blob CDN：流式转发 PDS `com.atproto.sync.getBlob`，15s 上游超时（AbortController，失败返回 504），≤100MB 才写 `caches.default` 7 天缓存且经 `ctx.waitUntil` 后台写入不阻塞响应、缓存失败不影响下载；禁止 `arrayBuffer()` 全量缓冲+`clone()`，大文件会撞 Worker 128MB 内存/CPU 限额表现为请求无响应） + `/xrpc/dme.batch.get`（反代到 `DME_SERVER_URL`，隐藏客户端 IP）。全局 OPTIONS 预检 + `Access-Control-Allow-Origin:*`（含 `proxy()` 响应），以支持浏览器 / Expo web 直连。`wrangler.toml` 的 `DME_SERVER_URL` 变量指向 dme-server。**请求头 `dme-server` 可动态覆盖目标 server 地址**（如 `curl -H "dme-server: https://dme.example.com" ...`），无需重新部署。Gateway 留空 → 客户端直连 server，blob 走 PDS `com.atproto.sync.getBlob`。群聊后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次。**匿名性**：代码层显式只转发 `Content-Type`，不透传 `CF-Connecting-IP`/`X-Forwarded-For`/`User-Agent` 等；Wrangler 注入中间件 `strip-cf-connecting-ip-header.js` 再次兜底删除 `CF-Connecting-IP`。dme-server 仅见 CF 边缘 IP。
 - **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text），`SkiaButton.tsx` 保留但无引用
 - **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Block List/Logout 收入头像弹出菜单
 - **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染

@@ -59,6 +59,8 @@ export class DmePoller {
   private readonly storage: DmeStorage;
   private readonly sessions: Map<string, MlsSession> = new Map();
   private readonly pendingWelcomes: Map<string, PendingWelcome> = new Map();
+  private readonly inFlightQueueIds = new Set<string>();
+  private polling = false;
   private onMessage: OnMessageCallback | null = null;
   private onWelcome: OnWelcomeCallback | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -113,6 +115,16 @@ export class DmePoller {
   }
 
   async pollOnce(): Promise<void> {
+    if (this.polling) return;
+    this.polling = true;
+    try {
+      await this.pollOnceInner();
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private async pollOnceInner(): Promise<void> {
     const allQueueIds: string[] = [];
     const queueIdToContext = new Map<string, QueueContext>();
 
@@ -202,13 +214,19 @@ export class DmePoller {
       const ctx = queueIdToContext.get(env.queueId);
       if (!ctx) continue;
 
+      if (this.inFlightQueueIds.has(env.queueId)) {
+        console.log('DmePoller: skipping in-flight queueId', env.queueId);
+        continue;
+      }
       if (await this.storage.isQueueIdProcessed(env.queueId)) {
         console.log('DmePoller: skipping already-processed queueId', env.queueId);
         continue;
       }
+      this.inFlightQueueIds.add(env.queueId);
 
       try {
         if (ctx.type === 'welcome') {
+          await this.storage.markQueueIdProcessed(env.queueId);
           const welcomeBytes = base64urlToBytes(env.payload);
           if (this.onWelcome) {
             await this.onWelcome({ queueId: ctx.queueId, welcomeBytes });
@@ -217,6 +235,7 @@ export class DmePoller {
           const session = this.sessions.get(ctx.groupId);
           if (!session) {
             console.log('DmePoller: no session for group', ctx.groupId);
+            this.inFlightQueueIds.delete(env.queueId);
             continue;
           }
 
@@ -224,6 +243,8 @@ export class DmePoller {
           const result = await session.decrypt(ciphertext);
 
           console.log('DmePoller: decrypt done, plaintext=' + !!result.plaintext + ' isCommit=' + result.isCommit);
+
+          await this.storage.markQueueIdProcessed(env.queueId);
 
           if (result.plaintext && this.onMessage) {
             await this.onMessage({
@@ -239,9 +260,9 @@ export class DmePoller {
           const genAfter = session.getExpectedGeneration(ctx.senderLeafIndex);
           console.log('DmePoller: gen before save=' + genBefore + ' after save=' + genAfter);
         }
-
-        await this.storage.markQueueIdProcessed(env.queueId);
+        this.inFlightQueueIds.delete(env.queueId);
       } catch (err) {
+        this.inFlightQueueIds.delete(env.queueId);
         console.error('DmePoller: process failed for', env.queueId, err);
       }
     }

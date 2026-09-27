@@ -1389,6 +1389,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           break;
         }
         default:
+          if (await msgStorage.hasMessage(msg.groupId, msg.envelope.queueId)) {
+            console.log('handleIncomingMessage: duplicate group text message, skipping', msg.envelope.queueId);
+            break;
+          }
           await msgStorage.putMessage({
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
@@ -1417,6 +1421,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await msgStorage.removeReaction(msg.groupId, r.targetMessageId, msg.senderDid, r.emoji);
       }
     } else if (msgType === FILE_MANIFEST_TYPE) {
+      if (await msgStorage.hasMessage(msg.groupId, msg.envelope.queueId)) {
+        console.log('handleIncomingMessage: duplicate file message, skipping', msg.envelope.queueId);
+        return;
+      }
       const manifest = JSON.parse(msg.plaintext) as FileManifestMessage;
       await msgStorage.putMessage({
         id: msg.envelope.queueId,
@@ -1452,6 +1460,10 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         void playMessageSound();
       }
     } else {
+      if (await msgStorage.hasMessage(msg.groupId, msg.envelope.queueId)) {
+        console.log('handleIncomingMessage: duplicate text message, skipping', msg.envelope.queueId);
+        return;
+      }
       await msgStorage.putMessage({
         id: msg.envelope.queueId,
         fromDid: msg.senderDid,
@@ -1462,8 +1474,8 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         kind: 'text',
         conversationId: msg.groupId,
       });
-const shouldPlayText = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
-          if (shouldPlayText) {
+      const shouldPlayText = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
+      if (shouldPlayText) {
         void playMessageSound();
       }
     }

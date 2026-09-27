@@ -156,6 +156,13 @@ export class DmeStorage {
     return messages;
   }
 
+  async hasMessage(conversationId: string, messageId: string): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(this.prefix + `messages:${conversationId}`);
+    if (!raw) return false;
+    const messages = JSON.parse(raw) as StoredMessage[];
+    return messages.some((m) => m.id === messageId);
+  }
+
   async getMessagesPaginated(
     groupId: string,
     beforeId?: string,

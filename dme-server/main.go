@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,8 +22,15 @@ import (
 	"dme/dme-server/internal/server"
 )
 
+var version = "dev"
+
 func main() {
 	cfg := config.FromFlags()
+
+	if flag.Lookup("version").Value.String() == "true" {
+		fmt.Printf("dme-server %s\n", version)
+		os.Exit(0)
+	}
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

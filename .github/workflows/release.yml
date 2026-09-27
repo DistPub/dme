@@ -1,0 +1,130 @@
+name: Release dme-server
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: '1.22'
+  MODULE: 'dme/dme-server'
+  MAIN_PKG: '.'
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}${{ matrix.arm && 'v' || '' }}${{ matrix.arm || '' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux amd64
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            ext: ''
+          # Linux arm64 (router / aarch64)
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+            ext: ''
+          # Linux armv7 (32-bit router, e.g. OpenWrt armhf)
+          - os: linux
+            arch: arm
+            arm: 7
+            runner: ubuntu-latest
+            ext: ''
+          # macOS amd64 (Intel)
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+            ext: ''
+          # macOS arm64 (Apple Silicon)
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+            ext: ''
+          # Windows amd64
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            ext: '.exe'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: dme-server/go.sum
+
+      - name: Set up QEMU (for cross-compile)
+        if: matrix.arch != 'amd64' || matrix.os != 'linux'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.os }}/${{ matrix.arch }}${{ matrix.arm && 'v' || '' }}${{ matrix.arm || '' }}
+
+      - name: Build
+        working-directory: dme-server
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          GOARM: ${{ matrix.arm || '' }}
+          CGO_ENABLED: '0'
+        run: |
+          BIN_NAME="dme-server-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.arm && 'v' || '' }}${{ matrix.arm || '' }}${{ matrix.ext }}"
+          echo "Building $BIN_NAME..."
+          go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o "../dist/$BIN_NAME" ${{ env.MAIN_PKG }}
+          echo "BIN_NAME=$BIN_NAME" >> $GITHUB_OUTPUT
+        id: build
+
+      - name: Verify binary
+        working-directory: dme-server
+        run: |
+          file ../dist/${{ steps.build.outputs.BIN_NAME }}
+          ../dist/${{ steps.build.outputs.BIN_NAME }} --help 2>&1 | head -5 || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dme-server-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.arm && 'v' || '' }}${{ matrix.arm || '' }}
+          path: dist/dme-server-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.arm && 'v' || '' }}${{ matrix.arm || '' }}${{ matrix.ext }}
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

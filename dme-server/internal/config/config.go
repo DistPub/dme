@@ -40,7 +40,12 @@ func FromFlags() Config {
 	flag.StringVar(&c.Addr, "addr", c.Addr, "HTTP listen address")
 	flag.StringVar(&c.DBPath, "db", c.DBPath, "BadgerDB data directory")
 	flag.StringVar(&c.JetstreamURL, "jetstream", c.JetstreamURL, "Bluesky Jetstream WebSocket base URL")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Show version and exit")
 	flag.Parse()
+	if showVersion {
+		// version printed by main after parsing
+	}
 	return c
 }
 

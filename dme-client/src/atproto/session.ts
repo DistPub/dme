@@ -12,6 +12,27 @@ import type { AtpSessionData, AtpSessionEvent } from '@atproto/api';
 
 import { PDS_URL } from '../config';
 import type { DmeStorage } from '../storage/db';
+import { isEmbedContext } from '../embed/protocol';
+import type { EmbedTokenPayload } from '../embed/protocol';
+
+/**
+ * CredentialSession used in embed mode.
+ *
+ * In embed mode the fatesky parent owns the token lifecycle, so we must never
+ * refresh tokens ourselves. Overriding `refreshSession()` makes the automatic
+ * refresh in `CredentialSession.fetchHandler` a no-op: its catch swallows the
+ * thrown error and returns the original "ExpiredToken" response (the accessJwt
+ * never changed), which is exactly the desired behavior.
+ */
+class EmbedCredentialSession extends CredentialSession {
+  onRefreshBlocked: (() => void) | null = null;
+
+  override async refreshSession(): Promise<void> {
+    // Embed mode: fatesky owns token lifecycle. Never refresh here.
+    this.onRefreshBlocked?.();
+    return;
+  }
+}
 
 /** 持久化的会话数据，用于 App 重启后恢复。 */
 interface StoredSession {
@@ -38,6 +59,14 @@ export class DmeSession {
 
   /** 持久化存储引用，persistSession 回调中使用。 */
   private storageRef: DmeStorage | null = null;
+
+  /** The most recently created CredentialSession, for embed handler forwarding. */
+  private credentialSessionRef: CredentialSession | null = null;
+
+  /** Called when embed-mode refresh is suppressed. */
+  private embedRefreshBlockedHandler: (() => void) | null = null;
+
+  constructor(private readonly embed: boolean = isEmbedContext()) {}
 
   /**
    * 用户输入 handle + app password 登录。
@@ -74,6 +103,19 @@ export class DmeSession {
     try {
       const stored = JSON.parse(raw) as StoredSession;
       this.pdsUrl = stored.pdsUrl ?? PDS_URL;
+      if (this.embed) {
+        const credentialSession = this.createCredentialSession();
+        credentialSession.session = {
+          did: stored.did,
+          handle: stored.handle,
+          accessJwt: stored.accessJwt,
+          refreshJwt: stored.refreshJwt,
+          active: stored.active,
+        };
+        this.session = credentialSession;
+        this.agentInstance = new Agent(credentialSession);
+        return true;
+      }
       const session = this.createCredentialSession();
       await session.resumeSession({
         did: stored.did,
@@ -98,10 +140,14 @@ export class DmeSession {
    */
   async logout(storage?: DmeStorage): Promise<void> {
     if (this.session) {
-      try {
-        await this.session.logout();
-      } catch (err) {
-        console.error('DmeSession: logout network error (ignored):', err);
+      if (this.embed) {
+        // embed: skip server deleteSession (fatesky owns shared session)
+      } else {
+        try {
+          await this.session.logout();
+        } catch (err) {
+          console.error('DmeSession: logout network error (ignored):', err);
+        }
       }
     }
     this.session = null;
@@ -144,6 +190,38 @@ export class DmeSession {
     this.storageRef = storage;
   }
 
+  setEmbedRefreshBlockedHandler(fn: (() => void) | null): void {
+    this.embedRefreshBlockedHandler = fn;
+    if (this.credentialSessionRef instanceof EmbedCredentialSession) {
+      this.credentialSessionRef.onRefreshBlocked = fn;
+    }
+  }
+
+  setEmbedToken(payload: EmbedTokenPayload): void {
+    if (!this.embed) return;
+    const stored: StoredSession = {
+      did: payload.did,
+      handle: payload.handle,
+      accessJwt: payload.accessJwt,
+      refreshJwt: payload.refreshJwt,
+      active: true,
+      pdsUrl: payload.service?.trim() || this.pdsUrl,
+    };
+    this.pdsUrl = stored.pdsUrl;
+    if (this.storageRef) {
+      void this.storageRef.putRaw(STORAGE_KEY, JSON.stringify(stored));
+    }
+    if (this.session) {
+      this.session.session = {
+        did: payload.did,
+        handle: payload.handle,
+        accessJwt: payload.accessJwt,
+        refreshJwt: payload.refreshJwt,
+        active: true,
+      };
+    }
+  }
+
   get sessionData(): AtpSessionData | null {
     return this.session?.session ?? null;
   }
@@ -163,12 +241,22 @@ export class DmeSession {
    * 保证 token 刷新后持久化的总是最新 token。
    */
   private createCredentialSession(): CredentialSession {
-    return new CredentialSession(
-      new URL(this.pdsUrl),
-      undefined,
+    const persist =
       (evt: AtpSessionEvent, session: AtpSessionData | undefined) =>
-        this.handlePersistSession(evt, session),
-    );
+        this.handlePersistSession(evt, session);
+
+    if (this.embed) {
+      const embedSession = new EmbedCredentialSession(
+        new URL(this.pdsUrl),
+        undefined,
+        persist,
+      );
+      embedSession.onRefreshBlocked = this.embedRefreshBlockedHandler;
+      this.credentialSessionRef = embedSession;
+      return embedSession;
+    }
+
+    return new CredentialSession(new URL(this.pdsUrl), undefined, persist);
   }
 
   /**

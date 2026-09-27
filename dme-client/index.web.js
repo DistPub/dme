@@ -25,9 +25,12 @@ console.error = (...args) => {
 import { LoadSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
 import { registerRootComponent } from 'expo';
 
-LoadSkiaWeb({ locateFile: (file) => `./${file}` })
-  .then(() => import('./App'))
-  .then(({ default: App }) => {
+// Must be `require`, not `import()`: a dynamic import emits an async chunk that
+// needs `__loadBundleAsync` from @expo/metro-runtime, which our hand-written
+// public/index.html never loads -- it would throw `Requiring unknown module`.
+LoadSkiaWeb({ locateFile: (file) => `/${file}` })
+  .then(() => {
+    const App = require('./App').default;
     registerRootComponent(App);
   })
   .catch((err) => {

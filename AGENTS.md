@@ -99,7 +99,10 @@ dme/
 | 文件协议类型 | `dme-client/src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
 | 文件发送/下载/重试上传 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `retryUploadFileMessage` + `downloadFile`，字节级进度） |
 | 文件消息气泡 | `dme-client/src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+文件卡片/图片缩略图/音频播放卡片+reactions)，上传/下载状态与进度百分比，与 `MessageBubble` 同款；1:1 不渲染头像列） |
-| 图片查看器 | `dme-client/src/ui/ImageViewerScreen.tsx`（全屏查看，点击关闭） |
+| 图片查看器 | `dme-client/src/ui/ImageViewerScreen.tsx`（全屏查看，点击或 ✕ 关闭） |
+| 视频播放/全屏查看 | `dme-client/src/ui/VideoViewerScreen.tsx`（expo-video 的 VideoView + useVideoPlayer，web 自动播放 muted，解码不支持时回退下载） |
+| 文件导出/下载到设备 | `dme-client/src/utils/file-export.ts`（exportFileToDevice：web 用 anchor download，native 用 Share） |
+| About 页面 | `dme-client/src/ui/AboutScreen.tsx` |
 | Web 文件缓存 | `dme-client/src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
 | Gateway (blob CDN + batch 代理) | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN 缓存 + `/xrpc/dme.batch.get` 反代 dme-server，**支持 `dme-server` header 动态切目标**，全局 OPTIONS 预检 + CORS，**允许 `dme-server`、`Authorization` header**，预检缓存 24h） |
@@ -190,6 +193,8 @@ dme/
 | `FileMeta` | interface | types.ts | 本地文件元数据（downloadStatus + uploadStatus + uploadProgress/downloadProgress） |
 | `FileMessageBubble` | component | FileMessageBubble.tsx | 群聊双列布局（头像列 + 内容列：昵称+@handle+文件卡片/图片缩略图/视频播放/音频图标+下载状态+reactions），与 `MessageBubble` 同款；1:1 不渲染头像列 |
 | `ImageViewerScreen` | component | ImageViewerScreen.tsx | 全屏图片查看器，点击或 ✕ 关闭 |
+| `exportFileToDevice` | func | file-export.ts | Web 用 anchor.click 下载，native 用 Share.share；支持 IndexedDB blob URI 和普通 blob URI 源 |
+| `VideoViewerScreen` | component | VideoViewerScreen.tsx | 全屏视频播放器（expo-video）+ web 解码预检 + unsupported 时回退下载 |
 | `useFileUri` | hook | file-cache.ts | 解析 `indexeddb://` / 普通 URI 为可渲染 blob URL，管理生命周期 |
 | `cacheFile` | func | file-cache.ts | Web 端把文件字节持久化到 IndexedDB |
 | `getCachedFileBytes` | func | file-cache.ts | Web 端从 IndexedDB 读取原始字节（上传/重试的数据源） |

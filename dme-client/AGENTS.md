@@ -31,7 +31,7 @@ dme-client/
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
     ├── state/AppContext.tsx  # 全局状态（17 字段，28 action）
     ├── protocol/         # types.ts + group-message.ts + reaction.ts + lexicons/ JSON
-    ├── utils/            # sound.ts（消息提示音：Web Audio API/expo-av + unlockWebAudio 静音解锁）+ file-cache.ts（IndexedDB 文件缓存 / useFileUri）+ video-thumbnail.ts（视频首帧缩略图）
+    ├── utils/            # sound.ts（消息提示音：Web Audio API/expo-av + unlockWebAudio 静音解锁）+ file-cache.ts（IndexedDB 文件缓存 / useFileUri）+ file-export.ts（导出文件到设备/浏览器下载）+ video-thumbnail.ts（视频首帧缩略图）
     ├── ui/               # 22 个文件（12 屏幕 + 10 组件，含 BlockListScreen + DmSettingsScreen + MessageBubble + EmojiPicker + MessageActionMenu + FileMessageBubble + ImageViewerScreen + VideoViewerScreen）
     └── types/            # navigation.ts (RootStackParamList) + qrcode.d.ts
 ```
@@ -70,6 +70,8 @@ dme-client/
 | 视频播放/全屏查看 | `src/ui/VideoViewerScreen.tsx`（`expo-video` 的 `VideoView` + `useVideoPlayer`，web 自动播放 muted，解码不支持时回退下载） |
 | 视频 unsupported codec 提示与下载 | `src/ui/VideoViewerScreen.tsx`（web 预检 `videoWidth/videoHeight=0` 时提示「浏览器不支持视频解码」并提供下载按钮） |
 | 视频首帧缩略图生成 | `src/utils/video-thumbnail.ts`（native 用 `expo-video-thumbnails`，web 用隐藏 `<video>`+`<canvas>` 抓帧） |
+| 文件导出/下载到设备 | `src/utils/file-export.ts`（exportFileToDevice：web 用 anchor download，native 用 Share） |
+| About 页面 | `src/ui/AboutScreen.tsx` |
 | Web 文件缓存 | `src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | 文件选择器 | `expo-document-picker`（`getDocumentAsync({type: '*/*'})`） |
 | 表情选择器 | `src/ui/EmojiPicker.tsx`（浮层锚定按钮） |

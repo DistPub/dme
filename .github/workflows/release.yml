@@ -64,12 +64,6 @@ jobs:
           cache: true
           cache-dependency-path: dme-server/go.sum
 
-      - name: Set up QEMU (for cross-compile)
-        if: matrix.arch != 'amd64' || matrix.os != 'linux'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: ${{ matrix.os }}/${{ matrix.arch }}${{ matrix.arm && 'v' || '' }}${{ matrix.arm || '' }}
-
       - name: Build
         working-directory: dme-server
         env:

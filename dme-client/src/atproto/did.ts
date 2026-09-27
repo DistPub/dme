@@ -31,7 +31,7 @@ import {
   DME_SIGNING_KEY_ID,
   type IdentityKeys,
 } from '../crypto/identity';
-import { sharedDidResolver } from './resolver';
+import { sharedDidResolver, resolveDidDocumentFresh } from './resolver';
 
 /** DID_KEY_PREFIX prepended to multibase values from PLC documents. */
 const DID_KEY_PREFIX = 'did:key:';
@@ -112,14 +112,17 @@ export async function declareKeys(
  * Read a remote user's DME X25519 encryption public key from their
  * DID document's #dme_encryption verificationMethod.
  *
- * @param did - The remote user's DID (e.g., "did:plc:abc123...").
+ * @param did   - The remote user's DID (e.g., "did:plc:abc123...").
+ * @param fresh - When true, bypass the in-memory DID cache and re-fetch the
+ *                latest document (used by the did:web update check).
  * @returns 32-byte X25519 public key, or null if not declared.
  * @throws if DID resolution fails (network error, invalid DID, etc.).
  */
 export async function getRemoteEncryptionKey(
   did: string,
+  fresh = false,
 ): Promise<Uint8Array | null> {
-  const vm = await findVerificationMethod(did, DME_ENCRYPTION_KEY_ID);
+  const vm = await findVerificationMethod(did, DME_ENCRYPTION_KEY_ID, fresh);
   if (!vm?.publicKeyMultibase) return null;
   return decodeX25519DidKey(`${DID_KEY_PREFIX}${vm.publicKeyMultibase}`);
 }
@@ -128,14 +131,17 @@ export async function getRemoteEncryptionKey(
  * Read a remote user's DME Ed25519 signing public key from their
  * DID document's #dme_signing verificationMethod.
  *
- * @param did - The remote user's DID (e.g., "did:plc:abc123...").
+ * @param did   - The remote user's DID (e.g., "did:plc:abc123...").
+ * @param fresh - When true, bypass the in-memory DID cache and re-fetch the
+ *                latest document.
  * @returns 32-byte Ed25519 public key, or null if not declared.
  * @throws if DID resolution fails (network error, invalid DID, etc.).
  */
 export async function getRemoteSigningKey(
   did: string,
+  fresh = false,
 ): Promise<Uint8Array | null> {
-  const vm = await findVerificationMethod(did, DME_SIGNING_KEY_ID);
+  const vm = await findVerificationMethod(did, DME_SIGNING_KEY_ID, fresh);
   if (!vm?.publicKeyMultibase) return null;
   return decodeEd25519DidKey(`${DID_KEY_PREFIX}${vm.publicKeyMultibase}`);
 }
@@ -161,14 +167,16 @@ export async function requestPlcSignature(
  *
  * @param did      - The DID to resolve.
  * @param fragment - The verificationMethod fragment (e.g., "#dme_encryption").
+ * @param fresh    - When true, bypass the in-memory DID cache.
  * @returns The matching DidVerificationMethod, or null if not found.
  * @throws if DID resolution fails.
  */
 async function findVerificationMethod(
   did: string,
   fragment: string,
+  fresh = false,
 ): Promise<DidVerificationMethod | null> {
-  const doc = await resolveDidDocument(did);
+  const doc = await resolveDidDocument(did, fresh);
   if (!doc?.verificationMethod) return null;
   return (
     doc.verificationMethod.find((vm) => vm.id.endsWith(fragment)) ?? null
@@ -181,14 +189,19 @@ async function findVerificationMethod(
  * did:plc DIDs are fetched directly from the PLC directory; all others
  * fall through to @atproto/identity's DidResolver.
  *
- * @param did - The DID to resolve.
+ * @param did   - The DID to resolve.
+ * @param fresh - When true, bypass the in-memory cache and re-fetch.
  * @returns The DID document, or null if not found.
  * @throws if PLC resolution returns a non-OK response.
  */
 async function resolveDidDocument(
   did: string,
+  fresh = false,
 ): Promise<DidDocumentLike | null> {
-  return (await sharedDidResolver.resolve(did)) as DidDocumentLike | null;
+  const doc = fresh
+    ? await resolveDidDocumentFresh(did)
+    : await sharedDidResolver.resolve(did);
+  return doc as DidDocumentLike | null;
 }
 
 /**
@@ -217,9 +230,10 @@ export function getDidMethod(did: string): 'plc' | 'web' | 'other' {
 
 async function fetchFullDidDocument(
   did: string,
+  fresh = false,
 ): Promise<Record<string, unknown> | null> {
   try {
-    const doc = await sharedDidResolver.resolve(did);
+    const doc = await resolveDidDocument(did, fresh);
     return (doc as unknown as Record<string, unknown>) ?? null;
   } catch {
     return null;
@@ -240,13 +254,15 @@ export interface DidWebEntry {
  * （用户直接复制替换）；失败则返回 null，调用方应显示 newEntries
  * 让用户手动添加到现有文档。
  *
- * @param did  - 用户的 did:web DID。
- * @param keys - 身份密钥对。
+ * @param did   - 用户的 did:web DID。
+ * @param keys  - 身份密钥对。
+ * @param fresh - 为 true 时绕过 DID 缓存，拉取最新文档（用于「已更新」检测）。
  * @returns didJson: 修改后的完整 did.json（或 null）；newEntries: 需要添加的两个条目。
  */
 export async function generateDidWebUpdate(
   did: string,
   keys: IdentityKeys,
+  fresh = false,
 ): Promise<{ didJson: string | null; newEntries: DidWebEntry[] }> {
   const encEntry: DidWebEntry = {
     id: `${did}${DME_ENCRYPTION_KEY_ID}`,
@@ -262,7 +278,7 @@ export async function generateDidWebUpdate(
   };
   const newEntries = [encEntry, sigEntry];
 
-  const doc = await fetchFullDidDocument(did);
+  const doc = await fetchFullDidDocument(did, fresh);
   if (!doc) {
     return { didJson: null, newEntries };
   }

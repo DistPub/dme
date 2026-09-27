@@ -22,3 +22,17 @@ export const sharedDidResolver = new DidResolver({
   didCache: new MemoryCache(),
   timeout: 20_000,
 });
+
+/**
+ * Resolve a DID document bypassing the in-memory cache.
+ *
+ * Used by flows that must observe the latest DID document (e.g. the
+ * did:web "I have updated" check on the Setup screen), where a stale
+ * cached document would show a false negative. The fresh document is
+ * written back into the shared cache, so subsequent cached reads see it.
+ */
+export async function resolveDidDocumentFresh(
+  did: string,
+): Promise<unknown> {
+  return sharedDidResolver.resolve(did, true);
+}

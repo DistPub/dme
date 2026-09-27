@@ -44,15 +44,15 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
   const [restoring, setRestoring] = useState(false);
   const [didWebUpdate, setDidWebUpdate] = useState<{ didJson: string | null; newEntries: DidWebEntry[] } | null>(null);
 
-  const checkKey = useCallback(async (signal: { cancelled: boolean }): Promise<void> => {
+  const checkKey = useCallback(async (signal: { cancelled: boolean }, fresh = false): Promise<void> => {
     if (!app.session || !app.identityKeys) return;
 
     try {
-      const remoteKey = await getRemoteEncryptionKey(app.session.did);
+      const remoteKey = await getRemoteEncryptionKey(app.session.did, fresh);
       if (!remoteKey) {
         if (signal.cancelled) return;
         if (getDidMethod(app.session.did) === 'web') {
-          const update = await generateDidWebUpdate(app.session.did, app.identityKeys);
+          const update = await generateDidWebUpdate(app.session.did, app.identityKeys, fresh);
           setDidWebUpdate(update);
           setStep('web_instructions');
         } else {
@@ -248,7 +248,7 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
                 setError(null);
                 setStep('checking');
                 const signal = { cancelled: false };
-                checkKey(signal);
+                checkKey(signal, true);
               }}
               variant="primary"
               style={styles.fullButton}

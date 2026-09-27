@@ -12,6 +12,7 @@ import { theme } from './theme';
 export interface ButtonProps {
   label: string;
   onPress: () => void;
+  onPressIn?: () => void;
   variant?: 'primary' | 'secondary';
   disabled?: boolean;
   style?: ViewStyle;
@@ -20,6 +21,7 @@ export interface ButtonProps {
 export function Button({
   label,
   onPress,
+  onPressIn,
   variant = 'primary',
   disabled = false,
   style,
@@ -27,6 +29,7 @@ export function Button({
   return (
     <Pressable
       onPress={onPress}
+      onPressIn={onPressIn}
       disabled={disabled}
       style={({ pressed }) => [
         styles.base,

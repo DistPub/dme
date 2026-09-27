@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -75,6 +76,7 @@ export function ChatViewScreen(): React.JSX.Element {
   const [loadingMore, setLoadingMore] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [inputHeight, setInputHeight] = useState(44);
   const [displayName, setDisplayName] = useState(isGroup ? t('common.loading') : conversationId);
   const [groupCreatorHandle, setGroupCreatorHandle] = useState('');
   const [friendAvatarUrl, setFriendAvatarUrl] = useState<string | null>(null);
@@ -92,11 +94,23 @@ export function ChatViewScreen(): React.JSX.Element {
   const [actionMenuLayout, setActionMenuLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const listRef = useRef<FlatList<StoredMessage>>(null);
   const inputRef = useRef<TextInput>(null);
+  const sendBtnRef = useRef<View>(null);
   const messagesRef = useRef<StoredMessage[]>([]);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
   useWebTitle(isGroup ? `${t('common.groupPrefix')}${displayName}` : displayName);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = sendBtnRef.current as unknown as HTMLElement | null;
+    if (!node || typeof node.addEventListener !== 'function') return;
+    const preventDesktopBlur = (e: Event): void => { e.preventDefault(); };
+    node.addEventListener('mousedown', preventDesktopBlur);
+    return () => {
+      node.removeEventListener('mousedown', preventDesktopBlur);
+    };
+  }, []);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -327,6 +341,15 @@ export function ChatViewScreen(): React.JSX.Element {
     }
   }, [conversationId, isGroup, storage, chatListVersion, session]);
 
+  const keepInputFocused = useCallback((): void => {
+    inputRef.current?.focus();
+    if (Platform.OS === 'web' && typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
+    }
+  }, []);
+
   const onSend = useCallback(async (): Promise<void> => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
@@ -334,13 +357,23 @@ export function ChatViewScreen(): React.JSX.Element {
     try {
       await sendMessage(conversationId, trimmed);
       setText('');
-      inputRef.current?.focus();
+      keepInputFocused();
     } catch (err) {
       console.error('Send failed:', err);
     } finally {
       setSending(false);
     }
-  }, [text, sending, sendMessage, conversationId]);
+  }, [text, sending, sendMessage, conversationId, keepInputFocused]);
+
+  const handleKeyPress = useCallback((e: { nativeEvent: { key: string; shiftKey?: boolean; preventDefault?: () => void } }): void => {
+    if (Platform.OS !== 'web') return;
+    const isTouchDevice = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0;
+    if (isTouchDevice) return;
+    if (e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) {
+      e.nativeEvent.preventDefault?.();
+      void onSend();
+    }
+  }, [onSend]);
 
   const handleReact = useCallback(async (msg: StoredMessage, emoji: string): Promise<void> => {
     setPickerTarget(null);
@@ -647,23 +680,30 @@ export function ChatViewScreen(): React.JSX.Element {
           </TouchableOpacity>
           <TextInput
             ref={inputRef}
-            style={styles.input}
+            style={[styles.input, { height: inputHeight }]}
             value={text}
             onChangeText={setText}
             placeholder={t('chatview.typeMessage')}
             placeholderTextColor={theme.colors.placeholder}
             autoCapitalize="none"
             autoCorrect={false}
-            onSubmitEditing={onSend}
-            returnKeyType="default"
+            multiline
+            onKeyPress={handleKeyPress}
             blurOnSubmit={false}
+            onContentSizeChange={(e) => {
+              const h = e.nativeEvent.contentSize.height;
+              setInputHeight(Math.min(Math.max(h, 44), 240));
+            }}
           />
-          <Button
-            label={sending ? '…' : t('chatview.send')}
-            onPress={onSend}
-            variant="primary"
-            style={styles.sendBtn}
-          />
+          <View ref={sendBtnRef} style={styles.sendBtnWrap}>
+            <Button
+              label={sending ? '…' : t('chatview.send')}
+              onPress={onSend}
+              onPressIn={keepInputFocused}
+              variant="primary"
+              style={styles.sendBtn}
+            />
+          </View>
         </View>
       )}
       <EmojiPicker
@@ -766,21 +806,28 @@ const styles = StyleSheet.create({
   },
   inputBar: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
     gap: theme.spacing.sm,
   },
   input: {
     flex: 1,
-    height: 48,
     backgroundColor: theme.colors.inputBackground,
     borderRadius: theme.borderRadius.sm,
     borderWidth: 1,
     borderColor: theme.colors.border,
     color: theme.colors.textPrimary,
     fontSize: theme.typography.body,
+    lineHeight: 20,
     paddingHorizontal: theme.spacing.md,
+    paddingTop: 10,
+    paddingBottom: 10,
+    textAlignVertical: 'top',
+  },
+  sendBtnWrap: {
+    width: 72,
+    height: 48,
   },
   sendBtn: {
     width: 72,

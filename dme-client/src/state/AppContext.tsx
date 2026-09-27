@@ -83,7 +83,8 @@ import { useI18n } from '../i18n/I18nContext';
 import { t } from '../i18n/format';
 import { isEmbedContext } from '../embed/protocol';
 import type { EmbedTokenPayload } from '../embed/protocol';
-import { start, notifySessionInvalid } from '../embed/bridge';
+import { start, notifySessionInvalid, sendUnread } from '../embed/bridge';
+import { computeTotalUnread } from '../embed/unread';
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (Uint8Array <-> base64 via JSON replacer)
@@ -2653,6 +2654,28 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       inst?.setEmbedRefreshBlockedHandler(null);
     };
   }, [session]);
+
+  // Push total unread count to the parent frame (embed mode only). Reports
+  // immediately on every chatListVersion bump and every 30s as a fallback.
+  useEffect(() => {
+    if (!isEmbedContext() || !embedTokenApplied || !session || !storage || embedMismatch) return;
+    let cancelled = false;
+    const report = async (): Promise<void> => {
+      try {
+        if (embedMismatch) return;
+        const total = await computeTotalUnread(storage, session.did, new Set(blockList));
+        if (!cancelled) sendUnread(total, total > 0);
+      } catch (err) {
+        console.error('embed unread report failed:', err);
+      }
+    };
+    void report();
+    const id = setInterval(() => void report(), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [chatListVersion, session, storage, blockList, embedTokenApplied, embedMismatch]);
 
   // -------------------------------------------------------------------------
   // Cleanup

@@ -81,6 +81,9 @@ import {
 import { playMessageSound } from '../utils/sound';
 import { useI18n } from '../i18n/I18nContext';
 import { t } from '../i18n/format';
+import { isEmbedContext } from '../embed/protocol';
+import type { EmbedTokenPayload } from '../embed/protocol';
+import { start, notifySessionInvalid } from '../embed/bridge';
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (Uint8Array <-> base64 via JSON replacer)
@@ -158,6 +161,7 @@ function uploadBlobWithProgress(
           reject(new Error('uploadBlobWithProgress: failed to parse response'));
         }
       } else {
+        if (xhr.status === 400 || xhr.status === 401) notifySessionInvalid(accessToken);
         reject(new Error(`uploadBlobWithProgress: HTTP ${xhr.status}`));
       }
     };
@@ -248,6 +252,8 @@ interface AppState {
   receivedGroupInvites: PendingInvite[];
   blockList: string[];
   soundEnabled: boolean;
+  embedMismatch: { localDid: string | null; tokenDid: string } | null;
+  embedTokenApplied: boolean;
 }
 
 interface AppActions {
@@ -290,6 +296,7 @@ interface AppActions {
   unblockMember: (did: string) => Promise<void>;
   setActiveConversation: (conversationId: string | null) => void;
   setSoundEnabled: (enabled: boolean) => Promise<void>;
+  applyEmbedToken: (payload: EmbedTokenPayload) => Promise<void>;
 }
 
 interface AppContextValue extends AppState, AppActions {}
@@ -323,11 +330,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
   const [blockList, setBlockList] = useState<string[]>([]);
   const [soundEnabled, setSoundEnabledState] = useState(true);
+  const [embedMismatch, setEmbedMismatch] = useState<{ localDid: string | null; tokenDid: string } | null>(null);
+  const [embedTokenApplied, setEmbedTokenApplied] = useState(false);
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
 
   const activeConversationRef = useRef<string | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   const setActiveConversation = useCallback((conversationId: string | null): void => {
     activeConversationRef.current = conversationId;
@@ -338,6 +349,101 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.setSoundEnabled(enabled);
     setSoundEnabledState(enabled);
   }, [storage]);
+
+  // -------------------------------------------------------------------------
+  // Hydration (extracted from restoreSession / used by embed token branch A)
+  // -------------------------------------------------------------------------
+
+  const hydrateRestoredApp = useCallback(async (
+    newSession: DmeSession,
+    newStorage: DmeStorage,
+    did: string,
+  ): Promise<void> => {
+    const appViewProxyValue = await newStorage.getAppViewProxy();
+    const serverUrlValue = await newStorage.getDmeServerUrl();
+    const gatewayUrlValue = await newStorage.getDmeGatewayUrl();
+    const newPds = new DmePds(newSession.agent, serverUrlValue, gatewayUrlValue, appViewProxyValue);
+    const storedKeys = await newStorage.getIdentityKeys();
+    const idKeys = storedKeys ?? generateIdentityKeys();
+    if (!storedKeys) {
+      await newStorage.putIdentityKeys(idKeys);
+    }
+
+    const batchSize = await newStorage.getPollBatchSize();
+    const newPoller = new DmePoller(newPds, newStorage, batchSize);
+
+    newPoller.start(
+      async (msg: IncomingMessage) => {
+        await handleIncomingMessageRef.current(msg, did, newStorage);
+      },
+      async (welcome: IncomingWelcome) => {
+        await processWelcomeRef.current(welcome);
+      },
+    );
+
+    // Restore MLS sessions
+    const groupIds = await newStorage.listGroups();
+    const impl = await getNobleMlsImpl();
+    for (const gid of groupIds) {
+      const serialized = await newStorage.getMlsSession(gid);
+      if (serialized) {
+        try {
+          const mlsSession = await MlsSession.deserialize(serialized, impl);
+          newPoller.addSession(gid, mlsSession);
+        } catch (err) {
+          console.error('AppContext: failed to restore MLS session for', gid, err);
+        }
+      }
+    }
+
+    const welcomes = await newStorage.getPendingWelcomes();
+    for (const w of welcomes) {
+      newPoller.addPendingWelcome(w);
+    }
+
+    const pool = await newStorage.getKeyPackagePool();
+
+    const allInvites = await newStorage.getPendingInvites();
+    const sentInvites = allInvites.filter((i) => i.inviterDid === did);
+    const recvInvites = allInvites.filter((i) => i.inviteeDid === did);
+    const storedGroupInfos = await newStorage.listGroupInfos();
+
+    setSession(newSession);
+    setStorage(newStorage);
+    setIdentityKeys(idKeys);
+    setPds(newPds);
+    setPoller(newPoller);
+    setGroups(groupIds);
+    setPendingWelcomes(welcomes);
+    setKeyPackagePool(pool);
+    setPollBatchSizeState(batchSize);
+    setAppViewProxyState(appViewProxyValue);
+    setServerUrlState(serverUrlValue);
+    setGatewayUrlState(gatewayUrlValue);
+    setPendingInvites(sentInvites);
+    setReceivedGroupInvites(recvInvites);
+    setGroupInfos(storedGroupInfos);
+    setBlockList(await newStorage.getBlockList());
+    setSoundEnabledState(await newStorage.getSoundEnabled());
+
+    try {
+      const transferGroupIds = await newStorage.listGroups();
+      for (const groupId of transferGroupIds) {
+        const msgs = await newStorage.getMessages(groupId);
+        for (const msg of msgs) {
+          if (msg.kind !== 'file' || !msg.fileMeta) continue;
+          if (msg.fileMeta.downloadStatus === 'downloading') {
+            await newStorage.updateFileMessageMeta(groupId, msg.id, { downloadStatus: 'pending', downloadProgress: undefined });
+          }
+          if (msg.fileMeta.uploadStatus === 'uploading') {
+            await newStorage.updateFileMessageMeta(groupId, msg.id, { uploadStatus: 'failed' });
+          }
+        }
+      }
+    } catch (err) {
+      console.error('AppContext: failed to reset interrupted file transfers', err);
+    }
+  }, []);
 
   // -------------------------------------------------------------------------
   // KeyPackage pool
@@ -578,90 +684,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         tempSession.setStorage(tempStorage);
 
-        const appViewProxyValue = await tempStorage.getAppViewProxy();
-        const serverUrlValue = await tempStorage.getDmeServerUrl();
-        const gatewayUrlValue = await tempStorage.getDmeGatewayUrl();
-        const newPds = new DmePds(tempSession.agent, serverUrlValue, gatewayUrlValue, appViewProxyValue);
-        const storedKeys = await tempStorage.getIdentityKeys();
-        const idKeys = storedKeys ?? generateIdentityKeys();
-        if (!storedKeys) {
-          await tempStorage.putIdentityKeys(idKeys);
-        }
-
-        const batchSize = await tempStorage.getPollBatchSize();
-        const newPoller = new DmePoller(newPds, tempStorage, batchSize);
-
-        newPoller.start(
-          async (msg: IncomingMessage) => {
-            await handleIncomingMessageRef.current(msg, did, tempStorage);
-          },
-          async (welcome: IncomingWelcome) => {
-            await processWelcomeRef.current(welcome);
-          },
-        );
-
-        // Restore MLS sessions
-        const groupIds = await tempStorage.listGroups();
-        const impl = await getNobleMlsImpl();
-        for (const gid of groupIds) {
-          const serialized = await tempStorage.getMlsSession(gid);
-          if (serialized) {
-            try {
-              const mlsSession = await MlsSession.deserialize(serialized, impl);
-              newPoller.addSession(gid, mlsSession);
-            } catch (err) {
-              console.error('AppContext: failed to restore MLS session for', gid, err);
-            }
-          }
-        }
-
-        const welcomes = await tempStorage.getPendingWelcomes();
-        for (const w of welcomes) {
-          newPoller.addPendingWelcome(w);
-        }
-
-        const pool = await tempStorage.getKeyPackagePool();
-
-        const allInvites = await tempStorage.getPendingInvites();
-        const sentInvites = allInvites.filter((i) => i.inviterDid === did);
-        const recvInvites = allInvites.filter((i) => i.inviteeDid === did);
-        const storedGroupInfos = await tempStorage.listGroupInfos();
-
-        setSession(tempSession);
-        setStorage(tempStorage);
-        setIdentityKeys(idKeys);
-        setPds(newPds);
-        setPoller(newPoller);
-        setGroups(groupIds);
-        setPendingWelcomes(welcomes);
-        setKeyPackagePool(pool);
-        setPollBatchSizeState(batchSize);
-        setAppViewProxyState(appViewProxyValue);
-        setServerUrlState(serverUrlValue);
-        setGatewayUrlState(gatewayUrlValue);
-        setPendingInvites(sentInvites);
-        setReceivedGroupInvites(recvInvites);
-        setGroupInfos(storedGroupInfos);
-        setBlockList(await tempStorage.getBlockList());
-        setSoundEnabledState(await tempStorage.getSoundEnabled());
-
-        try {
-          const transferGroupIds = await tempStorage.listGroups();
-          for (const groupId of transferGroupIds) {
-            const msgs = await tempStorage.getMessages(groupId);
-            for (const msg of msgs) {
-              if (msg.kind !== 'file' || !msg.fileMeta) continue;
-              if (msg.fileMeta.downloadStatus === 'downloading') {
-                await tempStorage.updateFileMessageMeta(groupId, msg.id, { downloadStatus: 'pending', downloadProgress: undefined });
-              }
-              if (msg.fileMeta.uploadStatus === 'uploading') {
-                await tempStorage.updateFileMessageMeta(groupId, msg.id, { uploadStatus: 'failed' });
-              }
-            }
-          }
-        } catch (err) {
-          console.error('AppContext: failed to reset interrupted file transfers', err);
-        }
+        await hydrateRestoredApp(tempSession, tempStorage, did);
 
         return true;
       }
@@ -2581,6 +2604,57 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
   }, [storage]);
 
   // -------------------------------------------------------------------------
+  // Embed token application
+  // -------------------------------------------------------------------------
+
+  const applyEmbedToken = useCallback(async (payload: EmbedTokenPayload): Promise<void> => {
+    if (!isEmbedContext()) return;
+    if (embedMismatch) return;
+    if (
+      typeof payload?.did !== 'string' || payload.did.length === 0 ||
+      typeof payload?.handle !== 'string' || payload.handle.length === 0 ||
+      typeof payload?.accessJwt !== 'string' || payload.accessJwt.length === 0 ||
+      typeof payload?.refreshJwt !== 'string' || payload.refreshJwt.length === 0
+    ) return;
+
+    if (!session) {
+      const newSession = new DmeSession();
+      const newStorage = new DmeStorage(payload.did);
+      newSession.setStorage(newStorage);
+      newSession.setEmbedToken(payload);
+      await hydrateRestoredApp(newSession, newStorage, payload.did);
+      setEmbedTokenApplied(true);
+      return;
+    }
+
+    if (session.did === payload.did) {
+      session.setEmbedToken(payload);
+      setEmbedTokenApplied(true);
+      return;
+    }
+
+    setEmbedMismatch({ localDid: session.did, tokenDid: payload.did });
+    poller?.stop();
+    return;
+  }, [embedMismatch, session, poller, hydrateRestoredApp]);
+
+  useEffect(() => {
+    start(applyEmbedToken);
+  }, [applyEmbedToken]);
+
+  useEffect(() => {
+    if (!isEmbedContext()) return;
+    const inst = sessionRef.current;
+    inst?.setEmbedRefreshBlockedHandler(() => {
+      const jwt = inst.accessJwt;
+      if (jwt) notifySessionInvalid(jwt);
+    });
+    return () => {
+      inst?.setEmbedRefreshBlockedHandler(null);
+    };
+  }, [session]);
+
+  // -------------------------------------------------------------------------
   // Cleanup
   // -------------------------------------------------------------------------
 
@@ -2616,6 +2690,8 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       receivedGroupInvites,
 blockList,
       soundEnabled,
+      embedMismatch,
+      embedTokenApplied,
       login,
       logout,
       restoreSession,
@@ -2655,11 +2731,13 @@ blockList,
       unblockMember,
       setActiveConversation,
       setSoundEnabled,
+      applyEmbedToken,
     }),
     [
       session, storage, identityKeys, poller, pds, loading, error,
       groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy, serverUrl, gatewayUrl,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
+      embedMismatch, embedTokenApplied,
       login, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, sendFileMessage, retryUploadFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, trackInvitePendingWelcome, deletePendingWelcome, acceptInviteQr,
@@ -2667,6 +2745,7 @@ blockList,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
       leaveGroup, refreshBlockList, blockMember, unblockMember, setActiveConversation, setSoundEnabled,
+      applyEmbedToken,
     ],
   );
 

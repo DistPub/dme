@@ -11,6 +11,12 @@ Writes : dme-client/assets/images/
            splash-icon-512.png            byte-identical copy of source
            favicon-48.png                 48x48 transparent bilinear downscale
            logo.png                       byte-identical copy of source
+         dme-client/public/icons/
+           icon-192.png                   192x192 opaque #87CEEB background
+           icon-512.png                   512x512 opaque #87CEEB background
+           icon-maskable-512.png          512x512 #87CEEB background, logo in 66% safe zone
+           apple-touch-icon-180.png       180x180 opaque #87CEEB background (iOS)
+           favicon-48.png                 48x48 transparent bilinear downscale
 
 Usage (from repo root, or any cwd - paths are derived from __file__):
     python3 dme-client/scripts/generate-brand-assets.py
@@ -32,12 +38,19 @@ REPO_ROOT = os.path.dirname(CLIENT_DIR)               # dme/
 
 SRC_LOGO = os.path.join(CLIENT_DIR, "public", "logo.png")
 OUT_DIR = os.path.join(CLIENT_DIR, "assets", "images")
+PWA_DIR = os.path.join(CLIENT_DIR, "public", "icons")
 
 ICON_OUT = os.path.join(OUT_DIR, "icon-1024.png")
 ADAPTIVE_OUT = os.path.join(OUT_DIR, "adaptive-foreground-1024.png")
 SPLASH_OUT = os.path.join(OUT_DIR, "splash-icon-512.png")
 FAVICON_OUT = os.path.join(OUT_DIR, "favicon-48.png")
 LOGO_OUT = os.path.join(OUT_DIR, "logo.png")
+
+PWA_ICON_192_OUT = os.path.join(PWA_DIR, "icon-192.png")
+PWA_ICON_512_OUT = os.path.join(PWA_DIR, "icon-512.png")
+PWA_ICON_MASKABLE_OUT = os.path.join(PWA_DIR, "icon-maskable-512.png")
+PWA_APPLE_180_OUT = os.path.join(PWA_DIR, "apple-touch-icon-180.png")
+PWA_FAVICON_48_OUT = os.path.join(PWA_DIR, "favicon-48.png")
 
 # iOS icon background: standard skyblue
 BG_R, BG_G, BG_B = 135, 206, 235            # #87CEEB (135,206,235)
@@ -50,6 +63,9 @@ SRC_BBOX_LONG = max(SRC_BBOX_X1 - SRC_BBOX_X0 + 1,
 
 # Android adaptive icon safe zone: content longest edge <= 66% of 1024
 SAFE_EDGE = 676
+
+# PWA maskable icon safe zone: 512 * 0.66 ~= 338px max logo dimension
+PWA_MASKABLE_EDGE = 338
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
@@ -322,6 +338,7 @@ def main():
         return 1
 
     os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(PWA_DIR, exist_ok=True)
 
     outputs = []
 
@@ -362,6 +379,37 @@ def main():
         fp.write(src_bytes)
     outputs.append(LOGO_OUT)
 
+    # ---- PWA icons (dme-client/public/icons/) ----
+    pwa_outputs = []
+
+    # (f) icon-192.png / icon-512.png / apple-touch-icon-180.png :
+    #     bilinear resize + opaque #87CEEB background
+    for out_path, size in ((PWA_ICON_192_OUT, 192),
+                           (PWA_ICON_512_OUT, 512),
+                           (PWA_APPLE_180_OUT, 180)):
+        resized = bilinear_resize(src, sw, sh, size, size)
+        buf = compose_over_bg(resized, size, size, BG_R, BG_G, BG_B)
+        with open(out_path, "wb") as fp:
+            fp.write(encode_png(size, size, buf))
+        pwa_outputs.append(out_path)
+
+    # (g) icon-maskable-512.png : full-bleed #87CEEB bg, logo in 66% safe zone
+    mask_scale = PWA_MASKABLE_EDGE / float(SRC_BBOX_LONG)
+    mask_w = int(round(sw * mask_scale))
+    mask_h = int(round(sh * mask_scale))
+    mask_fg = bilinear_resize(src, sw, sh, mask_w, mask_h)
+    mask_buf = compose_over_bg(bytearray(512 * 512 * 4), 512, 512, BG_R, BG_G, BG_B)
+    blit_center(mask_buf, 512, 512, mask_fg, mask_w, mask_h, (512 - mask_w) // 2, (512 - mask_h) // 2)
+    with open(PWA_ICON_MASKABLE_OUT, "wb") as fp:
+        fp.write(encode_png(512, 512, mask_buf))
+    pwa_outputs.append(PWA_ICON_MASKABLE_OUT)
+
+    # (h) favicon-48.png : transparent bilinear downscale (same as existing)
+    pwa_fav = bilinear_resize(src, sw, sh, 48, 48)
+    with open(PWA_FAVICON_48_OUT, "wb") as fp:
+        fp.write(encode_png(48, 48, pwa_fav))
+    pwa_outputs.append(PWA_FAVICON_48_OUT)
+
     # ---- self-checks ----
     icon_buf_rt = assert_roundtrip(
         ICON_OUT, 1024, 1024,
@@ -378,8 +426,27 @@ def main():
             out_bytes = fp.read()
         check(out_bytes == src_bytes, "%s not byte-identical to source" % path)
 
+    for path, size in ((PWA_ICON_192_OUT, 192),
+                       (PWA_ICON_512_OUT, 512),
+                       (PWA_APPLE_180_OUT, 180),
+                       (PWA_ICON_MASKABLE_OUT, 512)):
+        buf_rt = assert_roundtrip(path, size, size,
+                                  corner_bg=(BG_R, BG_G, BG_B, 255))
+        cr, cg, cb, ca = px(buf_rt, size, size // 2, size // 2)
+        check(ca == 255, "%s center alpha=%d != 255" % (path, ca))
+
+    mask_buf_rt = assert_roundtrip(PWA_ICON_MASKABLE_OUT, 512, 512,
+                                   corner_bg=(BG_R, BG_G, BG_B, 255))
+    mr, mg, mb, ma = px(mask_buf_rt, 512, 256, 256)
+    check((mr, mg, mb, ma) != (BG_R, BG_G, BG_B, 255),
+          "icon-maskable-512 center is pure background (logo missing?)")
+
+    assert_roundtrip(PWA_FAVICON_48_OUT, 48, 48, corner_alpha=0)
+
     print("wrote:")
     for p in outputs:
+        print("  %s (%d bytes)" % (p, os.path.getsize(p)))
+    for p in pwa_outputs:
         print("  %s (%d bytes)" % (p, os.path.getsize(p)))
     print("PASS")
     return 0

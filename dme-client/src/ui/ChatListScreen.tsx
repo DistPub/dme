@@ -37,6 +37,7 @@ import {
 import type { StoredMessage } from '../storage/db';
 import type { PendingWelcome } from '../storage/db';
 import type { PendingInvite, GroupInfo } from '../protocol/group-message';
+import { isEmbedContext } from '../embed/protocol';
 import type { RootStackParamList } from '../types/navigation';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -822,13 +823,15 @@ const resolveProfiles = useCallback(async (
             >
               <Text style={styles.menuItemText}>{t('chatlist.blockList')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleLogoutPress}
-              style={styles.menuItem}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.menuItemText, { color: theme.colors.error }]}>{t('chatlist.logout')}</Text>
-            </TouchableOpacity>
+            {!isEmbedContext() && (
+              <TouchableOpacity
+                onPress={handleLogoutPress}
+                style={styles.menuItem}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.menuItemText, { color: theme.colors.error }]}>{t('chatlist.logout')}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </>
       )}

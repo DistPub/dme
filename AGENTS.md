@@ -56,7 +56,8 @@ dme/
 | 任务 | 位置 |
 |---|---|
 | MLS 会话管理 | `dme-client/src/crypto/mls-session.ts` (255 行 MlsSession 类) |
-| MLS 密码套件配置 | `dme-client/src/crypto/mls-config.ts` |
+| MLS 密码套件配置 | `dme-client/src/crypto/mls-config.ts`（常量 + `MLS_CIPHERSUITE_NAME`） |
+| MLS 纯 JS KDF（iOS16 Safari） | `dme-client/src/crypto/mls-noble-kdf.ts`（`getNobleMlsImpl` + `nobleHkdfSha256`，用 @noble/hashes 替代 @hpke WebCrypto HKDF） |
 | MLS 凭证 | `dme-client/src/crypto/mls-credential.ts` |
 | QueueID 派生 | `dme-client/src/crypto/mls-queue-id.ts` |
 | KeyPackage 加密 | `dme-client/src/crypto/keypackage.ts` |
@@ -75,12 +76,12 @@ dme/
 | PDS 记录写入 + 批量查询 | `dme-client/src/atproto/pds.ts` (envelope + identity backup + AppView proxy，**网关模式下自动发送 `dme-server` header 指定目标 server**) |
 | AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
 | 网关默认地址 | `dme-client/src/config.ts` (DEFAULT_DME_GATEWAY_URL = `https://e2ee.hukoubook.com`) |
-| 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton） |
+| 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton；支持 `onPressIn`） |
 | 多语言 (i18n) | `dme-client/src/i18n/I18nContext.tsx`（`I18nProvider` + `useI18n`）+ `i18n/translations.ts`（zh/en 字典，202 key）+ `i18n/format.ts`（`t()` 内插） |
 | Web 页面标题 | `dme-client/src/utils/web-title.ts`（`setWebTitle` + `useWebTitle`，Web 注入 `document.title = "<标题> - DME"`，Native no-op） |
 | 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题 i18n `chatlist.title`，默认中文「隐世」；顶部栏用户头像右侧上下展示昵称+handle；列表行 1:1 头像+昵称+时间+@handle+预览，群聊同样布局 + 头像占位 + creator handle；时间/预览文案走 `t()`） |
 | 设置页面 | `dme-client/src/ui/SettingsScreen.tsx`（Language 语言切换（zh/en）+ Poll Batch Size + AppView Proxy + Server URL + Gateway URL + Sound 开关 + Identity Backup；顶部返回按钮 + 标题栏） |
-| 消息提示音 | `dme-client/src/utils/sound.ts`（运行时生成 3 声 880Hz WAV；Web 用 Web Audio API，Native 用 expo-av） |
+| 消息提示音 | `dme-client/src/utils/sound.ts`（运行时生成 3 声 880Hz WAV；Web 用 Web Audio API `AudioContext` + `decodeAudioData`，Native 用 expo-av；`unlockWebAudio()` 首次手势静音解锁） |
 | 创建群聊 | `dme-client/src/ui/CreateGroupScreen.tsx` |
 | 群管理 | `dme-client/src/ui/GroupSettingsScreen.tsx`（成员行头像+昵称+@handle；Block 按钮弹模态确认；已 block 成员显示 Unblock） |
 | 私聊管理 | `dme-client/src/ui/DmSettingsScreen.tsx`（对方头像+昵称+@handle；Block 按钮弹模态确认；已 block 显示取消屏蔽） |
@@ -94,9 +95,6 @@ dme/
 | HTTP 端点 | `dme-server/internal/server/server.go` (2 个端点) |
 | BadgerDB 存储 | `dme-server/internal/store/store.go` |
 | Jetstream 消费 | `dme-server/internal/jetstream/consumer.go` |
-## 网关代理
-
-`dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN + `/xrpc/dme.batch.get` 反代，**支持 `dme-server` header 动态切目标**，全局 OPTIONS 预检 + CORS，**允许 `dme-server`、`Authorization` header**，预检缓存 24h）
 | 文件加密 | `dme-client/src/crypto/file-crypto.ts`（逐块 AES-256-GCM 加解密） |
 | 文件协议类型 | `dme-client/src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
 | 文件发送/下载/重试上传 | `dme-client/src/state/AppContext.tsx`（`sendFileMessage` + `retryUploadFileMessage` + `downloadFile`，字节级进度） |
@@ -106,20 +104,27 @@ dme/
 | PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
 | Gateway (blob CDN + batch 代理) | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN 缓存 + `/xrpc/dme.batch.get` 反代 dme-server，**支持 `dme-server` header 动态切目标**，全局 OPTIONS 预检 + CORS，**允许 `dme-server`、`Authorization` header**，预检缓存 24h） |
 
+## 网关代理
+
+`dme-gateway/src/index.ts`：Cloudflare Worker，两个端点——`/xrpc/dme.file.blob`（blob CDN：流式转发 PDS `com.atproto.sync.getBlob`，≤100MB 写 `caches.default` 7 天缓存）+ `/xrpc/dme.batch.get`（反代 `DME_SERVER_URL`）。全局 OPTIONS 预检 + CORS（允许 `dme-server`、`Authorization` header，预检缓存 24h）。请求头 `dme-server` 可动态覆盖目标 server 地址（无需重新部署）；客户端 `DmePds.batchGetEnvelopes` 在网关模式下自动携带该 header（值 = `serverUrl`）。详见「注意事项 - Gateway」。
+
 ## 关键代码符号
 
 | 符号 | 类型 | 位置 | 角色 |
 |---|---|---|---|
 | `MlsSession` | class | mls-session.ts | MLS 群组会话：创建/加入/加解密/序列化 |
-| `getMlsImpl` | func | mls-config.ts | 缓存 CiphersuiteImpl（MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519） |
+| `getNobleMlsImpl` | func | mls-noble-kdf.ts | 组装 CiphersuiteImpl，仅把 kdf 替换为纯 JS HKDF（`nobleHkdfSha256`），其余复用 nobleCryptoProvider；规避 iOS 16 Safari WebCrypto HKDF 崩溃 |
+| `nobleHkdfSha256` | const | mls-noble-kdf.ts | 纯 JS HKDF-SHA256，实现 ts-mls 的 `Kdf` 接口（extract/expand/size） |
+| `getMlsImpl` | func | mls-config.ts | 旧版 CiphersuiteImpl 缓存（现已被 `getNobleMlsImpl` 取代，无引用保留） |
 | `generateKeyPackageForUser` | func | keypackage.ts | 生成 KeyPackage 对 |
 | `encryptKeyPackage` | func | keypackage.ts | X25519 ECDH + AES-256-GCM 加密 KeyPackage |
 | `deriveMessageQueueId` | func | mls-queue-id.ts | MLS exporter secret 派生盲查 queueId |
 | `deriveWelcomeQueueId` | func | mls-queue-id.ts | SHA-256(initKey) 派生 Welcome queueId |
 | `createDidCredential` | func | mls-credential.ts | DID -> MLS BasicCredential |
-| `DmePoller` | class | poller.ts | 批量轮询 + LRU 去重 + 按 generation 排序 |
-| `DmePds` | class | pds.ts | PDS 记录操作 + AppView proxy（agent.configureProxy 设置 atproto-proxy header） |
-| `DmeStorage` | class | db.ts | AsyncStorage 持久化（含 appViewProxy 配置） |
+| `DmePoller` | class | poller.ts | 批量轮询 + LRU 去重 + 按 generation 排序；`polling` 标志防 `pollOnce` 重入，`inFlightQueueIds` Set 防跨轮重复投递（`markQueueIdProcessed` 在 onMessage/onWelcome 之前调用，避免竞态窗口） |
+| `DmePds` | class | pds.ts | PDS 记录操作 + AppView proxy（agent.configureProxy 设置 atproto-proxy header）；网关模式 `batchGetEnvelopes` 自动加 `dme-server` header 指定目标 server |
+| `DmeStorage` | class | db.ts | AsyncStorage 持久化（含 appViewProxy 配置）；`hasMessage(conversationId, messageId)` 幂等检查 |
+| `hasMessage` | method | db.ts | 判断某会话是否已存指定 messageId（`handleIncomingMessage` text/file 入口处做幂等检查，防重复存储与误播提示音） |
 | `AppProvider` | component | AppContext.tsx | 全局状态中心 |
 | `declareKeys` | func | did.ts | PLC 操作发布 Ed25519 + X25519 到 DID 文档 |
 | `getDidMethod` | func | did.ts | 判断 DID 方法类型（plc/web/other） |
@@ -161,7 +166,8 @@ dme/
 | `MessageActionMenu` | component | MessageActionMenu.tsx | 消息长按/右键浮层菜单（复制/转发/删除） |
 | `deleteMessage` | action | AppContext.tsx | 本地删除单条消息，递增 chatListVersion 刷新 |
 | `deleteMessage` | method | db.ts | 从 AsyncStorage 过滤删除指定 messageId |
-| `playMessageSound` | func | sound.ts | 播放「嘀嘀嘀」提示音；Web 用 Web Audio API 振荡器，Native 用 expo-av 播放运行时生成的 WAV |
+| `playMessageSound` | func | sound.ts | 播放「嘀嘀嘀」提示音；Web 用 Web Audio API（`AudioContext` + `decodeAudioData` 播放运行时生成的 WAV buffer），Native 用 expo-av 播放运行时生成的 WAV |
+| `unlockWebAudio` | func | sound.ts | 首次用户手势时用 `AudioContext` 播放 1-sample 静音 buffer 解锁音频（ChatListScreen 会话行 `onTap` 调用）；iOS Safari 可靠解锁 |
 | `setActiveConversation` | action | AppContext.tsx | 设置当前活跃会话 ID（ref，不触发重渲染）；ChatView focus 时设置，blur 时清空 |
 | `activeConversationRef` | ref | AppContext.tsx | `useRef<string \| null>`，当前 ChatView 的会话 ID，`handleIncomingMessage` 据此判断是否播放提示音 |
 | `soundEnabled` | state | AppContext.tsx | `boolean`，提示音开关；`handleIncomingMessage` 在播放前检查，Settings 页 Switch 控制 |
@@ -289,7 +295,7 @@ dme/
 
 | 平台 | 实现 |
 |---|---|
-| Web | Web Audio API 振荡器（`AudioContext` + `OscillatorNode`），无文件 |
+| Web | Web Audio API：`AudioContext` + `decodeAudioData` 解码运行时生成的 WAV buffer，`createBufferSource()` 播放；首次手势时 `unlockWebAudio()` 播放 1-sample 静音 buffer 解锁（iOS Safari 唯一可靠方式） |
 | Native | 运行时生成 WAV base64 -> `expo-file-system` 写入临时文件 -> `expo-av` 播放 |
 
 触发逻辑（`handleIncomingMessage` 中，收到 `kind: 'text'` 或 `kind: 'group_invite'` 消息后）：
@@ -303,6 +309,7 @@ dme/
 - `activeConversationRef`（`useRef`）追踪当前 ChatView 的会话 ID，ChatView focus 时设置、blur 时清空，不触发重渲染
 - `soundEnabled`（`boolean` state）控制全局开关，Settings 页 Switch 切换，默认 `true`，持久化到 AsyncStorage
 - 系统消息（`kind: 'group_system'`）和表情反应（`type: 'reaction'`）不触发提示音
+- `unlockWebAudio()` 在 ChatListScreen 会话行 `onTap` 首次手势时调用（Web Audio API 在用户手势前无法播放）；未解锁时 `playWeb` 静默 return，等解锁后再响，避免 iPhone 进聊天页「滴滴滴」误响
 
 ## 群组生命周期状态
 
@@ -353,7 +360,7 @@ Web 端浏览器标签标题统一为 `"<页面标题> - DME"`，由 `src/utils/
 - **群聊 Commit**: 每次 addMember 产生的 Commit 必须通过1:1通道发给已有成员（poller 只轮询 application 消息，不轮询 handshake Commit）
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`）走 MLS session 加密，挂 `StoredMessage.reactions`，不存为文本消息
 - **消息操作菜单**: 长按（原生）/右键（web）消息气泡弹出 `MessageActionMenu`（复制/转发/删除）；复制走 `expo-clipboard`，转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，删除仅本地删除（PDS 密文不变）
-- **消息提示音**: `playMessageSound()`（`src/utils/sound.ts`）播放「嘀嘀嘀」3 声 880Hz；Web 用 Web Audio API 振荡器，Native 用 `expo-av` 播放运行时生成的 WAV（写入 `expo-file-system` 临时文件，首次生成后缓存）；`handleIncomingMessage` 对 `kind: 'text'` 和 `kind: 'group_invite'` 消息触发，`kind: 'group_system'` 和 `type: 'reaction'` 不触发；`activeConversationRef`（ref，不触发重渲染）追踪当前 ChatView 会话 ID 决定是否播放，`soundEnabled`（state）控制全局开关
+- **消息提示音**: `playMessageSound()`（`src/utils/sound.ts`）播放「嘀嘀嘀」3 声 880Hz；Web 用 Web Audio API（`AudioContext` + `decodeAudioData` 解码运行时生成的 WAV buffer 后 `createBufferSource()` 播放），Native 用 `expo-av` 播放运行时生成的 WAV（写入 `expo-file-system` 临时文件，首次生成后缓存）；`unlockWebAudio()` 在 ChatListScreen 会话行 `onTap` 首次手势时播放 1-sample 静音 buffer 解锁（iOS Safari 唯一可靠方式，未解锁时静默 return 等解锁）；`handleIncomingMessage` 对 `kind: 'text'` 和 `kind: 'group_invite'` 消息触发，`kind: 'group_system'` 和 `type: 'reaction'` 不触发；`activeConversationRef`（ref，不触发重渲染）追踪当前 ChatView 会话 ID 决定是否播放，`soundEnabled`（state）控制全局开关
 - **成员离开**: MLS 禁止自身 removeMember，通过 `group_member_left` 通知其他成员，群主收到后执行 removeMember
 - **i18n**: 全部 UI 文案走 `useI18n().t('key')` / `t('key', {params})`，禁止硬编码中英文字符串；字典键命名 `<screen>.<name>`（通用键 `common.*`），新增 key 必须同时登记 `zh` 与 `en`；`en` 缺失时回退 `zh` 再回退 key，占位符用 `{name}`；群聊系统消息与邀请帖正文在**生成时**按当前 `language` 渲染后存入 `plaintext`（历史消息不随语言切换改变）
 - **Web 页面标题**: `document.title` 统一为 `"<标题> - DME"`，仅 Web 生效；静态路由经 `App.tsx` 的 `ROUTE_TITLE_KEYS` 集中映射，会话级动态标题（ChatView/GroupSettings/DmSettings）由屏幕自身 `useWebTitle` 管理，语言切换时通过 `useEffect([t])` 重设
@@ -375,7 +382,9 @@ Web 端浏览器标签标题统一为 `"<页面标题> - DME"`，由 `src/utils/
 - **包管理器**: TS 侧统一 Bun，Go 侧标准 go 工具链
 - **TypeScript**: `strict: true`（两个 TS 项目都是）
 - **Go**: 1.22，仅 2 个直接依赖（badger/v4 + coder/websocket），无框架
-- **加密库**: ts-mls + @noble/curves + @noble/hashes + @noble/ciphers（非 WebCrypto，因 Safari < 17 不支持 X25519）
+- **加密库**: ts-mls + @noble/curves + @noble/hashes + @noble/ciphers（非 WebCrypto，因 Safari < 17 不支持 X25519）；**iOS 16 Safari 额外兼容**：ts-mls `nobleCryptoProvider` 仍走 @hpke 的 WebCrypto HKDF，`crypto.subtle.importKey` 在 iOS16 会返回 undefined 崩溃，故经 `getNobleMlsImpl()`（`mls-noble-kdf.ts`）仅把 kdf 替换为纯 JS `nobleHkdfSha256`（`@noble/hashes`）后使用；所有取 CiphersuiteImpl 处必须用 `getNobleMlsImpl()`，禁止直接用 `getMlsImpl`/`nobleCryptoProvider` 的默认 kdf
+- **消息去重与 poller 重入保护**: `DmePoller.pollOnce` 用 `polling` 布尔标志防止重入（同一实例并发只跑一次）；轮询处理时用 `inFlightQueueIds`（Set）跳过本轮已投递的 queueId，且 `markQueueIdProcessed` 在 `onMessage`/`onWelcome` **之前**调用（先标记后处理，避免回调 await 期间被下一轮重复处理）；`handleIncomingMessage` 的 text/file 分支入口调用 `msgStorage.hasMessage(conversationId, queueId)` 做幂等检查，已存在则跳过存储（群聊文本 default 分支同样检查），防止重复存储与误播提示音
+- **输入框多行自适应**: `ChatViewScreen` 输入框 `multiline`，`onContentSizeChange` 动态调高度（clamp 44–240px）；Enter 发送仅在**非触屏**设备（`navigator.maxTouchPoints === 0`）的 web 端生效（`onKeyPress` 且 `!shiftKey`），触屏设备回车换行；发送后 `keepInputFocused()` 保持焦点（web 用 `requestAnimationFrame` 补一次），发送按钮外层 `View` 挂 `mousedown` preventDefault 防止点按钮时 web 失焦（`Button` 支持 `onPressIn`）
 - **日志**: Go 用 `log/slog` JSON 输出；TS 用 `console.error`/`console.warn`（仅错误和警告）
 - **错误处理**: Go 用 `fmt.Errorf("...: %w", err)` 包装；TS 用 `throw new Error("prefix: ...")`
 - **命名导出**: TS 统一 `export function/class`，无 default export（除 App.tsx 和 CF Worker）
@@ -388,6 +397,7 @@ Web 端浏览器标签标题统一为 `"<页面标题> - DME"`，由 `src/utils/
 # dme-client
 cd dme-client && bun install && bun run dev          # expo start
 cd dme-client && bun run web                          # web only
+cd dme-client && bun run build:web                    # expo export -p web（产物 dist/，用于 Cloudflare Pages 等静态托管）
 
 # dme-server
 cd dme-server && go run main.go --addr :8080 --db ./dme.db --jetstream wss://jetstream2.fr.hose.cam
@@ -433,6 +443,9 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本/文件消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
 - **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
 - **expo-document-picker**: 新增依赖 `expo-document-picker@~57.0.1`（Expo 52 兼容），用于文件选择（`getDocumentAsync({type: '*/*'})`），返回 `{uri, name, mimeType, size}`
+- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web`）产物 `dist/` 静态托管；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`；`index.web.js` `LoadSkiaWeb({ locateFile: (file) => './${file}' })` 用**相对路径**（子路径/Pages 部署下绝对 `/` 会 404）
+- **iOS 16 Safari 兼容**: ts-mls `nobleCryptoProvider` 的 HKDF 仍走 @hpke WebCrypto（`crypto.subtle.importKey` 在 iOS16 返回 undefined 崩溃），故所有取 CiphersuiteImpl 处改用 `getNobleMlsImpl()`（纯 JS `nobleHkdfSha256`，`@noble/hashes`）；`deriveMessageQueueId` 内部自行取 impl（不再收 impl 参数）；`getMlsImpl` 已无引用保留
+- **CI Release**: `.github/workflows/release.yml` 交叉编译 6 目标（linux amd64/arm64/armv7、darwin amd64/arm64、windows amd64），`CGO_ENABLED=0`，已移除 `docker/setup-qemu-action`（Go 纯 Go 交叉编译无需 QEMU），Build/Verify 步骤显式 `shell: bash`（Windows runner 默认 pwsh 不支持此处语法）；打 `v*` tag 触发 `go build -ldflags="-s -w -X main.version=<tag>"` 并发布 GitHub Release
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
 - **文件发送**: 先保存本地副本（web->IndexedDB / native->documentDirectory）再上传；先写入 `uploadStatus:'uploading'` 乐观消息（tempId 为 `generateId()`），成功后删除临时消息写入最终消息（id=MLS queueId，reactions 跨端靠 queueId 匹配）。逐块 5MB AES-256-GCM 加密，经 XHR `uploadBlobWithProgress` 上传 PDS（`upload.onprogress` 字节级 uploadProgress；fetch 无上传进度故绕过 agent.uploadBlob，自带 Authorization + atproto-proxy header，取自 `session.pdsUrlStr`/`session.accessJwt`/`agent.proxy`）。blobCids 字段引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式，PDS 可识别防 GC），与 MLS manifest 共存同一条 `dme.queue.envelope`（单 record）。上传失败仅置 `uploadStatus:'failed'` 不抛异常，可 `retryUploadFileMessage` 从本地副本重试。下载时 blob fetch 失败指数退避重试 2s/4s/8s，最多 3 次。图片 ≤ 5MB 自动下载，其他类型手动
 - **文件消息存储**: `StoredMessage.kind = 'file'`，`fileMeta` 字段含完整元数据（含 `uploadStatus`/`uploadProgress`/`downloadStatus`/`downloadProgress`）。`updateFileMessageMeta` 局部更新状态/进度/本地路径。发送方上传成功后 `downloadStatus: 'ready'` + `uploadStatus: 'uploaded'`，接收方初始 `downloadStatus: 'pending'`。上传中消息 id 为临时 generateId，成功后替换为 queueId

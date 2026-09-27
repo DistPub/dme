@@ -87,6 +87,18 @@ export const zh: Record<string, string> = {
   'settings.enterPassword': '请输入密码',
   'settings.passwordMismatch': '两次密码不一致',
   'settings.backupFailed': '备份失败',
+  'settings.about': '关于',
+
+  // about
+  'about.title': '关于',
+  'about.intro': '隐世（Decentralized Message Envelope）是基于 AT Protocol 的端到端加密私信客户端。用你的 AT Protocol 账号登录，通过 MLS（RFC 9420）端到端加密，安全地收发 1v1 私信、群聊消息与文件。',
+  'about.mission': '我们的使命：让每个人掌控自己的身份与数据。消息以密文形式只存在于你自己的 PDS 上，没有中心化服务器能窥探你的对话。',
+  'about.openSourceHint': '隐世是开源软件，欢迎在 GitHub 查看源码、提交 Issue：',
+  'about.githubLabel': 'github.com/distpub/dme',
+  'about.official': '隐世自豪地作为 Fatesky 的官方私信方式，为 Fatesky 社区提供端到端加密的私密交流。',
+  'about.fateskyLabel': 'Fatesky',
+  'about.madeWith': 'made with 💖 by',
+  'about.smitechowLabel': '@smitechow.com',
 
   // chatlist
   'chatlist.title': '隐世',
@@ -327,6 +339,18 @@ export const en: Record<string, string> = {
   'settings.enterPassword': 'Enter a password',
   'settings.passwordMismatch': 'Passwords do not match',
   'settings.backupFailed': 'Backup failed',
+  'settings.about': 'About',
+
+  // about
+  'about.title': 'About',
+  'about.intro': 'DME (Decentralized Message Envelope) is an end-to-end encrypted messaging client built on AT Protocol. Sign in with your AT Protocol account and exchange 1v1 messages, group chats, and files with MLS (RFC 9420) end-to-end encryption.',
+  'about.mission': 'Our mission: put identity and data back in your hands. Messages live only as ciphertext on your own PDS — no centralized server can peek at your conversations.',
+  'about.openSourceHint': 'DME is open source — check out the code or file issues on GitHub:',
+  'about.githubLabel': 'github.com/distpub/dme',
+  'about.official': 'DME is proudly the official messaging method for Fatesky, bringing end-to-end encrypted private conversations to the Fatesky community.',
+  'about.fateskyLabel': 'Fatesky',
+  'about.madeWith': 'made with 💖 by',
+  'about.smitechowLabel': '@smitechow.com',
 
   // chatlist
   'chatlist.title': 'DME',

@@ -8,6 +8,7 @@ export type RootStackParamList = {
   QrDisplay: undefined;
   QrScan: undefined;
   Settings: undefined;
+  About: undefined;
   CreateGroup: { groupId?: string } | undefined;
   GroupSettings: { groupId: string };
   DmSettings: { friendDid: string };

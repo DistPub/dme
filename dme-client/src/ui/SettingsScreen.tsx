@@ -281,6 +281,12 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         {backupError ? (
           <Text style={styles.error}>{backupError}</Text>
         ) : null}
+        <Button
+          label={t('settings.about')}
+          onPress={() => navigation.navigate('About')}
+          variant="secondary"
+          style={styles.fullButton}
+        />
       </ScrollView>
     </View>
   );

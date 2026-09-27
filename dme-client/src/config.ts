@@ -11,7 +11,7 @@ export const DME_SERVER_URL = 'https://dme.mymutual.fans';
  * DME gateway (Cloudflare Worker) URL - 客户端面向的网关地址。
  * 空字符串表示直连 server（不经网关）。
  */
-export const DEFAULT_DME_GATEWAY_URL = '';
+export const DEFAULT_DME_GATEWAY_URL = 'https://e2ee.hukoubook.com';
 
 /** PLC directory base URL. */
 export const PLC_DIRECTORY_URL = 'https://plc.directory';

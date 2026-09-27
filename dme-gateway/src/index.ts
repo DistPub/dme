@@ -19,7 +19,8 @@ const CORS_METHODS = 'GET, POST, OPTIONS';
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': CORS_ORIGIN,
   'Access-Control-Allow-Methods': CORS_METHODS,
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, dme-server, Authorization',
+  'Access-Control-Max-Age': '86400',
 };
 
 const UPSTREAM_TIMEOUT_MS = 15_000;
@@ -57,7 +58,7 @@ async function getBlob(url: URL, ctx: ExecutionContext): Promise<Response> {
   if (!pds || !did || !cid) {
     return new Response('Missing required params: pds, did, cid', {
       status: 400,
-      headers: { 'Access-Control-Allow-Origin': '*' },
+      headers: CORS_HEADERS,
     });
   }
 
@@ -77,7 +78,7 @@ async function getBlob(url: URL, ctx: ExecutionContext): Promise<Response> {
   } catch {
     return new Response('Upstream blob fetch failed', {
       status: 504,
-      headers: { 'Access-Control-Allow-Origin': '*' },
+      headers: CORS_HEADERS,
     });
   } finally {
     clearTimeout(timer);
@@ -90,7 +91,7 @@ async function getBlob(url: URL, ctx: ExecutionContext): Promise<Response> {
       status: upstream.status,
       headers: {
         'Content-Type': contentType,
-        'Access-Control-Allow-Origin': '*',
+        ...CORS_HEADERS,
       },
     });
   }
@@ -99,8 +100,8 @@ async function getBlob(url: URL, ctx: ExecutionContext): Promise<Response> {
     status: 200,
     headers: {
       'Content-Type': contentType,
-      'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'public, max-age=604800',
+      ...CORS_HEADERS,
     },
   });
 

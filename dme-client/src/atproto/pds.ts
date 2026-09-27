@@ -110,9 +110,14 @@ export class DmePds {
    * 批量查询 envelopes。
    */
   async batchGetEnvelopes(queueIds: string[]): Promise<DmeEnvelope[]> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    // 当通过网关访问时，通过 dme-server header 指定目标 server 地址
+    if (this.gatewayUrl) {
+      headers['dme-server'] = this.serverUrl;
+    }
     const response = await fetch(`${this.getBaseUrl()}/xrpc/dme.batch.get`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ queueIds }),
     });
 

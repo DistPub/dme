@@ -77,12 +77,14 @@ jobs:
           go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o "../dist/$BIN_NAME" ${{ env.MAIN_PKG }}
           echo "BIN_NAME=$BIN_NAME" >> $GITHUB_OUTPUT
         id: build
+        shell: bash
 
       - name: Verify binary
         working-directory: dme-server
         run: |
           file ../dist/${{ steps.build.outputs.BIN_NAME }}
           ../dist/${{ steps.build.outputs.BIN_NAME }} --help 2>&1 | head -5 || true
+        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

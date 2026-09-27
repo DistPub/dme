@@ -108,6 +108,7 @@ let webAudioEl: HTMLAudioElement | null = null;
 let webAudioUnlocked = false;
 let nativeSound: any = null;
 
+/** Generate a 1-sample silent WAV as data URI for silent unlock. */
 function generateSilentDataUri(): string {
   const bytes = new Uint8Array(46);
   const view = new DataView(bytes.buffer);
@@ -139,6 +140,7 @@ function generateBeepDataUri(): string {
   return `data:audio/wav;base64,${base64}`;
 }
 
+/** Get or create the shared <audio> element. */
 function getWebAudioElement(): HTMLAudioElement {
   if (!webAudioEl && typeof window !== 'undefined') {
     webAudioEl = new Audio();
@@ -149,23 +151,26 @@ function getWebAudioElement(): HTMLAudioElement {
   return webAudioEl!;
 }
 
-function getSilentAudioElement(): HTMLAudioElement {
-  const audio = new Audio();
-  audio.preload = 'auto';
-  audio.src = generateSilentDataUri();
-  audio.load();
-  return audio;
-}
-
+/**
+ * Unlock audio on first user gesture.
+ * Call from click/touch/keydown handler.
+ * Plays silently (volume=0) on the SAME element used for notifications.
+ */
 export function unlockWebAudio(): void {
   if (webAudioUnlocked) return;
-  const audio = getSilentAudioElement();
+  const audio = getWebAudioElement();
 
   try {
+    console.log('unlockWebAudio: unlocking with volume=0...');
+    audio.volume = 0;
     const playPromise = audio.play();
     if (playPromise) {
       playPromise.then(() => {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.volume = 1;
         webAudioUnlocked = true;
+        console.log('unlockWebAudio: unlocked');
       }).catch((e) => {
         console.warn('unlockWebAudio: play failed', e);
       });

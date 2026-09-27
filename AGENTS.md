@@ -393,6 +393,11 @@ cd dme-server && go run main.go --addr :8080 --db ./dme.db --jetstream wss://jet
 #   --addr      HTTP 监听地址（默认 :8080）
 #   --db        BadgerDB 数据目录（默认 ./dme.db，自动创建，已 gitignored）
 #   --jetstream Jetstream WSS（按区域选：us-east 1, us-west 2, eu 3）
+# 也可用环境变量配置（命令行参数优先）：
+#   DME_SERVER_ADDR              HTTP 监听地址（默认 :8080）
+#   DME_SERVER_DB_PATH           BadgerDB 数据目录（默认 ./dme.db）
+#   DME_SERVER_JETSTREAM_URL     Jetstream WSS（默认 wss://jetstream1.us-east.bsky.network）
+#   DME_SERVER_ENVELOPE_TTL      信封 TTL（默认 168h / 7天）
 
 # dme-gateway
 cd dme-gateway && cp wrangler.toml.example wrangler.toml && bun install && bun run dev
@@ -415,6 +420,7 @@ cd dme-gateway && bun run deploy                      # wrangler deploy
 - **退出登录**: ChatListScreen 头像菜单点击 Logout 弹模态对话框，要求用户输入密码先备份（`backupIdentity`）再退出；退出时 `storage.clear()` 删除设备上所有 `dme:<did>:` 前缀的 AsyncStorage 数据；不备份则取消留在当前会话
 - **Go 模块路径**: `dme/dme-server`（本地路径，非 GitHub）
 - **dme.db/**: 运行时自动创建的 BadgerDB 数据目录，已 gitignored
+- **dme-server 环境变量**: 支持 `DME_SERVER_ADDR`、`DME_SERVER_DB_PATH`、`DME_SERVER_JETSTREAM_URL`、`DME_SERVER_ENVELOPE_TTL` 四个环境变量，命令行参数优先覆盖
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`
 - **轮询批量预计算**: poller 默认预计算 3 个 future queueId，可在 Settings 页面调整（1-20）
 - **群聊消息存储**: 通过 `StoredMessage.conversationId` 指定存储到群聊而非1:1，`kind` 字段区分消息类型；`group_invite_request` 在 ChatListScreen 预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 ChatViewScreen 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`

@@ -8,7 +8,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "build:web": "expo export -p web"
+    "build:web": "expo export -p web && workbox generateSW workbox.config.js"
   },
   "dependencies": {
     "@atproto/api": "^0.13.0",
@@ -46,6 +46,7 @@
   "devDependencies": {
     "@expo/metro-runtime": "~4.0.0",
     "@types/react": "~18.3.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "workbox-cli": "^7.4.1"
   }
 }

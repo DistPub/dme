@@ -1,0 +1,303 @@
+/**
+ * components/FileMessageBubble.scss
+ *
+ * ⚠️ 本文件里的 px 会被 Taro 按 designWidth=750 编译成 rpx（真实像素 = 数值 / 2）。
+ */
+
+.filebubble {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  padding: 10px 32px;
+
+  &--in {
+    justify-content: flex-start;
+  }
+
+  &--out {
+    justify-content: flex-end;
+  }
+
+  &__avatarWrap {
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    overflow: hidden;
+    background: #4f46e5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 10px;
+    flex-shrink: 0;
+  }
+
+  &__avatarImg {
+    width: 72px;
+    height: 72px;
+    display: block;
+  }
+
+  &__avatarLetter {
+    color: #ffffff;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 72px;
+  }
+
+  &__col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__senderWrap {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 4px;
+  }
+
+  &__sender {
+    font-size: 24px;
+    font-weight: 600;
+    color: #111111;
+  }
+
+  &__handle {
+    font-size: 20px;
+    color: #999999;
+    margin-top: 2px;
+  }
+
+  &__row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+
+    &--in {
+      justify-content: flex-start;
+    }
+
+    &--out {
+      justify-content: flex-end;
+    }
+  }
+
+  &__container {
+    max-width: 560px;
+    padding: 16px;
+    border-radius: 20px;
+    box-sizing: border-box;
+
+    &--in {
+      background: #ffffff;
+    }
+
+    &--out {
+      background: #d3e7ff;
+    }
+  }
+
+  /* ---- 文件卡 ---------------------------------------------------------- */
+
+  &__card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    min-width: 320px;
+  }
+
+  &__icon {
+    font-size: 46px;
+    line-height: 54px;
+    margin-right: 16px;
+    flex-shrink: 0;
+  }
+
+  &__info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__name {
+    font-size: 28px;
+    font-weight: 600;
+    color: #111111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__size {
+    font-size: 22px;
+    color: #999999;
+    margin-top: 4px;
+  }
+
+  &__hint {
+    font-size: 22px;
+    color: #d93025;
+    margin-top: 4px;
+  }
+
+  &__actionBtn {
+    padding: 10px 22px;
+    margin-left: 16px;
+    border-radius: 999px;
+    background: #4f46e5;
+    flex-shrink: 0;
+  }
+
+  &__actionText {
+    font-size: 24px;
+    color: #ffffff;
+    white-space: nowrap;
+  }
+
+  /* ---- 状态行 / 转圈 --------------------------------------------------- */
+
+  &__statusRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 8px;
+  }
+
+  &__statusText {
+    font-size: 24px;
+    color: #666666;
+    margin-left: 14px;
+  }
+
+  &__spinner {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 4px solid #d8d8dd;
+    border-top-color: #4f46e5;
+    animation: filebubble-spin 0.9s linear infinite;
+    flex-shrink: 0;
+  }
+
+  /* ---- 音频 ------------------------------------------------------------ */
+
+  &__playBtn {
+    width: 64px;
+    height: 64px;
+    border-radius: 32px;
+    background: #4f46e5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 16px;
+    flex-shrink: 0;
+
+    &--disabled {
+      opacity: 0.45;
+    }
+  }
+
+  &__playIcon {
+    font-size: 26px;
+    color: #ffffff;
+    line-height: 64px;
+  }
+
+  /* ---- 图片 / 视频 ----------------------------------------------------- */
+
+  &__mediaWrap {
+    position: relative;
+    line-height: 0;
+  }
+
+  &__imagePreview {
+    width: 400px;
+    height: 300px;
+    border-radius: 12px;
+    display: block;
+  }
+
+  &__playOverlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__playOverlayIcon {
+    font-size: 76px;
+    color: #ffffff;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  }
+
+  /* ---- 表情按钮 / reactions ------------------------------------------- */
+
+  &__emojiBtn {
+    padding: 4px;
+    margin: 0 8px;
+    flex-shrink: 0;
+  }
+
+  &__emojiIcon {
+    font-size: 28px;
+    opacity: 0.55;
+  }
+
+  &__reactions {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 6px;
+
+    &--in {
+      justify-content: flex-start;
+    }
+
+    &--out {
+      justify-content: flex-end;
+    }
+  }
+
+  &__pill {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px 12px;
+    margin-right: 8px;
+    margin-top: 6px;
+    border-radius: 999px;
+    background: #f0f0f2;
+    border: 1px solid transparent;
+
+    &--active {
+      background: #d3e7ff;
+      border-color: #4f46e5;
+    }
+  }
+
+  &__pillEmoji {
+    font-size: 26px;
+    line-height: 34px;
+  }
+
+  &__pillCount {
+    font-size: 22px;
+    color: #666666;
+    margin-left: 4px;
+  }
+}
+
+@keyframes filebubble-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

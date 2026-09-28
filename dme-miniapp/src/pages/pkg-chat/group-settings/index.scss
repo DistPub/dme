@@ -1,0 +1,265 @@
+/**
+ * pages/pkg-chat/group-settings/index.scss
+ */
+
+.groupsettings {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #ffffff;
+
+  &--center {
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__status {
+    font-size: 28px;
+    color: #999999;
+  }
+
+  &__header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 20px 32px;
+    border-bottom: 2px solid #f0f0f2;
+  }
+
+  &__backBtn {
+    margin: 0;
+    padding: 0 20px;
+    height: 60px;
+    line-height: 60px;
+    font-size: 26px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 30px;
+    flex-shrink: 0;
+
+    &::after {
+      border: none;
+    }
+  }
+
+  &__title {
+    flex: 1;
+    font-size: 36px;
+    font-weight: 700;
+    color: #111111;
+    margin-left: 20px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 24px 32px 40px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  &__sectionLabel {
+    display: block;
+    font-size: 24px;
+    color: #666666;
+    margin-bottom: 16px;
+  }
+
+  &__list {
+    flex: 1;
+    overflow: hidden;
+  }
+
+  &__memberRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 20px 0;
+    border-bottom: 2px solid #f7f7f8;
+  }
+
+  &__memberAvatar {
+    width: 80px;
+    height: 80px;
+    border-radius: 40px;
+    flex-shrink: 0;
+    margin-right: 20px;
+
+    &--fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #4f46e5;
+    }
+  }
+
+  &__memberAvatarText {
+    font-size: 32px;
+    font-weight: 700;
+    color: #ffffff;
+  }
+
+  &__memberText {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__memberNameRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  &__memberName {
+    font-size: 28px;
+    font-weight: 600;
+    color: #111111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__creatorTag {
+    font-size: 22px;
+    color: #4f46e5;
+    margin-left: 12px;
+    flex-shrink: 0;
+  }
+
+  &__memberHandle {
+    font-size: 22px;
+    color: #999999;
+    margin-top: 4px;
+  }
+
+  &__memberActions {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  &__miniBtn {
+    margin: 0 0 0 12px;
+    padding: 0 16px;
+    height: 52px;
+    line-height: 52px;
+    font-size: 22px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 26px;
+
+    &::after {
+      border: none;
+    }
+
+    &--danger {
+      color: #dc2626;
+      background: #fef2f2;
+    }
+  }
+
+  &__dissolvedHint {
+    display: block;
+    font-size: 28px;
+    color: #dc2626;
+    text-align: center;
+    padding: 40px 0;
+  }
+
+  &__btn {
+    margin: 12px 0 0;
+    height: 88px;
+    line-height: 88px;
+    font-size: 30px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 16px;
+
+    &::after {
+      border: none;
+    }
+
+    &--primary {
+      color: #ffffff;
+      background: #4f46e5;
+    }
+
+    &--danger {
+      color: #dc2626;
+      background: #fef2f2;
+    }
+  }
+
+  &__modalMask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  &__modalCard {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1001;
+    width: 600px;
+    background: #ffffff;
+    border-radius: 24px;
+    padding: 40px 36px 32px;
+    box-sizing: border-box;
+  }
+
+  &__modalTitle {
+    display: block;
+    font-size: 34px;
+    font-weight: 700;
+    color: #111111;
+    margin-bottom: 16px;
+  }
+
+  &__modalMessage {
+    display: block;
+    font-size: 26px;
+    line-height: 40px;
+    color: #666666;
+    margin-bottom: 24px;
+  }
+
+  &__modalButtons {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+    gap: 16px;
+  }
+
+  &__modalBtn {
+    margin: 0;
+    padding: 0 32px;
+    height: 72px;
+    line-height: 72px;
+    font-size: 26px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 36px;
+
+    &::after {
+      border: none;
+    }
+
+    &--primary {
+      color: #ffffff;
+      background: #ef4444;
+    }
+  }
+}

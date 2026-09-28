@@ -1,0 +1,23 @@
+{
+  "miniprogramRoot": "dist/",
+  "projectname": "dme-miniapp",
+  "appid": "wxf49aa367bc096969",
+  "setting": {
+    "urlCheck": false,
+    "es6": false,
+    "enhance": false,
+    "compileHotReLoad": false,
+    "postcss": false,
+    "minified": false,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "compileType": "miniprogram",
+  "libVersion": "3.3.4",
+  "condition": {}
+}

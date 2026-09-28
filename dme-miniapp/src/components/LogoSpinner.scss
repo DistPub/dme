@@ -1,0 +1,97 @@
+/**
+ * components/LogoSpinner.scss
+ *
+ * 时序对齐 web LogoSpinner（CYCLE_MS=5000, STAGGER_MS=300, FLY_IN=800,
+ * HOLD=1800, FLY_OUT=800）。keyframes 用百分比表达（周期 5s）：
+ *   0%   透明 · 右侧 44px   （未进场）
+ *   16%  实 · 中位          （800ms 飞入）
+ *   52%  实 · 中位          （再停留 1800ms）
+ *   68%  透明 · 左侧 44px   （800ms 飞出）
+ *   100% 保持透明            （尾部等待）
+ * 每字 300ms 相位差用 animation-delay 实现，infinite 循环。
+ */
+
+@keyframes logospinnerFly {
+  0% {
+    opacity: 0;
+    transform: translateX(44px);
+  }
+  16% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  52% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  68% {
+    opacity: 0;
+    transform: translateX(-44px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-44px);
+  }
+}
+
+@keyframes logospinnerSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.logospinner {
+  /* 🔴 全屏 fixed 自居中：所有使用方（login/setup/chat-list 过渡态）渲染
+     的 logo/spinner/文字位置逐像素一致，页面跳转时动画不跳变 */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  z-index: 9999;
+
+  &__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  &__logo {
+    width: 192px;
+    height: 192px;
+    margin-bottom: 24px;
+  }
+
+  &__spinner {
+    width: 48px;
+    height: 48px;
+    border: 5px solid rgba(0, 0, 0, 0.12);
+    border-top-color: #111111;
+    border-radius: 50%;
+    animation: logospinnerSpin 0.9s linear infinite;
+  }
+
+  &__slogan {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-top: 40px;
+  }
+
+  &__sloganChar {
+    display: inline-block;
+    font-size: 26px;
+    color: #999999;
+    opacity: 0;
+    animation: logospinnerFly 5s infinite;
+    /* 首帧必须隐藏：keyframes 0% 已是 opacity 0，backwards 只是保险 */
+    animation-fill-mode: backwards;
+  }
+}

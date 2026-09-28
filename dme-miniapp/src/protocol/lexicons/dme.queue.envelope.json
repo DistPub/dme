@@ -1,0 +1,39 @@
+{
+  "lexicon": 1,
+  "id": "dme.queue.envelope",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "DME encrypted message envelope. Stored on PDS, indexed by AppView, polled via gateway.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["queueId", "payload", "createdAt"],
+        "properties": {
+          "queueId": {
+            "type": "string",
+            "description": "Hash of the ratchet state at the time of encryption. Used as the lookup key for blind polling."
+          },
+          "payload": {
+            "type": "string",
+            "description": "Base64url-encoded ciphertext. Symmetrically encrypted with the message key derived from the current ratchet state."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "ISO 8601 timestamp of when the envelope was created."
+          },
+          "ratchetEpoch": {
+            "type": "integer",
+            "description": "Optional ratchet epoch number. Allows skipping ahead when the recipient polls future queueIds."
+          },
+          "blobCids": {
+            "type": "array",
+            "items": { "type": "blob" },
+            "description": "PDS blob references (standard {$type:'blob', ref:{$link}, mimeType, size}) for encrypted file chunks. Carried on the manifest envelope so the PDS recognizes and preserves the blobs (anti-GC)."
+          }
+        }
+      }
+    }
+  }
+}

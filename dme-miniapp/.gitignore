@@ -1,0 +1,12 @@
+node_modules/
+dist/
+lib/
+.DS_Store
+*.log
+.swc/
+
+# 小程序上传私钥（微信公众平台下载，切勿提交）
+*.key
+private.*.key
+.env
+.env.local

@@ -1,0 +1,142 @@
+/**
+ * pages/pkg-chat/qr-display/index.scss
+ *
+ * 与 web `QrDisplayScreen.tsx` 的 styles 对应：
+ *   container / content / contentInner / title / hint / input / fullButton
+ *   previewBox / previewLabel / previewInput / qrWrap / qr
+ */
+
+.qr {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+  background: #ffffff;
+
+  &__scroll {
+    flex: 1;
+    height: 100%;
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__title {
+    display: block;
+    font-size: 44px;
+    font-weight: 700;
+    color: #111111;
+    margin: 48px 48px 24px;
+  }
+
+  &__hint {
+    display: block;
+    font-size: 30px;
+    line-height: 44px;
+    color: #666666;
+    margin: 0 48px 24px;
+  }
+
+  &__error {
+    display: block;
+    font-size: 30px;
+    line-height: 44px;
+    color: #d93025;
+    margin: 0 48px 24px;
+    word-break: break-all;
+  }
+
+  &__input {
+    height: 96px;
+    margin: 0 48px 24px;
+    padding: 0 28px;
+    box-sizing: border-box;
+    font-size: 30px;
+    color: #111111;
+    background: #f5f5f7;
+    border: 2px solid #e5e5ea;
+    border-radius: 16px;
+  }
+
+  &__button {
+    height: 96px;
+    line-height: 96px;
+    margin: 0 48px 20px;
+    font-size: 32px;
+    color: #ffffff;
+    background: #111111;
+    border-radius: 16px;
+
+    &--ghost {
+      color: #111111;
+      background: #f0f0f2;
+    }
+  }
+
+  /* ---- 帖子预览 ---- */
+  &__previewBox {
+    margin: 0 48px 24px;
+    padding: 24px;
+    background: #f5f5f7;
+    border: 2px solid #e5e5ea;
+    border-radius: 24px;
+    min-height: 240px;
+    box-sizing: border-box;
+  }
+
+  &__previewLabel {
+    display: block;
+    font-size: 24px;
+    color: #888888;
+    margin-bottom: 12px;
+  }
+
+  &__previewInput {
+    width: 100%;
+    min-height: 160px;
+    font-size: 28px;
+    line-height: 40px;
+    color: #111111;
+    background: transparent;
+  }
+
+  /* ---- 二维码 ----
+   * 尺寸策略（2026-09-28 定稿，别再来回改了）：
+   *   · **显示尺寸**由 JSX 内联 style 给出，单位是 **rpx**（= QR_DISPLAY_RPX），
+   *     按屏宽等比缩放，不占满屏也不溢出。
+   *   · **绘制分辨率**由 index.tsx 的 effect 设到 canvas.width/height（px）。
+   *   两个量不同，各自都必须宽高相等 —— 详见 `&__canvas` 注释。
+   */
+  &__canvasWrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    padding: 24px;
+    margin-bottom: 32px;
+    background: #ffffff;
+    border-radius: 24px;
+    box-sizing: border-box;
+  }
+
+  /**
+   * ⚠️⚠️ 这里**绝对不能**写任何 width/height 规则（含 `max-width` / `height: auto`）。
+   *
+   * 根因（2026-09-28 踩了两次，两个方向）：`<Canvas type="2d">` 在微信里渲染成
+   * 原生 `<canvas>`，它**没有固有宽高比**（不像 `<img>` 能从内容推导）：
+   *   · 写 `height: auto` → 高度塌回 canvas 默认值，宽度还被 `max-width:100%`
+   *     压成容器宽 → 二维码被**拉成长方形**。
+   *   · 写 `width: 100%` → 宽度占满屏幕，二维码**过大**。
+   * 两次都是"想加个响应式兜底"惹的祸。
+   *
+   * 正确做法：**尺寸只由 JSX 内联 style 单一来源决定**（rpx，宽高同值），
+   * CSS 只管 display / flex，一个尺寸属性都不碰。
+   * 若将来真要收敛，用 `transform: scale()`，且**不要单独改某一个轴**。
+   */
+  &__canvas {
+    display: block;
+    flex-shrink: 0;
+  }
+}

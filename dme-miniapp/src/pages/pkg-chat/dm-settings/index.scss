@@ -1,0 +1,150 @@
+/**
+ * pages/pkg-chat/dm-settings/index.scss
+ */
+
+.dmsettings {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 48px 32px;
+  box-sizing: border-box;
+  background: #ffffff;
+
+  &__card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 0 48px;
+  }
+
+  &__avatar {
+    width: 160px;
+    height: 160px;
+    border-radius: 80px;
+    margin-bottom: 24px;
+
+    &--fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #4f46e5;
+    }
+  }
+
+  &__avatarText {
+    font-size: 64px;
+    font-weight: 700;
+    color: #ffffff;
+  }
+
+  &__name {
+    font-size: 40px;
+    font-weight: 700;
+    color: #111111;
+  }
+
+  &__handle {
+    font-size: 26px;
+    color: #999999;
+    margin-top: 8px;
+  }
+
+  &__blockedHint {
+    display: block;
+    font-size: 26px;
+    line-height: 40px;
+    color: #dc2626;
+    text-align: center;
+    margin-bottom: 24px;
+  }
+
+  &__actions {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__btn {
+    margin: 12px 0 0;
+    height: 88px;
+    line-height: 88px;
+    font-size: 30px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 16px;
+
+    &::after {
+      border: none;
+    }
+
+    &--danger {
+      color: #dc2626;
+      background: #fef2f2;
+    }
+  }
+
+  &__modalMask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  &__modalCard {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1001;
+    width: 600px;
+    background: #ffffff;
+    border-radius: 24px;
+    padding: 40px 36px 32px;
+    box-sizing: border-box;
+  }
+
+  &__modalTitle {
+    display: block;
+    font-size: 34px;
+    font-weight: 700;
+    color: #111111;
+    margin-bottom: 16px;
+  }
+
+  &__modalMessage {
+    display: block;
+    font-size: 26px;
+    line-height: 40px;
+    color: #666666;
+    margin-bottom: 24px;
+  }
+
+  &__modalButtons {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+    gap: 16px;
+  }
+
+  &__modalBtn {
+    margin: 0;
+    padding: 0 32px;
+    height: 72px;
+    line-height: 72px;
+    font-size: 26px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 36px;
+
+    &::after {
+      border: none;
+    }
+
+    &--danger {
+      color: #ffffff;
+      background: #ef4444;
+    }
+  }
+}

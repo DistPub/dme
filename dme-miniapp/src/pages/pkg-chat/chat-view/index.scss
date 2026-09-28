@@ -1,0 +1,287 @@
+/**
+ * pages/pkg-chat/chat-view/index.scss
+ *
+ * 布局对齐 web ChatViewScreen：header / 消息列表 / 输入条三段式。
+ * 尺寸用 rpx（designWidth 750）。
+ */
+
+.chatview {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #f7f7f8;
+
+  // ---- header -------------------------------------------------------------
+
+  &__header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 16px 32px;
+    background: #ffffff;
+    border-bottom: 2px solid #f0f0f2;
+    flex-shrink: 0;
+  }
+
+  &__avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: #e8e8ec;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 20px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  &__avatarImg {
+    width: 72px;
+    height: 72px;
+  }
+
+  &__avatarText {
+    font-size: 32px;
+    font-weight: 600;
+    color: #666666;
+  }
+
+  &__headerText {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__name {
+    font-size: 30px;
+    font-weight: 600;
+    color: #111111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__handle {
+    font-size: 22px;
+    color: #999999;
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__menuBtn {
+    width: 64px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  &__menuIcon {
+    font-size: 40px;
+    font-weight: 700;
+    color: #111111;
+    line-height: 40px;
+  }
+
+  // ---- 消息列表 ------------------------------------------------------------
+
+  &__list {
+    flex: 1;
+    overflow: hidden;
+    padding: 16px 0;
+    box-sizing: border-box;
+  }
+
+  &__loadMore {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 0;
+  }
+
+  &__loadMoreText {
+    font-size: 24px;
+    color: #999999;
+  }
+
+  &__empty {
+    padding: 120px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__hint {
+    display: block;
+    font-size: 26px;
+    color: #999999;
+    text-align: center;
+    padding: 12px 32px;
+  }
+
+  &__blockedHint {
+    display: block;
+    font-size: 24px;
+    color: #999999;
+    text-align: center;
+    padding: 10px 32px;
+    background: #fff7e6;
+  }
+
+  // 群系统消息灰条
+  &__systemMsg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 0;
+    margin: 0 60px;
+  }
+
+  &__systemMsgText {
+    font-size: 24px;
+    color: #999999;
+    text-align: center;
+  }
+
+  // 群邀请卡片
+  &__inviteCard {
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 24px;
+    margin: 16px 32px;
+    width: 630px;
+  }
+
+  &__inviteTitle {
+    font-size: 26px;
+    font-weight: 600;
+    color: #111111;
+  }
+
+  &__inviteResponded {
+    display: block;
+    font-size: 24px;
+    color: #999999;
+    text-align: center;
+    padding: 12px 0 0;
+  }
+
+  &__inviteButtons {
+    display: flex;
+    flex-direction: row;
+    margin-top: 16px;
+  }
+
+  &__inviteBtn {
+    flex: 1;
+    height: 68px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: #f0f0f2;
+    margin-right: 16px;
+
+    &:last-child {
+      margin-right: 0;
+    }
+
+    &--primary {
+      background: #111111;
+    }
+  }
+
+  &__inviteBtnText {
+    font-size: 26px;
+    color: #111111;
+
+    &--primary {
+      color: #ffffff;
+    }
+  }
+
+  // ---- 输入条 --------------------------------------------------------------
+
+  &__composer {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    padding: 16px 24px calc(16px + env(safe-area-inset-bottom));
+    background: #ffffff;
+    border-top: 2px solid #f0f0f2;
+    flex-shrink: 0;
+    /* 键盘弹起/收起时输入条平滑升降（页面本身不动，只有这条被顶起） */
+    transition: transform 0.2s ease-out;
+
+    &--readonly {
+      justify-content: center;
+      align-items: center;
+    }
+  }
+
+  &__attachBtn {
+    width: 72px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  &__attachIcon {
+    font-size: 40px;
+    line-height: 40px;
+  }
+
+  &__input {
+    flex: 1;
+    /* ⚠️ 高度不在这里定：微信原生 textarea 的 UA 默认高度是**内联样式**，
+       class 的 height 压不过它。一行高度（76rpx）由 index.tsx 里的内联
+       style 给出（auto-height 模式下也以它为初始高度）。 */
+    padding: 16px 24px;
+    box-sizing: border-box;
+    font-size: 30px;
+    line-height: 42px;
+    color: #111111;
+    background: #f5f5f7;
+    border-radius: 16px;
+    margin-right: 16px;
+    width: auto;
+  }
+
+  &__placeholder {
+    color: #bbbbbb;
+  }
+
+  &__sendBtn {
+    width: 140px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #111111;
+    border-radius: 16px;
+    flex-shrink: 0;
+
+    &--disabled {
+      opacity: 0.4;
+    }
+  }
+
+  &__sendBtnText {
+    font-size: 28px;
+    color: #ffffff;
+  }
+
+  &__dissolvedText {
+    font-size: 26px;
+    color: #999999;
+    text-align: center;
+    padding: 24px 0;
+  }
+}

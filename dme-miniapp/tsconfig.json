@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "removeComments": false,
+    "preserveConstEnums": true,
+    "experimentalDecorators": true,
+    "allowJs": false,
+    "outDir": "lib",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "typeRoots": ["node_modules/@types"],
+    "lib": ["ES2020"]
+  },
+  "include": ["./src", "./types", "./config"],
+  "compileOnSave": false
+}

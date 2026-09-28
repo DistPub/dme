@@ -1,0 +1,78 @@
+/**
+ * pages/pkg-chat/qr-scan/index.scss
+ *
+ * 对应 web `QrScanScreen.tsx` 的 styles：
+ *   container / content / title / statusText / subStatus / errorText / fullButton
+ */
+
+.qrscan {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 64px 48px 48px;
+  background: #ffffff;
+
+  &__title {
+    display: block;
+    font-size: 44px;
+    font-weight: 700;
+    color: #111111;
+    margin-bottom: 24px;
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__status {
+    display: block;
+    font-size: 30px;
+    line-height: 44px;
+    color: #666666;
+    margin-bottom: 16px;
+    word-break: break-all;
+  }
+
+  &__sub {
+    display: block;
+    font-size: 30px;
+    line-height: 44px;
+    color: #888888;
+    margin-bottom: 24px;
+  }
+
+  &__error {
+    display: block;
+    font-size: 26px;
+    line-height: 40px;
+    color: #d93025;
+    margin-bottom: 24px;
+    word-break: break-all;
+  }
+
+  &__button {
+    height: 96px;
+    line-height: 96px;
+    margin-bottom: 20px;
+    font-size: 32px;
+    color: #ffffff;
+    background: #111111;
+    border-radius: 16px;
+
+    &--ghost {
+      color: #111111;
+      background: #f0f0f2;
+    }
+  }
+
+  /* 解码用隐藏画布：必须真实挂载，但不能占布局 */
+  &__decodeCanvas {
+    position: fixed;
+    left: -9999px;
+    top: -9999px;
+    width: 100px;
+    height: 100px;
+  }
+}

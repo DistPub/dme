@@ -1,0 +1,472 @@
+/**
+ * pages/chat-list/index.scss
+ *
+ * 对照 dme-client/src/ui/ChatListScreen.tsx 的样式比例（web px → 小程序 2x rpx）。
+ */
+
+.chatlist {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #ffffff;
+
+  &--center {
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* -------------------- 顶栏 -------------------- */
+  &__header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 24px 32px;
+    min-height: 112px;
+    border-bottom: 2px solid #f0f0f2;
+    background: #ffffff;
+
+    &--forward {
+      justify-content: space-between;
+    }
+  }
+
+  &__headerTitle {
+    font-size: 44px;
+    font-weight: 700;
+    color: #111111;
+    flex-shrink: 0;
+  }
+
+  &__headerActions {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+  }
+
+  &__iconBtn {
+    margin: 0;
+    padding: 0 24px;
+    height: 64px;
+    line-height: 64px;
+    font-size: 26px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 32px;
+
+    &::after {
+      border: none;
+    }
+
+    &--ghost {
+      background: transparent;
+    }
+  }
+
+  &__userBtn {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 80px;
+    padding-left: 8px;
+  }
+
+  &__userAvatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    flex-shrink: 0;
+
+    &--fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #4f46e5;
+    }
+  }
+
+  &__userAvatarText {
+    font-size: 32px;
+    font-weight: 700;
+    color: #ffffff;
+  }
+
+  &__userInfo {
+    display: flex;
+    flex-direction: column;
+    margin-left: 16px;
+    max-width: 280px;
+  }
+
+  &__userName {
+    font-size: 26px;
+    font-weight: 600;
+    color: #111111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__userHandle {
+    font-size: 20px;
+    color: #999999;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* -------------------- 列表 -------------------- */
+  &__list {
+    flex: 1;
+    overflow: hidden;
+  }
+
+  &__section {
+    padding: 16px 32px;
+    border-bottom: 2px solid #f7f7f8;
+    background: #fafafb;
+  }
+
+  &__sectionTitle {
+    display: block;
+    font-size: 24px;
+    font-weight: 600;
+    color: #666666;
+    margin-bottom: 12px;
+  }
+
+  &__inviteRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 12px 0;
+  }
+
+  &__inviteInfo {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__inviteTitle {
+    font-size: 28px;
+    color: #111111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__inviteStatus {
+    font-size: 22px;
+    color: #999999;
+    margin-top: 4px;
+  }
+
+  &__inviteBtn {
+    margin: 0 0 0 12px;
+    padding: 0 20px;
+    height: 56px;
+    line-height: 56px;
+    font-size: 22px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 28px;
+    flex-shrink: 0;
+
+    &::after {
+      border: none;
+    }
+
+    &--primary {
+      color: #ffffff;
+      background: #4f46e5;
+    }
+
+    &--danger {
+      color: #dc2626;
+      background: #fef2f2;
+    }
+  }
+
+  &__swipeRow {
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* 垫底删除按钮：宽度 144px(=rpx) 与 chat-list/index.tsx 的 SWIPE_W 换算一致 */
+  &__swipeDelete {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 144px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #e5484d;
+  }
+
+  &__swipeDeleteText {
+    color: #ffffff;
+    font-size: 28px;
+    font-weight: 600;
+  }
+
+  &__row {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 24px 32px;
+    border-bottom: 2px solid #f7f7f8;
+    /* 行必须不透明，才能盖住垫底的删除按钮 */
+    background: #ffffff;
+  }
+
+  &__avatarWrap {
+    position: relative;
+    width: 96px;
+    height: 96px;
+    flex-shrink: 0;
+    margin-right: 24px;
+  }
+
+  &__avatar,
+  &__avatarImg {
+    width: 96px;
+    height: 96px;
+    border-radius: 48px;
+  }
+
+  &__avatar {
+    background: #e8e8ec;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__avatarText {
+    font-size: 40px;
+    font-weight: 600;
+    color: #666666;
+  }
+
+  &__badge {
+    position: absolute;
+    top: -4px;
+    right: -8px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0 8px;
+    border-radius: 18px;
+    background: #dc2626;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__badgeText {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 36px;
+  }
+
+  &__content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__topLine {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  &__name {
+    font-size: 32px;
+    font-weight: 500;
+    color: #111111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 400px;
+  }
+
+  &__time {
+    font-size: 22px;
+    color: #999999;
+    flex-shrink: 0;
+    margin-left: 12px;
+  }
+
+  &__handle {
+    display: block;
+    font-size: 22px;
+    color: #999999;
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__preview {
+    display: block;
+    font-size: 26px;
+    color: #666666;
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 160px 64px;
+  }
+
+  &__emptyTitle {
+    font-size: 32px;
+    color: #666666;
+    margin-bottom: 16px;
+  }
+
+  &__hint {
+    font-size: 26px;
+    line-height: 40px;
+    color: #999999;
+    text-align: center;
+  }
+
+  /* -------------------- 头像弹出菜单 -------------------- */
+  &__menuMask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 900;
+  }
+
+  &__menu {
+    position: fixed;
+    top: 128px;
+    right: 24px;
+    z-index: 901;
+    min-width: 240px;
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 8px 0;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.16);
+  }
+
+  &__menuItem {
+    padding: 22px 32px;
+  }
+
+  &__menuItemText {
+    font-size: 28px;
+    color: #111111;
+
+    &--danger {
+      color: #dc2626;
+    }
+  }
+
+  /* -------------------- 退出登录 Modal -------------------- */
+  &__modalMask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  &__modalCard {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1001;
+    width: 600px;
+    background: #ffffff;
+    border-radius: 24px;
+    padding: 40px 36px 32px;
+    box-sizing: border-box;
+  }
+
+  &__modalTitle {
+    display: block;
+    font-size: 34px;
+    font-weight: 700;
+    color: #111111;
+    margin-bottom: 16px;
+  }
+
+  &__modalMessage {
+    display: block;
+    font-size: 24px;
+    line-height: 38px;
+    color: #666666;
+    margin-bottom: 24px;
+  }
+
+  &__modalInput {
+    width: 100%;
+    height: 80px;
+    padding: 0 20px;
+    margin-bottom: 16px;
+    box-sizing: border-box;
+    font-size: 26px;
+    color: #111111;
+    background: #f7f7f8;
+    border-radius: 12px;
+  }
+
+  &__modalError {
+    display: block;
+    font-size: 24px;
+    color: #dc2626;
+    margin-bottom: 16px;
+  }
+
+  &__modalButtons {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+    gap: 16px;
+    margin-top: 8px;
+  }
+
+  &__modalBtn {
+    margin: 0;
+    padding: 0 32px;
+    height: 72px;
+    line-height: 72px;
+    font-size: 26px;
+    color: #111111;
+    background: #f0f0f2;
+    border-radius: 36px;
+
+    &::after {
+      border: none;
+    }
+
+    &--primary {
+      color: #ffffff;
+      background: #4f46e5;
+    }
+  }
+}

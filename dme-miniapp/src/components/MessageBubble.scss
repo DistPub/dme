@@ -1,0 +1,170 @@
+/**
+ * components/MessageBubble.scss
+ *
+ * 浅色主题（与 chat-list / chat-view 现有配色一致）。
+ * ⚠️ 单位说明：本文件里的 px 会被 Taro 按 designWidth=750 编译成 rpx。
+ *    所以「真实像素」= 这里的数值 / 2（375pt 屏）。
+ */
+
+.msgbubble {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  padding: 10px 32px;
+
+  &--in {
+    justify-content: flex-start;
+  }
+
+  &--out {
+    justify-content: flex-end;
+  }
+
+  &__avatarWrap {
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    overflow: hidden;
+    background: #4f46e5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 10px;
+    flex-shrink: 0;
+  }
+
+  &__avatarImg {
+    width: 72px;
+    height: 72px;
+    display: block;
+  }
+
+  &__avatarLetter {
+    color: #ffffff;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 72px;
+  }
+
+  &__col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__senderWrap {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 4px;
+  }
+
+  &__sender {
+    font-size: 24px;
+    font-weight: 600;
+    color: #111111;
+  }
+
+  &__handle {
+    font-size: 20px;
+    color: #999999;
+    margin-top: 2px;
+  }
+
+  &__row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+
+    &--in {
+      justify-content: flex-start;
+    }
+
+    &--out {
+      justify-content: flex-end;
+    }
+  }
+
+  &__bubble {
+    max-width: 480px;
+    padding: 18px 24px;
+    border-radius: 20px;
+    box-sizing: border-box;
+    /* 长按必须弹自定义操作菜单：禁掉微信的文本选择 / 呼出菜单，
+       否则系统选择 UI 会抢走 longpress 手势（复制走菜单里的「复制」） */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+
+    &--in {
+      background: #ffffff;
+    }
+
+    &--out {
+      background: #d3e7ff;
+    }
+  }
+
+  &__text {
+    font-size: 30px;
+    line-height: 42px;
+    color: #111111;
+    /* 多行消息：保留 \n 换行 + 长词/URL 折行 */
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  &__emojiBtn {
+    padding: 4px;
+    margin: 0 8px;
+    flex-shrink: 0;
+  }
+
+  &__emojiIcon {
+    font-size: 28px;
+    opacity: 0.55;
+  }
+
+  &__reactions {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 6px;
+
+    &--in {
+      justify-content: flex-start;
+    }
+
+    &--out {
+      justify-content: flex-end;
+    }
+  }
+
+  &__pill {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px 12px;
+    margin-right: 8px;
+    margin-top: 6px;
+    border-radius: 999px;
+    background: #f0f0f2;
+    border: 1px solid transparent;
+
+    &--active {
+      background: #d3e7ff;
+      border-color: #4f46e5;
+    }
+  }
+
+  &__pillEmoji {
+    font-size: 26px;
+    line-height: 34px;
+  }
+
+  &__pillCount {
+    font-size: 22px;
+    color: #666666;
+    margin-left: 4px;
+  }
+}

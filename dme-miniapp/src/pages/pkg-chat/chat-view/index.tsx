@@ -821,7 +821,19 @@ export default function ChatViewPage(): React.JSX.Element {
   const groupReadonly = isGroup && (dissolved || removed || left);
 
   return (
-    <View className="chatview">
+    <View
+      className="chatview"
+      /* 🔴 键盘顶起方案（0.0.9）：根容器 padding-bottom（普通布局回流），
+         绝不能用 transform 平移 composer ——
+         聚焦瞬间唯一的状态变更就是键盘高度回调，若它给 textarea 祖先挂
+         transform（还带 transition，动画期间原生层逐帧重同步），部分机型上
+         同层渲染的 textarea 会被重新挂载/打断 first responder →
+         「键盘刚弹起就收起、始终无法拉起输入法」（真机实锤的失焦路径）。
+         padding-bottom 是普通回流（等价 adjust-position 但只作用于本容器），
+         flex:1 的消息列表自动压缩，composer 自然落到键盘正上方。
+         ⚠️ 键盘高度是运行时 px，内联 style 的 px 不会被 Taro 转 rpx，正好。 */
+      style={kbHeight > 0 ? `padding-bottom: ${kbHeight}px;` : ''}
+    >
       {/* header */}
       <View className="chatview__header">
         <View className="chatview__avatar">
@@ -894,10 +906,7 @@ export default function ChatViewPage(): React.JSX.Element {
           </Text>
         </View>
       ) : (
-        <View
-          className="chatview__composer"
-          style={kbHeight > 0 ? `transform: translateY(-${kbHeight}px);` : ''}
-        >
+        <View className="chatview__composer">
           <View className="chatview__attachBtn" onClick={() => void handleAttach()}>
             <Text className="chatview__attachIcon">📄</Text>
           </View>
@@ -920,8 +929,9 @@ export default function ChatViewPage(): React.JSX.Element {
             /* 点击发送按钮等页面区域时不收起键盘 */
             holdKeyboard
             /* 🔴 默认 adjustPosition 会把**整个页面**顶走（看不到在和谁聊、
-               聊天记录全部滚出视口）。关闭后由 composer 手动
-               translateY(-键盘高度)，只顶输入条，消息列表纹丝不动 */
+               聊天记录全部滚出视口）。关闭后由根容器手动
+               padding-bottom(键盘高度)（见根 View 注释），composer 随 flex
+               布局自然落在键盘正上方，header 纹丝不动 */
             adjustPosition={false}
             onKeyboardHeightChange={(e) => {
               const h = e.detail.height || 0;

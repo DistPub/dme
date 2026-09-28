@@ -9,6 +9,10 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* 🔴 键盘弹起时根节点会被 JS 动态加 padding-bottom(键盘高度 px)（见
+     index.tsx 根 View 注释）。border-box 保证加 padding 后总高仍是 100vh，
+     flex:1 的消息列表自动压缩，composer 落在键盘正上方。 */
+  box-sizing: border-box;
   background: #f7f7f8;
 
   // ---- header -------------------------------------------------------------
@@ -215,8 +219,10 @@
     background: #ffffff;
     border-top: 2px solid #f0f0f2;
     flex-shrink: 0;
-    /* 键盘弹起/收起时输入条平滑升降（页面本身不动，只有这条被顶起） */
-    transition: transform 0.2s ease-out;
+    /* 🔴 不加 transform / transition：0.0.8 及之前用 transform 平移本节点，
+       聚焦瞬间（键盘高度回调触发 setState）给 textarea 祖先挂 transform
+       会打断原生/同层 textarea 的聚焦 —— 键盘弹起即收起（0.0.9 修复，
+       改为根容器 padding-bottom 普通回流，见 .chatview 注释）。 */
 
     &--readonly {
       justify-content: center;

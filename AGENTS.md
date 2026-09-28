@@ -11,14 +11,27 @@
 
 DME (Decentralized Message Envelope) 是基于 AT Protocol (Bluesky) 的端到端加密私信系统。用户通过 Bluesky 账号登录，在 DID 文档中声明 X25519 + Ed25519 公钥，经 QR 码握手建立 MLS (RFC 9420) 加密会话，密文以 `dme.queue.envelope` 记录写入 PDS，经 Jetstream 被 server 消费索引，客户端轮询盲查获取消息。支持 1v1 和群组聊天。
 
-三个完全独立的系统，无共享配置，无 workspace：
+四个完全独立的系统，无共享配置，无 workspace：
 
 ```
 dme/
 ├── dme-client/     Expo + RN Skia 移动 App（TS strict, Bun）
+├── dme-miniapp/    微信小程序端（Taro 4 + React 18，复刻 dme-client 全部功能）
 ├── dme-server/     Go AppView - Jetstream 消费 + BadgerDB KV + 批量盲查
 ├── dme-gateway/    Cloudflare Worker - 反向代理 + blob CDN 缓存
 ```
+
+## dme-miniapp 概要（微信小程序端）
+
+dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，编译目标 `weapp`。功能对齐 dme-client 14 屏（唯一排除项：web 的 iframe embed 嵌入模式）。
+
+- **加密栈全纯 JS**：ts-mls + @noble/*（版本锁定 1.x，禁止升 2.x），`@hpke/*` 在 `config/index.ts` stub 成 `false`；CiphersuiteImpl 唯一来源是 `src/crypto/mls-noble-kdf.ts` 的 `getNobleMlsImpl()`（五字段全部手工组装，复用 dme-client 同名实现）
+- **网络**：`Taro.request` 自写轻量 XRPC 客户端（`src/platform/http.ts`，不用 `@atproto/api`）；资料获取经 PDS `appViewGet()` + `atproto-proxy`，禁止直连 `public.api.bsky.app`
+- **页面分包**：主包 6 页（login/setup/chat-list/settings/about/block-list）+ 分包 `pkg-chat` 8 页（chat-view/qr-scan/qr-display/create-group/group-settings/dm-settings/image-viewer/video-viewer），加密栈体量大后置加载
+- **平台适配层** `src/platform/`（storage 复刻 AsyncStorage / http XRPC / clipboard）+ `src/polyfills/`（`wx.getRandomValues` 64KB 缓冲池、TextEncoder/base64 shim）
+- **小程序增强**：邀请帖 QR 可 `showShareImageMenu` 直享微信聊天 / `useShareAppMessage` 卡片转发；`wx.scanCode` 摄像头扫码 + jsqr 相册识别双路径
+- **构建管线**（`scripts/deploy.mjs`，顺序不可换）：`taro build → es5ify.mjs（ES5 降级，CI 拒收 ?. ??）→ strip-hpke-dead-code.mjs → verify → inject-polyfills.mjs`；产物冒烟 `verify-artifact.mjs`；上传走 miniprogram-ci（需 IP 白名单）。真机合法域名白名单仅 4 个：`network.hukoubook.com` / `dme.mymutual.fans` / `e2ee.hukoubook.com` / `plc.directory`
+- **详细文档**：`dme-miniapp/AGENTS.md`（硬性约束、平台坑、与 dme-client 的模块对应关系、构建自检清单）——改小程序代码前必读
 
 ## 数据流
 
@@ -106,6 +119,13 @@ dme/
 | Web 文件缓存 | `dme-client/src/utils/file-cache.ts`（IndexedDB 持久化 + `useFileUri`） |
 | PDS URL 解析 | `dme-client/src/atproto/did.ts`（`resolvePdsUrl`） |
 | Gateway (blob CDN + batch 代理) | `dme-gateway/src/index.ts`（`/xrpc/dme.file.blob` blob CDN 缓存 + `/xrpc/dme.batch.get` 反代 dme-server，**支持 `dme-server` header 动态切目标**，全局 OPTIONS 预检 + CORS，**允许 `dme-server`、`Authorization` header**，预检缓存 24h） |
+| 小程序页面路由/分包 | `dme-miniapp/src/app.config.ts`（主包 6 页 + 分包 pkg-chat 8 页） |
+| 小程序平台适配层 | `dme-miniapp/src/platform/`（`storage.ts` 复刻 AsyncStorage / `http.ts` XRPC 客户端 / `clipboard.ts`） |
+| 小程序 polyfills | `dme-miniapp/src/polyfills/`（`random.ts` wx.getRandomValues 缓冲池 / `encoding.ts` TextEncoder+base64 shim）+ `scripts/inject-polyfills.mjs`（构建后全局占位注入） |
+| 小程序全局状态 | `dme-miniapp/src/state/AppContext.tsx`（裁剪自 dme-client，剔除 embed；核心引用 state+ref 双写防 await 读旧值） |
+| 小程序 atproto 层 | `dme-miniapp/src/atproto/`（重写自 dme-client，走 platform/http；`pds.ts` 含 uploadBlob octet-stream 直传 / createRecord / resolveHandle） |
+| 小程序邀请帖+QR | `dme-miniapp/src/handshake/invite.ts`（复刻 web 邀请帖 + `detectFacetsSubset` 纯 JS facet 检测）+ `qr-image-decode.ts`（jsqr 相册识别） |
+| 小程序构建/部署 | `dme-miniapp/scripts/deploy.mjs`（build: taro→es5ify→strip-hpke→inject-polyfills；upload: miniprogram-ci）+ `verify-artifact.mjs` 产物冒烟 |
 
 ## 网关代理
 
@@ -418,6 +438,12 @@ cd dme-server && go run main.go --addr :8080 --db ./dme.db --jetstream wss://jet
 # dme-gateway
 cd dme-gateway && cp wrangler.toml.example wrangler.toml && bun install && bun run dev
 cd dme-gateway && bun run deploy                      # wrangler deploy
+
+# dme-miniapp（微信小程序）
+cd dme-miniapp && npm install && npm run dev:weapp    # 开发（微信开发者工具打开 dist/）
+cd dme-miniapp && npx tsc --noEmit                    # 类型检查
+# 生产构建 + 上传必须走 deploy.mjs（含 ES5 降级 + @hpke 死代码剔除 + polyfill 注入），
+# 命令、沙箱前缀 CODEBUDDY_SAFE_DELETE_ENABLED=0、上传 IP 白名单等详见 dme-miniapp/AGENTS.md
 ```
 
 ## 注意事项

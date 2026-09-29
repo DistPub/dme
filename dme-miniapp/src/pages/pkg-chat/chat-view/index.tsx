@@ -6,6 +6,8 @@
  *   - 文本消息 MessageBubble / 文件消息 FileMessageBubble
  *   - reactions 表情 pill + EmojiPicker + 长按 MessageActionMenu
  *   - 📄 附件按钮 → 图片 / 视频 / 聊天文件 三选一
+ *   - 🎤 按住说话（语音模式）：wx.getRecorderManager 录 aac 语音，
+ *     走 sendFileMessage 文件消息通道发送（接收端音频播放卡现成）
  *   - 多行 Textarea（autoHeight）
  *   - 群聊：发送者头像/昵称、群系统消息灰条、群邀请卡片、
  *           解散/被移出/已离开只读输入条
@@ -46,6 +48,14 @@ import {
 } from '../../../atproto/profile-cache';
 import { useWebTitle } from '../../../utils/web-title';
 import type { TapPos } from '../../../utils/screen';
+import { touchOf } from '../../../utils/screen';
+import {
+  startVoiceRecording,
+  stopVoiceRecording,
+  cancelVoiceRecording,
+  VOICE_FORMAT_EXT,
+  VOICE_MIME_TYPE,
+} from '../../../platform/recorder';
 import './index.scss';
 
 interface SenderProfile {
@@ -150,11 +160,46 @@ export default function ChatViewPage(): React.JSX.Element {
   const [actionMenuLayout, setActionMenuLayout] = useState<OverlayLayout | null>(null);
   /** ScrollView scrollIntoView 锚点（指向「视觉上需要停留」的那条消息）。 */
   const [scrollAnchor, setScrollAnchor] = useState('');
+  /** 输入条模式：文本 / 语音（🎤 切换）。 */
+  const [voiceMode, setVoiceMode] = useState(false);
+  /** 录音浮层（正在录音）。 */
+  const [recordingUi, setRecordingUi] = useState(false);
+  /** 录音浮层「取消态」：手指已滑入上滑取消区。 */
+  const [recordCancelUi, setRecordCancelUi] = useState(false);
+  /** 录音已进行秒数（浮层倒计时，上限 60s 由 recorder 层强制停止）。 */
+  const [recordSeconds, setRecordSeconds] = useState(0);
 
   const messagesRef = useRef<StoredMessage[]>([]);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // ---- 按住说话手势状态（ref 同步读写，touch 事件里不依赖闭包 state） ----
+
+  const voiceGestureRef = useRef<{
+    /** 手指是否还按着（touchend/touchcancel 后置 false）。 */
+    active: boolean;
+    /** 是否已滑入取消区。 */
+    cancelled: boolean;
+    /** 是否已在收尾（防 60s 自动停止 + 松手双重触发）。 */
+    finishing: boolean;
+    startX: number;
+    startY: number;
+  }>({ active: false, cancelled: false, finishing: false, startX: 0, startY: 0 });
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopRecordTimer = useCallback((): void => {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+  }, []);
+
+  // 页面卸载时若在录音 → 取消（临时文件作废，不留半条消息）
+  useEffect(() => () => {
+    stopRecordTimer();
+    cancelVoiceRecording();
+  }, [stopRecordTimer]);
 
   const myDid = session?.did ?? '';
   const isBlocked = !isGroup && blockList.includes(conversationId);
@@ -433,6 +478,119 @@ export default function ChatViewPage(): React.JSX.Element {
       setSending(false);
     }
   }, [text, sending, isBlocked, sendMessage, conversationId, t]);
+
+  // ---- 按住说话 -------------------------------------------------------------
+
+  const toggleVoiceMode = useCallback((): void => {
+    setVoiceMode((prev) => {
+      // 切到语音模式时 Textarea 卸载 → 原生键盘收起；清掉键盘顶起 padding
+      if (!prev) setKbHeight(0);
+      return !prev;
+    });
+  }, []);
+
+  /** 松手后的统一收尾：stop → 太短丢弃 / 走文件消息通道发送。 */
+  const finishVoiceSend = useCallback(async (): Promise<void> => {
+    if (voiceGestureRef.current.finishing) return;
+    voiceGestureRef.current.finishing = true;
+    stopRecordTimer();
+    try {
+      // 🔴 60s 到时底层已自动 onStop：recorder 层会把结果暂存，这里照样取到
+      const rec = await stopVoiceRecording();
+      if (rec.durationMs < 500) {
+        Taro.showToast({ title: t('chatview.tooShort'), icon: 'none' });
+        return;
+      }
+      const now = new Date();
+      const pad = (n: number): string => String(n).padStart(2, '0');
+      const name = `voice-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+        `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.${VOICE_FORMAT_EXT}`;
+      // 与图片/视频同一条链路：先落缓存副本 + 乐观消息 → 逐块加密上传 → 发清单
+      await sendFileMessage(conversationId, rec.tempFilePath, name, VOICE_MIME_TYPE, rec.size);
+    } catch (err) {
+      const msgText = err instanceof Error ? err.message : String(err ?? '');
+      if (msgText === '录音已取消') return; // 取消流程，静默
+      console.error('Voice send failed:', err);
+      Taro.showToast({ title: t('chatview.recordFailed'), icon: 'none' });
+    } finally {
+      voiceGestureRef.current.finishing = false;
+      voiceGestureRef.current.active = false;
+      setRecordingUi(false);
+      setRecordCancelUi(false);
+    }
+  }, [conversationId, sendFileMessage, stopRecordTimer, t]);
+
+  const onVoiceTouchStart = useCallback(
+    (e: unknown): void => {
+      if (isBlocked) return;
+      // Taro 的 BaseEventOrig 类型不带 touches，统一走 touchOf 兜底（utils/screen）
+      const touch = touchOf(e);
+      if (!touch) return;
+      voiceGestureRef.current.active = true;
+      voiceGestureRef.current.cancelled = false;
+      voiceGestureRef.current.startX = touch.x;
+      voiceGestureRef.current.startY = touch.y;
+      setRecordCancelUi(false);
+      setRecordSeconds(0);
+      setRecordingUi(true);
+      startVoiceRecording()
+        .then(() => {
+          // 极短按：start 还没完成用户就松手 → 收尾流程已走，直接丢弃状态
+          if (!voiceGestureRef.current.active) return;
+          recordTimerRef.current = setInterval(() => {
+            setRecordSeconds((s) => Math.min(s + 1, 60));
+          }, 1000);
+        })
+        .catch((err: unknown) => {
+          console.error('startVoiceRecording failed:', err);
+          voiceGestureRef.current.active = false;
+          setRecordingUi(false);
+          Taro.showToast({ title: t('chatview.recordFailed'), icon: 'none' });
+        });
+    },
+    [isBlocked, t],
+  );
+
+  const onVoiceTouchMove = useCallback((e: unknown): void => {
+    const g = voiceGestureRef.current;
+    if (!g.active) return;
+    const touch = touchOf(e);
+    if (!touch) return;
+    // 上滑超过 60px 进入取消区（微信同款交互）
+    const cancelZone = g.startY - touch.y > 60;
+    if (cancelZone !== g.cancelled) {
+      g.cancelled = cancelZone;
+      setRecordCancelUi(cancelZone);
+    }
+  }, []);
+
+  const onVoiceTouchEnd = useCallback((): void => {
+    const g = voiceGestureRef.current;
+    if (!g.active) return;
+    g.active = false;
+    stopRecordTimer();
+    if (g.cancelled) {
+      // 滑入取消区后松手 → 丢弃本次录音
+      cancelVoiceRecording();
+      g.finishing = false;
+      setRecordingUi(false);
+      setRecordCancelUi(false);
+      return;
+    }
+    void finishVoiceSend();
+  }, [finishVoiceSend, stopRecordTimer]);
+
+  const onVoiceTouchCancel = useCallback((): void => {
+    // 系统中断（来电、切后台等）：按取消处理，不发半条
+    const g = voiceGestureRef.current;
+    if (!g.active) return;
+    g.active = false;
+    stopRecordTimer();
+    cancelVoiceRecording();
+    g.finishing = false;
+    setRecordingUi(false);
+    setRecordCancelUi(false);
+  }, [stopRecordTimer]);
 
   const handleReact = useCallback(
     async (msg: StoredMessage, emoji: string): Promise<void> => {
@@ -910,6 +1068,22 @@ export default function ChatViewPage(): React.JSX.Element {
           <View className="chatview__attachBtn" onClick={() => void handleAttach()}>
             <Text className="chatview__attachIcon">📄</Text>
           </View>
+          <View className="chatview__modeBtn" onClick={toggleVoiceMode}>
+            <Text className="chatview__modeIcon">{voiceMode ? '⌨️' : '🎤'}</Text>
+          </View>
+          {voiceMode ? (
+            /* 🔴 按住说话：纯 View + touch 事件（不能用 Button——微信 Button
+               有原生 hover/active 态会抢触摸）。短于 500ms 的录音会被丢弃。 */
+            <View
+              className={`chatview__talkBtn ${isBlocked ? 'chatview__talkBtn--disabled' : ''}`}
+              onTouchStart={onVoiceTouchStart}
+              onTouchMove={onVoiceTouchMove}
+              onTouchEnd={onVoiceTouchEnd}
+              onTouchCancel={onVoiceTouchCancel}
+            >
+              <Text className="chatview__talkBtnText">{t('chatview.holdToTalk')}</Text>
+            </View>
+          ) : (
           <Textarea
             className="chatview__input"
             /* 🔴 高度必须用**内联 style**：微信原生 textarea 的 UA 默认高度是
@@ -946,14 +1120,32 @@ export default function ChatViewPage(): React.JSX.Element {
             placeholderClass="chatview__placeholder"
             onInput={(e) => setText(e.detail.value)}
           />
-          <View
-            className={`chatview__sendBtn ${sending || isBlocked || !text.trim() ? 'chatview__sendBtn--disabled' : ''}`}
-            onClick={() => void onSend()}
-          >
-            <Text className="chatview__sendBtnText">{sending ? '…' : t('chatview.send')}</Text>
-          </View>
+          )}
+          {!voiceMode ? (
+            <View
+              className={`chatview__sendBtn ${sending || isBlocked || !text.trim() ? 'chatview__sendBtn--disabled' : ''}`}
+              onClick={() => void onSend()}
+            >
+              <Text className="chatview__sendBtnText">{sending ? '…' : t('chatview.send')}</Text>
+            </View>
+          ) : null}
         </View>
       )}
+
+      {/* 按住说话浮层：正在录音 / 上滑取消态 */}
+      {recordingUi ? (
+        <View className="chatview__recordOverlay">
+          <View className={`chatview__recordPanel ${recordCancelUi ? 'chatview__recordPanel--cancel' : ''}`}>
+            <Text className="chatview__recordIcon">{recordCancelUi ? '✕' : '🎤'}</Text>
+            <Text className="chatview__recordSeconds">{recordSeconds}″</Text>
+            <Text className="chatview__recordHint">
+              {recordCancelUi
+                ? t('chatview.releaseToCancel')
+                : `${t('chatview.slideUpToCancel')} · ${t('chatview.releaseToSend')}`}
+            </Text>
+          </View>
+        </View>
+      ) : null}
 
       <EmojiPicker
         visible={pickerTarget !== null}

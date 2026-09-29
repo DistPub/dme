@@ -168,6 +168,15 @@ export const zh: Record<string, string> = {
   'chatview.saveShared': '已转发到微信，可在聊天中另存',
   'chatview.saveFailed': '保存失败',
 
+  // 按住说话（语音消息）
+  'chatview.holdToTalk': '按住 说话',
+  'chatview.releaseToSend': '松开 发送',
+  'chatview.slideUpToCancel': '上滑取消',
+  'chatview.releaseToCancel': '松开手指，取消发送',
+  'chatview.recording': '正在录音',
+  'chatview.tooShort': '说话时间太短',
+  'chatview.recordFailed': '录音失败，请允许麦克风权限',
+
   // qrdisplay
   'qrdisplay.shareCardTitle': 'DME 加密聊天邀请',
   'qrdisplay.shareCardHint': '点开后用「从相册识别」扫我的二维码即可建立端到端加密会话',
@@ -449,6 +458,15 @@ export const en: Record<string, string> = {
   'chatview.saveHintFile': 'File opened (save from the menu)',
   'chatview.saveShared': 'Forwarded via WeChat — save it from the chat',
   'chatview.saveFailed': 'Save failed',
+
+  // Hold-to-talk (voice messages)
+  'chatview.holdToTalk': 'Hold to Talk',
+  'chatview.releaseToSend': 'Release to Send',
+  'chatview.slideUpToCancel': 'Slide up to cancel',
+  'chatview.releaseToCancel': 'Release to cancel',
+  'chatview.recording': 'Recording…',
+  'chatview.tooShort': 'Too short',
+  'chatview.recordFailed': 'Recording failed — please allow microphone access',
 
   // qrdisplay
   'qrdisplay.shareCardTitle': 'DME encrypted chat invite',

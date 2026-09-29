@@ -67,7 +67,7 @@ dme-client 的微信小程序移植版，**Taro 4 + React 18 + TypeScript**，�
 
 - 主包 6 页：login / setup / chat-list / settings / about / block-list
 - 分包 `pkg-chat` 8 页：chat-view / qr-scan / qr-display / create-group / group-settings / dm-settings / image-viewer / video-viewer（加密栈体量大后置加载）
-- 平台适配层 `src/platform/`：`storage.ts`（复刻 AsyncStorage）、`http.ts`（XRPC 客户端）、`clipboard.ts`
+- 平台适配层 `src/platform/`：`storage.ts`（复刻 AsyncStorage）、`http.ts`（XRPC 客户端）、`clipboard.ts`、`recorder.ts`（按住说话：`getRecorderManager` 全局单例 + 模块级状态机，监听器只在首次获取时挂一次——重复 onStop 会累积回调）
 - polyfills `src/polyfills/`：`random.ts`、`encoding.ts`（TextEncoder/TextDecoder/btoa/atob shim）
 
 ### 🔴 为什么必须有 `scripts/inject-polyfills.mjs`（全局占位）
@@ -155,6 +155,7 @@ poller 的 queueId 标记（LRU 1000）必须在 `onWelcome` / `decrypt` **成�
 - `showConfirmBar={false}`（关 iOS「完成」工具栏）、`holdKeyboard`（点发送不收键盘）、`maxlength={-1}`。
 - **键盘顶起**：`adjustPosition={false}`（默认会把整个页面顶出视口）+ `onKeyboardHeightChange`（e.detail.height 是 **px**）→ 给**根容器 `.chatview`** 挂内联 `padding-bottom: ${kbHeight}px`（根容器 `box-sizing: border-box`，总高 100vh，flex:1 消息列表自动压缩，composer 落到键盘正上方）。**绝不能用 `transform: translateY` 平移 composer**——聚焦瞬间给 textarea 祖先挂 transform 会打断原生/同层 textarea 的 first responder，键盘弹起即收起。键盘高度是运行时 px，内联 style 的 px 不被 Taro 转 rpx，正好直接用。
 - 发送后**不做**任何程序化重拉焦点。
+- 🎤 语音模式：🎤/⌨️ 按钮切换，语音模式**卸载 Textarea**（原生组件销毁键盘自然收起，切回时重挂载，不碰 focus）；「按住说话」用 View + onTouchStart/Move/End/Cancel（Button 有原生 hover/active 态会抢触摸），触点坐标走 `utils/screen` 的 `touchOf(e: unknown)`——Taro 的 `BaseEventOrig` 类型不带 touches，`ITouchEvent` 直接当 prop 类型会报 TS2322。上滑 60px 进取消区；aac/16kHz/单声道/60s 上限（到时底层自动 onStop，recorder 层把结果暂存给松手的 stop 取）。
 
 ### 6.10 邀请帖 facet（detectFacetsSubset）
 

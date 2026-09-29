@@ -41,6 +41,9 @@ export default defineAppConfig({
     'scope.camera': {
       desc: '用于扫描好友的邀请二维码以建立端到端加密会话',
     },
+    'scope.record': {
+      desc: '用于在聊天中录制并发送语音消息',
+    },
   },
   lazyCodeLoading: 'requiredComponents',
 });

@@ -244,6 +244,98 @@
     line-height: 40px;
   }
 
+  // 🎤/⌨️ 语音-文本模式切换按钮
+  &__modeBtn {
+    width: 72px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  &__modeIcon {
+    font-size: 36px;
+    line-height: 36px;
+  }
+
+  // 按住说话按钮（语音模式替换输入框位置）
+  &__talkBtn {
+    flex: 1;
+    height: 74px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f5f5f7;
+    border-radius: 16px;
+    margin-right: 16px;
+    box-sizing: border-box;
+
+    /* 按住时的高亮（:active 在小程序 View 上有效） */
+    &:active {
+      background: #e2e2e6;
+    }
+
+    &--disabled {
+      opacity: 0.4;
+    }
+  }
+
+  &__talkBtnText {
+    font-size: 30px;
+    color: #111111;
+  }
+
+  // ---- 按住说话录音浮层 -----------------------------------------------------
+
+  &__recordOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 浮层在原生 Textarea 之上（录音时语音模式没有 Textarea，双保险） */
+    z-index: 999;
+    pointer-events: none;
+  }
+
+  &__recordPanel {
+    width: 320px;
+    padding: 48px 32px 36px;
+    border-radius: 24px;
+    background: rgba(17, 17, 17, 0.82);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    &--cancel {
+      background: rgba(196, 43, 43, 0.88);
+    }
+  }
+
+  &__recordIcon {
+    font-size: 72px;
+    line-height: 72px;
+    color: #ffffff;
+  }
+
+  &__recordSeconds {
+    font-size: 40px;
+    font-weight: 600;
+    color: #ffffff;
+    margin-top: 20px;
+  }
+
+  &__recordHint {
+    font-size: 24px;
+    color: rgba(255, 255, 255, 0.85);
+    margin-top: 16px;
+    text-align: center;
+  }
+
   &__input {
     flex: 1;
     /* ⚠️ 高度不在这里定：微信原生 textarea 的 UA 默认高度是**内联样式**，

@@ -627,13 +627,35 @@ export default function ChatViewPage(): React.JSX.Element {
     });
   }, []);
 
-  const handleForward = useCallback((msg: StoredMessage): void => {
-    void Taro.navigateTo({
-      url: `/pages/chat-list/index?forwardText=${encodeURIComponent(msg.plaintext)}`,
-    }).catch((err: unknown) => {
-      console.error('navigate to forward target failed:', err);
-    });
-  }, []);
+  const handleForward = useCallback(
+    (msg: StoredMessage): void => {
+      if (msg.kind === 'file' && msg.fileMeta) {
+        // 文件转发 ≠ 文本转发：plaintext 是清单 JSON，必须走文件消息通道重发。
+        // 前提是有本地副本（自己发的 / 已下载的）；否则提示先下载。
+        const meta = msg.fileMeta;
+        if (!meta.localPath) {
+          Taro.showToast({ title: t('menu.forwardNeedDownload'), icon: 'none' });
+          return;
+        }
+        void Taro.navigateTo({
+          url:
+            `/pages/chat-list/index?forwardPath=${encodeURIComponent(meta.localPath)}` +
+            `&forwardName=${encodeURIComponent(meta.fileName)}` +
+            `&forwardMime=${encodeURIComponent(meta.mimeType)}` +
+            `&forwardSize=${meta.fileSize}`,
+        }).catch((err: unknown) => {
+          console.error('navigate to forward target failed:', err);
+        });
+        return;
+      }
+      void Taro.navigateTo({
+        url: `/pages/chat-list/index?forwardText=${encodeURIComponent(msg.plaintext)}`,
+      }).catch((err: unknown) => {
+        console.error('navigate to forward target failed:', err);
+      });
+    },
+    [t],
+  );
 
   const handleDeleteMessage = useCallback(
     async (msg: StoredMessage): Promise<void> => {
@@ -932,6 +954,9 @@ export default function ChatViewPage(): React.JSX.Element {
             }
             onReactionPress={canReact ? (emoji) => void handleReact(item, emoji) : undefined}
             onOpenPicker={canReact ? (pos) => handleOpenPicker(item, pos) : undefined}
+            onLongPress={
+              canReact || !isGroup ? (pos) => handleShowActionMenu(item, pos) : undefined
+            }
           />
         );
       }
@@ -1162,6 +1187,8 @@ export default function ChatViewPage(): React.JSX.Element {
         visible={actionMenuTarget !== null}
         layout={actionMenuLayout}
         isOutgoing={actionMenuTarget ? actionMenuTarget.fromDid === myDid : false}
+        // 文件消息不可复制：菜单只留 转发/删除 两项
+        showCopy={actionMenuTarget ? actionMenuTarget.kind !== 'file' : true}
         onCopy={() => {
           if (actionMenuTarget) handleCopy(actionMenuTarget);
         }}

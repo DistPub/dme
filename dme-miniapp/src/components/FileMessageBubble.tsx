@@ -42,6 +42,8 @@ export interface FileMessageBubbleProps {
   onReactionPress?: (emoji: string) => void;
   /** 打开表情选择浮层，参数为触点视口坐标。 */
   onOpenPicker?: (pos: TapPos) => void;
+  /** 长按文件卡片（事件冒泡：图片/视频/音频卡片内长按同样触发），参数为触点视口坐标。 */
+  onLongPress?: (pos: TapPos) => void;
 }
 
 export function FileMessageBubble({
@@ -60,6 +62,7 @@ export function FileMessageBubble({
   onSave,
   onReactionPress,
   onOpenPicker,
+  onLongPress,
 }: FileMessageBubbleProps): React.JSX.Element {
   const { t } = useI18n();
   const {
@@ -334,6 +337,7 @@ export function FileMessageBubble({
 
           <View
             className={`filebubble__container ${isOutgoing ? 'filebubble__container--out' : 'filebubble__container--in'}`}
+            onLongPress={onLongPress ? (e) => onLongPress(posFromEvent(e)) : undefined}
           >
             {renderFileContent()}
           </View>

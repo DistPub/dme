@@ -265,6 +265,7 @@ export const zh: Record<string, string> = {
   'menu.copy': '复制',
   'menu.forward': '转发',
   'menu.delete': '删除',
+  'menu.forwardNeedDownload': '文件未下载，无法转发',
 
   // videoviewer
   'videoviewer.title': '视频查看',
@@ -556,6 +557,7 @@ export const en: Record<string, string> = {
   'menu.copy': 'Copy',
   'menu.forward': 'Forward',
   'menu.delete': 'Delete',
+  'menu.forwardNeedDownload': 'File not downloaded, cannot forward',
 
   // videoviewer
   'videoviewer.title': 'Video Viewer',

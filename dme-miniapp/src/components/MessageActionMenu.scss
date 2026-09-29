@@ -1,9 +1,10 @@
 /**
  * components/MessageActionMenu.scss
  *
- * ⚠️ 面板尺寸须与 MessageActionMenu.tsx 的 PANEL_W / PANEL_H（真实 px）一致：
- *    宽度由内联样式给出（600px CSS → 300px 真实）不——实际上内联的是 150px 真实；
- *    这里只负责高度：三项各 92px CSS（46px 真实）× 3 + 上下 padding 8px = 146px。
+ * ⚠️ 面板尺寸须与 MessageActionMenu.tsx 的 PANEL_W / PANEL_H_*（真实 px）一致：
+ *    宽度由内联样式给出（150px 真实）。高度由 &__item 的 92px CSS（46px 真实）
+ *    决定：三项 = 46×3 + 上下 padding 16 = 146px（PANEL_H_FULL）；
+ *    两项（showCopy=false，文件消息场景）= 46×2 + 16 = 100px（PANEL_H_NO_COPY）。
  */
 
 .msgmenu {

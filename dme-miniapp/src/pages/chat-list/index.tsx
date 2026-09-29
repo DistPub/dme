@@ -8,7 +8,8 @@
  *   - 会话行: PDS 头像 + 群聊前缀 + 昵称 + @handle + 相对时间 + 预览 + 未读角标(99+)
  *   - 行左滑 → 删除好友（小程序替代 web 的右滑，touch 事件实现）
  *   - 退出登录: Modal 两次备份密码 → backupIdentity → logout
- *   - 转发模式: 从 ChatView 带 forwardText 进来，点击行 = 直接发送
+ *   - 转发模式: 从 ChatView 带 forwardText（文本）或 forwardPath/forwardName/
+ *     forwardMime/forwardSize（文件消息长按 → 转发）进来，点击行 = 直接发送
  *
  * 🔴 嵌入模式（embed）相关逻辑一律不移植（见 IMPROVEMENT-PLAN.md §七）：
  *    web 原代码中头像菜单的「退出登录」被 `{!isEmbedContext() && ...}` 包裹，
@@ -72,6 +73,19 @@ export default function ChatListPage(): React.JSX.Element {
   const forwardText = router.params.forwardText
     ? decodeURIComponent(router.params.forwardText)
     : undefined;
+  // 文件转发（chat-view 长按文件消息 → 转发）：路径等元信息走 URL 参数
+  const forwardPath = router.params.forwardPath
+    ? decodeURIComponent(router.params.forwardPath)
+    : undefined;
+  const forwardName = router.params.forwardName
+    ? decodeURIComponent(router.params.forwardName)
+    : '';
+  const forwardMime = router.params.forwardMime
+    ? decodeURIComponent(router.params.forwardMime)
+    : 'application/octet-stream';
+  const forwardSize = Number(router.params.forwardSize ?? '0') || 0;
+  /** 是否处于转发模式（文本或文件）。 */
+  const forwarding = !!(forwardText || forwardPath);
 
   const {
     session,
@@ -96,6 +110,7 @@ export default function ChatListPage(): React.JSX.Element {
     deletePendingWelcome,
     markConversationAsRead,
     sendMessage,
+    sendFileMessage,
     backupIdentity,
     logout,
   } = useApp();
@@ -133,7 +148,7 @@ export default function ChatListPage(): React.JSX.Element {
   const handleCacheRef = useRef<Record<string, string>>({});
   const profileCacheRef = useRef<Record<string, ProfileEntry>>({});
 
-  useWebTitle(forwardText ? t('chatlist.selectForwardTarget') : t('chatlist.title'));
+  useWebTitle(forwarding ? t('chatlist.selectForwardTarget') : t('chatlist.title'));
 
   // ---- 未登录则回登录页 --------------------------------------------------
   // ⚠️ 注意：内存里已有 session **不代表 token 还有效**（restore 只读本地）。
@@ -418,6 +433,18 @@ export default function ChatListPage(): React.JSX.Element {
       // isGroup 必须显式传给 chat-view：群聊模式（发送者头像、群信息、
       // ⋮ → GroupSettings）与 1:1 模式共用同一个页面。
       const url = `/pages/pkg-chat/chat-view/index?conversationId=${encodeURIComponent(groupId)}&isGroup=${isGroup ? '1' : '0'}`;
+      if (forwardPath) {
+        // 文件转发：走文件消息通道（重新加密上传，接收端仍是文件消息）
+        try {
+          await sendFileMessage(groupId, forwardPath, forwardName, forwardMime, forwardSize);
+        } catch (err) {
+          console.error('chat-list: 文件转发发送失败', err);
+          Taro.showToast({ title: t('chatview.send'), icon: 'none' });
+          return;
+        }
+        await Taro.redirectTo({ url });
+        return;
+      }
       if (forwardText) {
         try {
           await sendMessage(groupId, forwardText);
@@ -429,7 +456,7 @@ export default function ChatListPage(): React.JSX.Element {
       }
       await Taro.navigateTo({ url });
     },
-    [forwardText, sendMessage],
+    [forwardText, forwardPath, forwardName, forwardMime, forwardSize, sendMessage, sendFileMessage, t],
   );
 
   const openCreateGroup = useCallback(async (): Promise<void> => {
@@ -552,7 +579,7 @@ export default function ChatListPage(): React.JSX.Element {
   return (
     <View className="chatlist">
       {/* ---------------- 顶栏 ---------------- */}
-      {forwardText ? (
+      {forwarding ? (
         <View className="chatlist__header chatlist__header--forward">
           <Button
             className="chatlist__iconBtn chatlist__iconBtn--ghost"

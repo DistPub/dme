@@ -94,6 +94,31 @@ export async function xrpcPostJson<T>(
   return (typeof res.data === 'string' ? JSON.parse(res.data) : res.data) as T;
 }
 
+/**
+ * POST 无 body 请求（com.atproto.server.refreshSession / deleteSession 等无输入 procedure）。
+ *
+ * ⚠️ 这类端点要求 body 必须为空：哪怕发一个 `{}`（Content-Length: 2），
+ * PDS 也会返回 400 `InvalidRequest: A request body was provided when none was expected`
+ * （2026-09-29 小程序实测踩坑）。因此不能复用 xrpcPostJson 传 {}，
+ * 必须完全不携带 data —— Taro.request 在无 data 时不会发送请求体。
+ * 同时也不设置 Content-Type，避免部分网关据此判定有 body。
+ */
+export async function xrpcPostEmpty<T>(url: string, options: XrpcOptions = {}): Promise<T> {
+  const res = await Taro.request({
+    url,
+    method: 'POST',
+    header: { Accept: 'application/json', ...(options.headers ?? {}) },
+    timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    dataType: 'text',
+  });
+  const body = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw normalizeError(res.statusCode, body, url);
+  }
+  if (!body) return undefined as T;
+  return (typeof res.data === 'string' ? JSON.parse(res.data) : res.data) as T;
+}
+
 /** 上传二进制（com.atproto.repo.uploadBlob）。三期文件功能使用。 */
 export async function xrpcPostBytes<T>(
   url: string,

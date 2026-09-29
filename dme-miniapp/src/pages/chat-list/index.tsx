@@ -127,6 +127,8 @@ export default function ChatListPage(): React.JSX.Element {
   const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
   const [logoutStatus, setLogoutStatus] = useState<'idle' | 'backing_up' | 'error'>('idle');
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  /** 退出-备份流程重入闸门：防 showLoading 让步窗口内的重复点击。 */
+  const logoutBusyRef = useRef(false);
 
   const handleCacheRef = useRef<Record<string, string>>({});
   const profileCacheRef = useRef<Record<string, ProfileEntry>>({});
@@ -480,6 +482,7 @@ export default function ChatListPage(): React.JSX.Element {
   }, []);
 
   const handleLogoutConfirm = useCallback(async (): Promise<void> => {
+    if (logoutBusyRef.current) return; // 重入闸门：让步窗口内的连点直接吞掉
     if (!backupPwd) {
       setLogoutError(t('chatlist.enterPassword'));
       setLogoutStatus('error');
@@ -490,9 +493,21 @@ export default function ChatListPage(): React.JSX.Element {
       setLogoutStatus('error');
       return;
     }
+    logoutBusyRef.current = true;
     setLogoutStatus('backing_up');
     setLogoutError(null);
     try {
+      // ⚠️ 必须先展示**原生** loading，再进入 backupIdentity：
+      //    backupIdentity 在发起网络请求（putIdentityBackup）之前是一个
+      //    纯 JS 同步大块 —— 前置的 storage 读取全是一次 resolve 的微任务
+      //    级联，中间穿插 PBKDF2 10 万次迭代（桌面实测 472ms，真机 ES5
+      //    低端机 1.5~5s+）+ JSON 序列化 + AES-GCM。若直接 await，React
+      //    的 'backing_up' 渲染（按钮 disabled / 「备份中…」文案）永远
+      //    排不上号 —— 用户点确认后整个小程序冻结数秒，真机表现为
+      //    「卡死」（2026-09-29 真机反馈）。
+      //    Taro.showLoading 是原生组件：JS 线程冻结期间依然显示动画；
+      //    mask:true 让原生层直接拦截触摸，连点也从根上防住。
+      await Taro.showLoading({ title: t('chatlist.backingUp'), mask: true });
       await backupIdentity(backupPwd);
       setLogoutModalVisible(false);
       await logout();
@@ -500,6 +515,9 @@ export default function ChatListPage(): React.JSX.Element {
     } catch (err) {
       setLogoutError(err instanceof Error ? err.message : t('chatlist.backupFailed'));
       setLogoutStatus('error');
+    } finally {
+      Taro.hideLoading();
+      logoutBusyRef.current = false;
     }
   }, [backupPwd, backupPwdConfirm, t, backupIdentity, logout]);
 

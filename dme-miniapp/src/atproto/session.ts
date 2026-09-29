@@ -13,7 +13,13 @@
 
 import { PDS_URL } from '../config';
 import type { DmeStorage } from '../storage/db';
-import { HttpError, joinUrl, xrpcGetJson, xrpcPostJson } from '../platform/http';
+import {
+  HttpError,
+  joinUrl,
+  xrpcGetJson,
+  xrpcPostEmpty,
+  xrpcPostJson,
+} from '../platform/http';
 
 /** 持久化的会话数据，用于 App 重启后恢复。 */
 interface StoredSession {
@@ -116,9 +122,11 @@ export class DmeSession {
 
     this.refreshing = (async () => {
       try {
-        const res = await xrpcPostJson<RefreshSessionResponse>(
+        // ⚠️ refreshSession 是无输入体 procedure，必须发空 body POST。
+        //    传 {} 会被 PDS 拒绝：400 InvalidRequest: A request body was provided
+        //    when none was expected（2026-09-29 踩坑，改用 xrpcPostEmpty）。
+        const res = await xrpcPostEmpty<RefreshSessionResponse>(
           joinUrl(this.pdsUrl, 'xrpc/com.atproto.server.refreshSession'),
-          {},
           { headers: { Authorization: `Bearer ${current.refreshJwt}` } },
         );
         this.sessionData = {
@@ -215,9 +223,9 @@ export class DmeSession {
     const current = this.sessionData;
     if (current) {
       try {
-        await xrpcPostJson(
+        // deleteSession 同 refreshSession：无输入体 procedure，必须空 body POST。
+        await xrpcPostEmpty(
           joinUrl(this.pdsUrl, 'xrpc/com.atproto.server.deleteSession'),
-          {},
           { headers: { Authorization: `Bearer ${current.refreshJwt}` } },
         );
       } catch (err) {

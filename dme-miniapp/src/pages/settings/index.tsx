@@ -138,14 +138,23 @@ export default function SettingsPage(): React.JSX.Element {
     }
     setBusy(true);
     try {
+      // ⚠️ 先展示原生 loading 再进入 backupIdentity：
+      //    备份加密（PBKDF2 10 万次迭代，真机 ES5 低端机 1.5~5s+）是纯 JS
+      //    同步大块，且其前的 storage 读取全是一次 resolve 的微任务级联 ——
+      //    直接 await 的话 setBusy(true) 的「备份中」渲染永远排不上号，
+      //    点按钮后整个页面冻结数秒（真机感知为卡死，2026-09-29）。
+      //    showLoading 是原生组件，JS 冻结期间依然显示；mask 拦截连点。
+      await Taro.showLoading({ title: t('settings.backingUp'), mask: true });
       await backupIdentity(password);
       setPassword('');
       setConfirmPassword('');
+      Taro.hideLoading();
       await Taro.showToast({ title: t('settings.backedUp'), icon: 'success' });
     } catch (err) {
       setError(`${t('settings.backupFailed')}: ${err instanceof Error ? err.message : ''}`);
       console.error('备份失败:', err);
     } finally {
+      Taro.hideLoading();
       setBusy(false);
     }
   }, [password, confirmPassword, backupIdentity, t]);

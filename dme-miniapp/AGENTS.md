@@ -90,6 +90,8 @@ dme-client 的微信小程序移植版，**Taro 4 + React 18 + TypeScript**，�
 
 工具函数：`xrpcGetJson(url, {headers})` / `xrpcPostJson(url, payload, {headers})`。用 POST 调 query 端点服务端直接 400，且容易被「非 401 视为网络问题」的兜底吞掉。
 
+**procedure 还分两种**：带输入体（createRecord 等，走 `xrpcPostJson`）与**无输入体**（refreshSession / deleteSession）。无输入体端点 body 必须为空——传 `{}` 占位会被 PDS 拒绝：`400 InvalidRequest: A request body was provided when none was expected`。这类一律走 `xrpcPostEmpty()`（POST 不带 data、不设 Content-Type）。
+
 ### 6.2 鉴权失败判定：status 或响应体双判定
 
 PDS 对过期 accessJwt 返回 **HTTP 400**（不是 401），响应体 `{"error":"ExpiredToken"}`：
@@ -161,7 +163,18 @@ poller 的 queueId 标记（LRU 1000）必须在 `onWelcome` / `decrypt` **成�
 - `byteStart/byteEnd` 是 **UTF-8 字节偏移**（中文/emoji 必须换算，`utf8ByteRanges`）。
 - 不用官方 `\p{P}` 正则（es5ify 降级不确定），用「正则粗扫 + 手工修剪」等价实现（标点用显式集合近似）。
 
-### 6.11 canvas 尺寸：显示 rpx、绘制 px、CSS 不碰尺寸
+### 6.11 重 JS 计算前的 loading：先 showLoading 再 await
+
+PBKDF2、AES-GCM、大对象 JSON 序列化等**纯 JS 同步计算**嵌在 async 函数里时，如果前面只有微任务级联（storage 读取、状态更新），React 的 setState 没有机会渲染到原生层，用户会感觉「点按钮直接卡死」。
+
+修复：调用这类函数之前先 `await Taro.showLoading({ title: ..., mask: true })`。
+- 原生 loading 在 JS 线程阻塞期间仍然显示；
+- `mask: true` 让原生层拦截触摸，同时防连点；
+- 记得 `finally { Taro.hideLoading(); }`。
+
+已按此修复：chat-list「退出并备份」、settings「身份备份」。
+
+### 6.12 canvas 尺寸：显示 rpx、绘制 px、CSS 不碰尺寸
 
 `<Canvas type="2d">` 无固有宽高比：
 

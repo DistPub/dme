@@ -70,7 +70,7 @@ dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，
 |---|---|
 | MLS 会话管理 | `dme-client/src/crypto/mls-session.ts` (255 行 MlsSession 类) |
 | MLS 密码套件配置 | `dme-client/src/crypto/mls-config.ts`（常量 + `MLS_CIPHERSUITE_NAME`） |
-| MLS 纯 JS KDF（iOS16 Safari） | `dme-client/src/crypto/mls-noble-kdf.ts`（`getNobleMlsImpl` + `nobleHkdfSha256`，用 @noble/hashes 替代 @hpke WebCrypto HKDF） |
+| MLS 纯 JS 密码套件组装 | `dme-client/src/crypto/mls-noble-kdf.ts`（`getNobleMlsImpl`：hash/kdf/signature/hpke/rng 五字段全部手工纯 JS 组装） |
 | MLS 凭证 | `dme-client/src/crypto/mls-credential.ts` |
 | QueueID 派生 | `dme-client/src/crypto/mls-queue-id.ts` |
 | KeyPackage 加密 | `dme-client/src/crypto/keypackage.ts` |
@@ -137,9 +137,11 @@ dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，
 | 符号 | 类型 | 位置 | 角色 |
 |---|---|---|---|
 | `MlsSession` | class | mls-session.ts | MLS 群组会话：创建/加入/加解密/序列化 |
-| `getNobleMlsImpl` | func | mls-noble-kdf.ts | 组装 CiphersuiteImpl，仅把 kdf 替换为纯 JS HKDF（`nobleHkdfSha256`），其余复用 nobleCryptoProvider；规避 iOS 16 Safari WebCrypto HKDF 崩溃 |
+| `getNobleMlsImpl` | func | mls-noble-kdf.ts | 组装完整 CiphersuiteImpl，hash/kdf/signature/hpke/rng 五字段全部纯 JS，不依赖 WebCrypto `subtle`；规避 iOS Safari Ed25519/X25519 不支持问题 |
 | `nobleHkdfSha256` | const | mls-noble-kdf.ts | 纯 JS HKDF-SHA256，实现 ts-mls 的 `Kdf` 接口（extract/expand/size） |
-| `getMlsImpl` | func | mls-config.ts | 旧版 CiphersuiteImpl 缓存（现已被 `getNobleMlsImpl` 取代，无引用保留） |
+| `createNobleSignature` | func | mls-noble-kdf.ts | 纯 JS Ed25519 签名实现，不做 `crypto.subtle` 探测 |
+| `createNobleHpke` | func | hpke-noble.ts | 纯 JS HPKE 实现（DHKEM-X25519 / HKDF-SHA256 / AES-128-GCM） |
+| `nobleRng` | const | rng.ts | 纯 JS 随机数源，兼容 ts-mls `Rng` 接口 |
 | `generateKeyPackageForUser` | func | keypackage.ts | 生成 KeyPackage 对 |
 | `encryptKeyPackage` | func | keypackage.ts | X25519 ECDH + AES-256-GCM 加密 KeyPackage |
 | `deriveMessageQueueId` | func | mls-queue-id.ts | MLS exporter secret 派生盲查 queueId |
@@ -408,7 +410,7 @@ Web 端浏览器标签标题统一为 `"<页面标题> - DME"`，由 `src/utils/
 - **包管理器**: TS 侧统一 Bun，Go 侧标准 go 工具链
 - **TypeScript**: `strict: true`（两个 TS 项目都是）
 - **Go**: 1.22，仅 2 个直接依赖（badger/v4 + coder/websocket），无框架
-- **加密库**: ts-mls + @noble/curves + @noble/hashes + @noble/ciphers（非 WebCrypto，因 Safari < 17 不支持 X25519）；**iOS 16 Safari 额外兼容**：ts-mls `nobleCryptoProvider` 仍走 @hpke 的 WebCrypto HKDF，`crypto.subtle.importKey` 在 iOS16 会返回 undefined 崩溃，故经 `getNobleMlsImpl()`（`mls-noble-kdf.ts`）仅把 kdf 替换为纯 JS `nobleHkdfSha256`（`@noble/hashes`）后使用；所有取 CiphersuiteImpl 处必须用 `getNobleMlsImpl()`，禁止直接用 `getMlsImpl`/`nobleCryptoProvider` 的默认 kdf
+- **加密库**: ts-mls + @noble/curves + @noble/hashes + @noble/ciphers（非 WebCrypto，因 Safari < 17 不支持 X25519）；**iOS Safari 兼容**：ts-mls 的 `nobleCryptoProvider` 内部仍会探测 `crypto.subtle` 并走 WebCrypto Ed25519/X25519，iOS < 17.4 会抛 `NotSupportedError`。`getNobleMlsImpl()`（`mls-noble-kdf.ts`）手工组装完整 CiphersuiteImpl，hash/kdf/signature/hpke/rng 五个字段全部使用 @noble 纯 JS 实现，不调用 `nobleCryptoProvider`/`getCiphersuiteImpl()`；所有取 CiphersuiteImpl 处必须用 `getNobleMlsImpl()`
 - **消息去重与 poller 重入保护**: `DmePoller.pollOnce` 用 `polling` 布尔标志防止重入（同一实例并发只跑一次）；轮询处理时用 `inFlightQueueIds`（Set）跳过本轮已投递的 queueId，且 `markQueueIdProcessed` 在 `onMessage`/`onWelcome` **之前**调用（先标记后处理，避免回调 await 期间被下一轮重复处理）；`handleIncomingMessage` 的 text/file 分支入口调用 `msgStorage.hasMessage(conversationId, queueId)` 做幂等检查，已存在则跳过存储（群聊文本 default 分支同样检查），防止重复存储与误播提示音
 - **输入框多行自适应**: `ChatViewScreen` 输入框 `multiline`，`onContentSizeChange` 动态调高度（clamp 44–240px）；Enter 发送仅在**非触屏**设备（`navigator.maxTouchPoints === 0`）的 web 端生效（`onKeyPress` 且 `!shiftKey`），触屏设备回车换行；发送后 `keepInputFocused()` 保持焦点（web 用 `requestAnimationFrame` 补一次），发送按钮外层 `View` 挂 `mousedown` preventDefault 防止点按钮时 web 失焦（`Button` 支持 `onPressIn`）
 - **日志**: Go 用 `log/slog` JSON 输出；TS 用 `console.error`/`console.warn`（仅错误和警告）
@@ -476,7 +478,7 @@ cd dme-miniapp && npx tsc --noEmit                    # 类型检查
 - **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
 - **expo-document-picker**: 新增依赖 `expo-document-picker@~57.0.1`（Expo 52 兼容），用于文件选择（`getDocumentAsync({type: '*/*'})`），返回 `{uri, name, mimeType, size}`
 - **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/canvaskit.wasm/字体/图标，离线可启动）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`，并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 dme-client/scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`**（延迟到 CanvasKit 就绪后执行），`LoadSkiaWeb({ locateFile: (file) => `/${file}` })` 用**绝对路径** `/`；禁止改回动态 `import('./App')`（会产生 async chunk，需 `@expo/metro-runtime` 的 `__loadBundleAsync`，而手写 `public/index.html` 不会注入该运行时，导致 `Requiring unknown module` 报错）
-- **iOS 16 Safari 兼容**: ts-mls `nobleCryptoProvider` 的 HKDF 仍走 @hpke WebCrypto（`crypto.subtle.importKey` 在 iOS16 返回 undefined 崩溃），故所有取 CiphersuiteImpl 处改用 `getNobleMlsImpl()`（纯 JS `nobleHkdfSha256`，`@noble/hashes`）；`deriveMessageQueueId` 内部自行取 impl（不再收 impl 参数）；`getMlsImpl` 已无引用保留
+- **iOS Safari 兼容**: ts-mls 的 `nobleCryptoProvider` 会探测 `crypto.subtle` 并走 WebCrypto Ed25519/X25519，iOS < 17.4 会抛 `NotSupportedError`，故所有取 CiphersuiteImpl 处改用 `getNobleMlsImpl()`（hash/kdf/signature/hpke/rng 全部纯 JS）；`deriveMessageQueueId` 内部自行取 impl（不再收 impl 参数）；`getMlsImpl` 已删除
 - **CI Release**: `.github/workflows/release.yml` 交叉编译 6 目标（linux amd64/arm64/armv7、darwin amd64/arm64、windows amd64），`CGO_ENABLED=0`，已移除 `docker/setup-qemu-action`（Go 纯 Go 交叉编译无需 QEMU），Build/Verify 步骤显式 `shell: bash`（Windows runner 默认 pwsh 不支持此处语法）；打 `v*` tag 触发 `go build -ldflags="-s -w -X main.version=<tag>"` 并发布 GitHub Release
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径
 - **文件发送**: 先保存本地副本（web->IndexedDB / native->documentDirectory）再上传；先写入 `uploadStatus:'uploading'` 乐观消息（tempId 为 `generateId()`），成功后删除临时消息写入最终消息（id=MLS queueId，reactions 跨端靠 queueId 匹配）。逐块 5MB AES-256-GCM 加密，经 XHR `uploadBlobWithProgress` 上传 PDS（`upload.onprogress` 字节级 uploadProgress；fetch 无上传进度故绕过 agent.uploadBlob，自带 Authorization + atproto-proxy header，取自 `session.pdsUrlStr`/`session.accessJwt`/`agent.proxy`）。blobCids 字段引用（标准 `{$type:'blob', ref:{$link}, mimeType, size}` 格式，PDS 可识别防 GC），与 MLS manifest 共存同一条 `dme.queue.envelope`（单 record）。上传失败仅置 `uploadStatus:'failed'` 不抛异常，可 `retryUploadFileMessage` 从本地副本重试。下载时 blob fetch 失败指数退避重试 2s/4s/8s，最多 3 次。图片 ≤ 5MB 自动下载，其他类型手动

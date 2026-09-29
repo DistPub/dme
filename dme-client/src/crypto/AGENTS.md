@@ -7,14 +7,14 @@
 
 # dme-client/src/crypto
 
-MLS (RFC 9420) 加密模块。11 个文件。使用 ts-mls + @noble 库（非 WebCrypto，因 Safari < 17 不支持 X25519）。
+MLS (RFC 9420) 加密模块。13 个文件。使用 ts-mls + @noble 库（非 WebCrypto，因 Safari < 17 不支持 X25519）。
 
 ## 快速定位
 
 | 任务 | 位置 |
 |---|---|
 | 改 MLS 密码套件 | `mls-config.ts`（`MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`） |
-| 改 MLS 纯 JS KDF（iOS16 Safari） | `mls-noble-kdf.ts`（`getNobleMlsImpl()`：仅把 kdf 换成纯 JS `nobleHkdfSha256`，其余复用 nobleCryptoProvider） |
+| 改 MLS 纯 JS 密码套件组装 | `mls-noble-kdf.ts`（`getNobleMlsImpl()`：hash/kdf/signature/hpke/rng 五字段全部手工纯 JS 组装） |
 | 改 MLS 会话管理 | `mls-session.ts`（MlsSession 类：创建/加入/加人/删人/加解密/序列化） |
 | 改 QueueID 派生 | `mls-queue-id.ts`（Welcome queueId + Message queueId） |
 | 改 MLS 凭证 | `mls-credential.ts`（DID 凭证 + AuthenticationService） |
@@ -28,8 +28,10 @@ MLS (RFC 9420) 加密模块。11 个文件。使用 ts-mls + @noble 库（非 We
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `mls-config.ts` | 54 | MLS 常量 + `MLS_CIPHERSUITE_NAME`（`getMlsImpl()` 已无引用保留） |
-| `mls-noble-kdf.ts` | 49 | `nobleHkdfSha256`（纯 JS HKDF-SHA256，实现 ts-mls `Kdf`）+ `getNobleMlsImpl()`（替换 kdf 的 CiphersuiteImpl，规避 iOS16 Safari WebCrypto HKDF 崩溃） |
+| `mls-config.ts` | 25 | MLS 常量 + `MLS_CIPHERSUITE_NAME` |
+| `mls-noble-kdf.ts` | 139 | `nobleHkdfSha256`（纯 JS HKDF-SHA256）+ `createNobleHash()` + `createNobleSignature()` + `getNobleMlsImpl()`（五字段全部纯 JS 手工组装的 CiphersuiteImpl） |
+| `hpke-noble.ts` | 397 | 纯 JS RFC 9180 HPKE（DHKEM-X25519 / HKDF-SHA256 / AES-128-GCM，base mode），`createNobleHpke()` |
+| `rng.ts` | 25 | `nobleRng`：ts-mls `Rng` 接口的纯 JS 实现 |
 | `mls-credential.ts` | 70 | DID 基础 MLS 凭证 + AuthenticationService |
 | `mls-queue-id.ts` | 66 | Welcome queueId (SHA-256) + Message queueId (MLS exporter) |
 | `mls-session.ts` | 255 | MlsSession 类：createAsFounder / joinViaWelcome / addMember / removeMember / updateOwnLeaf / encrypt / decrypt / serialize / deserialize |
@@ -57,7 +59,7 @@ MLS (RFC 9420) 加密模块。11 个文件。使用 ts-mls + @noble 库（非 We
 ## 约定
 
 - **@noble 库**: `@noble/curves/ed25519`（Ed25519 + X25519）、`@noble/hashes`（SHA-256/HKDF）、`@noble/ciphers`（AES-GCM）
-- **CiphersuiteImpl 取用**: 所有需要 CiphersuiteImpl 的地方必须用 `getNobleMlsImpl()`（`mls-noble-kdf.ts`），禁止直接用 `getMlsImpl`/`nobleCryptoProvider` 的默认 kdf——ts-mls 的 HKDF 走 @hpke WebCrypto，`crypto.subtle.importKey` 在 iOS16 Safari 返回 undefined 崩溃；`deriveMessageQueueId` 内部自行取 impl（不再收 impl 参数）
+- **CiphersuiteImpl 取用**: 所有需要 CiphersuiteImpl 的地方必须用 `getNobleMlsImpl()`（`mls-noble-kdf.ts`），禁止直接用 `getMlsImpl`/`nobleCryptoProvider`/`getCiphersuiteImpl()`——ts-mls 的这些入口内部会实例化 `@hpke/core` 类并探测 `crypto.subtle`，iOS Safari 上可能因 Ed25519/X25519 不支持而抛 `NotSupportedError`；`deriveMessageQueueId` 内部自行取 impl（不再收 impl 参数）
 - **ts-mls**: RFC 9420 TypeScript 实现，提供 createGroup / joinGroup / createCommit / processPrivateMessage / createApplicationMessage 等
 - **Uint8Array**: 所有密钥/密文载体，非 Buffer
 - **序列化**: `serialize()`/`deserialize()` 用 `encodeGroupState`/`decodeGroupState` 转 base64url 存 AsyncStorage

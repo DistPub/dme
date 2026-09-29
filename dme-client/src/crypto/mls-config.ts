@@ -2,16 +2,10 @@
  * crypto/mls-config.ts - Central MLS configuration constants.
  *
  * All DME MLS groups use cipher suite 1 (DHKEM-X25519 / AES128GCM /
- * SHA-256 / Ed25519). The noble crypto provider is used for Safari < 17
- * compatibility (no WebCrypto dependency).
+ * SHA-256 / Ed25519). The actual CiphersuiteImpl is assembled by hand in
+ * `mls-noble-kdf.ts` using pure-JS @noble primitives, with no dependency on
+ * WebCrypto `subtle`.
  */
-
-import {
-  getCiphersuiteImpl,
-  getCiphersuiteFromName,
-  nobleCryptoProvider,
-  type CiphersuiteImpl,
-} from 'ts-mls';
 
 /** MLS cipher suite - DHKEM-X25519 + AES-128-GCM + SHA-256 + Ed25519. */
 export const MLS_CIPHERSUITE_NAME =
@@ -34,21 +28,3 @@ export const KEYPACKAGE_POOL_SIZE = 5;
 
 /** QueueID length in bytes. */
 export const QUEUEID_LENGTH = 32;
-
-let cachedImpl: CiphersuiteImpl | null = null;
-
-/**
- * Lazily initialise and cache the CiphersuiteImpl.
- *
- * Uses the noble crypto provider (not WebCrypto) for Safari < 17
- * X25519/Ed25519 compatibility.
- */
-export async function getMlsImpl(): Promise<CiphersuiteImpl> {
-  if (!cachedImpl) {
-    cachedImpl = await getCiphersuiteImpl(
-      getCiphersuiteFromName(MLS_CIPHERSUITE_NAME),
-      nobleCryptoProvider,
-    );
-  }
-  return cachedImpl;
-}

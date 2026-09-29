@@ -5,8 +5,9 @@
 .login {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   min-height: 100vh;
-  padding: 120px 48px 48px;
+  padding: 48px;
   box-sizing: border-box;
   background: #ffffff;
 

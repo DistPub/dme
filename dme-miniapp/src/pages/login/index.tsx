@@ -21,6 +21,7 @@ import { useI18n } from '../../i18n/I18nContext';
 import { PDS_URL } from '../../config';
 import { useWebTitle } from '../../utils/web-title';
 import { LogoSpinner } from '../../components/LogoSpinner';
+import DmeAsyncStorage from '../../platform/storage';
 import logoUrl from '../../assets/images/logo.png';
 import './index.scss';
 
@@ -29,6 +30,16 @@ import './index.scss';
  * 小程序 request 合法域名在微信后台配置，此处做二次防线。
  */
 const PDS_ALLOWLIST: readonly string[] = [PDS_URL];
+
+/**
+ * 上次登录 handle 的本地存储 key。
+ *
+ * ⚠️ iOS 系统级密码自动填充（Keychain AutoFill）在小程序内**微信平台层面
+ * 不可用**（Associated Domains 属于微信域，input 是微信原生组件，无属性可开）。
+ * 替代方案：登录成功后记住 handle，下次进入登录页自动回填账号，
+ * 用户只需输入密码。密码出于安全不回填。
+ */
+const LAST_IDENTIFIER_KEY = 'dme:lastIdentifier';
 
 export default function LoginPage(): React.JSX.Element {
   const { t } = useI18n();
@@ -49,6 +60,18 @@ export default function LoginPage(): React.JSX.Element {
   const [localError, setLocalError] = useState<string | null>(null);
 
   useWebTitle(t('login.title'));
+
+  // ---- 回填上次登录的 handle（iOS 自动填充的替代方案，见文件头注释）------
+  useEffect(() => {
+    (async () => {
+      try {
+        const last = await DmeAsyncStorage.getItem(LAST_IDENTIFIER_KEY);
+        if (last) setIdentifier(last);
+      } catch (err) {
+        console.error('读取上次登录 handle 失败:', err);
+      }
+    })();
+  }, []);
 
   // ---- 启动时尝试恢复会话 ------------------------------------------------
   useEffect(() => {
@@ -105,6 +128,8 @@ export default function LoginPage(): React.JSX.Element {
 
     try {
       await login(identifier.trim(), password, trimmedPds);
+      // 记住本次 handle，下次登录页自动回填
+      await DmeAsyncStorage.setItem(LAST_IDENTIFIER_KEY, identifier.trim());
       // 确保身份密钥存在（首次登录会生成）
       await setupIdentity();
 
@@ -145,6 +170,17 @@ export default function LoginPage(): React.JSX.Element {
         <Text className="login__title">{t('login.title')}</Text>
       </View>
 
+      {/* ⚠️ 字段次序与 web LoginScreen 一致：PDS → Handle → Password */}
+      <View className="login__field">
+        <Text className="login__label">{t('login.pdsPlaceholder')}</Text>
+        <Input
+          className="login__input"
+          value={pdsUrl}
+          placeholder={t('login.pdsPlaceholder')}
+          onInput={(e) => setPdsUrl(e.detail.value)}
+        />
+      </View>
+
       <View className="login__field">
         <Text className="login__label">{t('login.handlePlaceholder')}</Text>
         <Input
@@ -163,19 +199,11 @@ export default function LoginPage(): React.JSX.Element {
           className="login__input"
           password
           name="password"
+          confirmType="send"
           value={password}
           placeholder={t('login.passwordPlaceholder')}
           onInput={(e) => setPassword(e.detail.value)}
-        />
-      </View>
-
-      <View className="login__field">
-        <Text className="login__label">{t('login.pdsPlaceholder')}</Text>
-        <Input
-          className="login__input"
-          value={pdsUrl}
-          placeholder={t('login.pdsPlaceholder')}
-          onInput={(e) => setPdsUrl(e.detail.value)}
+          onConfirm={handleLogin}
         />
       </View>
 

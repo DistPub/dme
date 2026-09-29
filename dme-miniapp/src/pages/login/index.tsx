@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { View, Text, Input, Button } from '@tarojs/components';
+import { View, Text, Input, Button, Image } from '@tarojs/components';
 import Taro from '@tarojs/taro';
 
 import { useApp } from '../../state/AppContext';
@@ -21,6 +21,7 @@ import { useI18n } from '../../i18n/I18nContext';
 import { PDS_URL } from '../../config';
 import { useWebTitle } from '../../utils/web-title';
 import { LogoSpinner } from '../../components/LogoSpinner';
+import logoUrl from '../../assets/images/logo.png';
 import './index.scss';
 
 /**
@@ -134,12 +135,22 @@ export default function LoginPage(): React.JSX.Element {
 
   return (
     <View className="login">
-      <Text className="login__title">{t('login.title')}</Text>
+      <View className="login__brand">
+        <Image
+          className="login__logo"
+          src={logoUrl}
+          mode="aspectFit"
+          aria-label={t('login.title')}
+        />
+        <Text className="login__title">{t('login.title')}</Text>
+      </View>
 
       <View className="login__field">
         <Text className="login__label">{t('login.handlePlaceholder')}</Text>
         <Input
           className="login__input"
+          type="text"
+          name="username"
           value={identifier}
           placeholder={t('login.handlePlaceholder')}
           onInput={(e) => setIdentifier(e.detail.value)}
@@ -151,6 +162,7 @@ export default function LoginPage(): React.JSX.Element {
         <Input
           className="login__input"
           password
+          name="password"
           value={password}
           placeholder={t('login.passwordPlaceholder')}
           onInput={(e) => setPassword(e.detail.value)}

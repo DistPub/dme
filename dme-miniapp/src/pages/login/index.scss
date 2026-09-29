@@ -15,11 +15,23 @@
     justify-content: center;
   }
 
+  &__brand {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 64px;
+  }
+
+  &__logo {
+    width: 192rpx;
+    height: 192rpx;
+    margin-bottom: 24rpx;
+  }
+
   &__title {
     font-size: 56px;
     font-weight: 600;
     color: #111111;
-    margin-bottom: 64px;
     text-align: center;
   }
 

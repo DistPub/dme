@@ -601,10 +601,10 @@ export function ChatViewScreen(): React.JSX.Element {
     <View style={[
       styles.container,
       Platform.OS === 'web' && styles.containerWeb,
-      // iOS Web: while the custom action menu is open, disable text selection on
-      // the whole chat screen so the system callout menu cannot select other UI
-      // labels (e.g. the send button). The text input explicitly opts back in.
-      Platform.OS === 'web' && actionMenuTarget !== null && { userSelect: 'none' },
+      // iOS Web: disable default text selection across the chat screen. Message
+      // text is copied via the custom long-press menu instead, so we can avoid
+      // the system callout menu selecting unrelated labels like the send button.
+      Platform.OS === 'web' && styles.webNoSelect,
     ]}>
       <View style={[styles.header, Platform.OS === 'web' && styles.headerWeb]}>
         <Button
@@ -763,6 +763,9 @@ const styles = StyleSheet.create({
   containerWeb: {
     paddingTop: 56,
   },
+  webNoSelect: {
+    userSelect: 'none',
+  },
   keyboardAvoider: {
     flex: 1,
   },
@@ -872,10 +875,14 @@ const styles = StyleSheet.create({
   sendBtnWrap: {
     width: 72,
     height: 48,
+    // iOS Web: the send button label must not be selectable by the system
+    // callout menu when a message bubble is long-pressed.
+    userSelect: 'none',
   },
   sendBtn: {
     width: 72,
     height: 48,
+    userSelect: 'none',
   },
   systemMsgWrap: {
     alignItems: 'center',

@@ -38,11 +38,17 @@ export function MessageActionMenu({
 
   useEffect(() => {
     if (!visible) return;
-    // iOS Web: dismiss any active text selection when the menu appears so the
-    // system callout menu does not pop over the custom action menu.
-    if (typeof window !== 'undefined' && window.getSelection) {
-      window.getSelection()?.removeAllRanges();
-    }
+    // iOS Web: aggressively suppress any text selection while the menu is open.
+    // The system callout menu can appear if labels like the send button remain
+    // selectable, so we clear selection immediately and on every change.
+    const clearSelection = (): void => {
+      if (typeof window !== 'undefined' && window.getSelection) {
+        window.getSelection()?.removeAllRanges();
+      }
+    };
+    clearSelection();
+    document.addEventListener('selectionchange', clearSelection);
+    return () => document.removeEventListener('selectionchange', clearSelection);
   }, [visible]);
 
   if (!visible || !layout) {

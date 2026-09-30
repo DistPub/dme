@@ -71,6 +71,11 @@ export function MessageActionMenu({
       transparent
       animationType="none"
       onRequestClose={onClose}
+      onShow={() => {
+        if (typeof window !== 'undefined' && window.getSelection) {
+          window.getSelection()?.removeAllRanges();
+        }
+      }}
     >
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable

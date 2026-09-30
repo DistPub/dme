@@ -598,7 +598,14 @@ export function ChatViewScreen(): React.JSX.Element {
   );
 
   return (
-    <View style={[styles.container, Platform.OS === 'web' && styles.containerWeb]}>
+    <View style={[
+      styles.container,
+      Platform.OS === 'web' && styles.containerWeb,
+      // iOS Web: while the custom action menu is open, disable text selection on
+      // the whole chat screen so the system callout menu cannot select other UI
+      // labels (e.g. the send button). The text input explicitly opts back in.
+      Platform.OS === 'web' && actionMenuTarget !== null && { userSelect: 'none' },
+    ]}>
       <View style={[styles.header, Platform.OS === 'web' && styles.headerWeb]}>
         <Button
           label={t('common.back')}
@@ -701,7 +708,7 @@ export function ChatViewScreen(): React.JSX.Element {
             </TouchableOpacity>
             <TextInput
               ref={inputRef}
-              style={[styles.input, { height: inputHeight }]}
+              style={[styles.input, { height: inputHeight, userSelect: 'auto' }]}
               value={text}
               onChangeText={setText}
               placeholder={t('chatview.typeMessage')}

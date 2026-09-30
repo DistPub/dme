@@ -65,9 +65,9 @@ dme-client/
 | 表情反应协议 | `src/protocol/reaction.ts`（`ReactionMessage` add/remove） |
 | 消息 reactions 存储 | `src/storage/db.ts`（`Reaction` + `addReaction`/`removeReaction`） |
 | 消息气泡 + reactions 渲染 | `src/ui/MessageBubble.tsx` |
-| 文件消息气泡 + 上传/下载状态 | `src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+图片缩略图/视频首帧缩略图+▶遮罩/音频播放卡片/文件卡片)；1:1 不渲染头像列；上传 uploading/failed+重试 + 下载 pending 视频只显示「下载」按钮/downloading(字节级%)/ready 视频显示缩略图+▶/failed 状态 + reactions；长按/右键唤出转发/删除菜单） |
+| 文件消息气泡 + 上传/下载状态 | `src/ui/FileMessageBubble.tsx`（群聊双列布局：头像列 + 内容列(昵称+@handle+图片缩略图/视频首帧缩略图+▶遮罩/音频播放卡片/文件卡片)；1:1 不渲染头像列；上传 uploading/failed+重试 + 下载 pending 视频只显示「下载」按钮/downloading(字节级%)/ready 视频显示缩略图+▶/failed 状态 + reactions；长按/右键唤出转发/删除菜单；容器 `userSelect: 'none'`，图片/视频预览单独挂 `onLongPress`） |
 | 图片查看器 | `src/ui/ImageViewerScreen.tsx`（全屏查看，点击或 ✕ 关闭） |
-| 视频播放/全屏查看 | `src/ui/VideoViewerScreen.tsx`（`expo-video` 的 `VideoView` + `useVideoPlayer`，web 自动播放 muted，解码不支持时回退下载） |
+| 视频播放/全屏查看 | `src/ui/VideoViewerScreen.tsx`（Native 用 `expo-video` 的 `VideoView` + `useVideoPlayer`；Web/PWA 直接渲染原生 `<video muted playsInline autoplay controls>`；解码不支持时回退下载） |
 | 视频 unsupported codec 提示与下载 | `src/ui/VideoViewerScreen.tsx`（web 预检 `videoWidth/videoHeight=0` 时提示「浏览器不支持视频解码」并提供下载按钮） |
 | 视频首帧缩略图生成 | `src/utils/video-thumbnail.ts`（native 用 `expo-video-thumbnails`，web 用隐藏 `<video>`+`<canvas>` 抓帧） |
 | 文件导出/下载到设备 | `src/utils/file-export.ts`（exportFileToDevice：web 用 anchor download，native 用 Share） |
@@ -113,12 +113,12 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理；`pollOnce` 用 `polling` 布尔标志防重入，`inFlightQueueIds`（Set）跳过本轮已投递 queueId，且 `markQueueIdProcessed` 在 `onMessage`/`onWelcome` 之前调用（先标记后处理，避免回调 await 期间被下一轮重复处理）
 - **消息去重**: `DmeStorage.hasMessage(conversationId, messageId)` 判断会话是否已存指定 messageId；`handleIncomingMessage` 的 text/file 分支（含群聊 default 分支）入口做幂等检查，已存在则跳过存储，防止重复存储与误播提示音
-- **输入框多行自适应**: `ChatViewScreen` 输入框 `multiline`，`onContentSizeChange` 动态调高度（clamp 44–240px）；`FlatList + 输入栏` 外层包 `KeyboardAvoidingView`（iOS `behavior='padding'`），header 保持在键盘上方不被顶出；Enter 发送仅在**非触屏**设备（`navigator.maxTouchPoints === 0`）的 web 端生效（`onKeyPress` 且 `!shiftKey`），触屏设备回车换行；发送后 `keepInputFocused()` 保持焦点（web 用 `requestAnimationFrame` 补一次），发送按钮外层 `View` 挂 `mousedown` preventDefault 防 web 失焦（`Button` 支持 `onPressIn`）
+- **输入框多行自适应**: `ChatViewScreen` 输入框 `multiline`，`onContentSizeChange` 动态调高度（clamp 44–240px）；`FlatList + 输入栏` 外层包 `KeyboardAvoidingView`（iOS `behavior='padding'`），header 保持在键盘上方不被顶出；Web/PWA 端 `public/index.html` 把 `html/body/#root` 设为 `100dvh`，让键盘弹起时根容器随可视窗口缩放，避免整页被顶上去；Enter 发送仅在**非触屏**设备（`navigator.maxTouchPoints === 0`）的 web 端生效（`onKeyPress` 且 `!shiftKey`），触屏设备回车换行；发送后 `keepInputFocused()` 保持焦点（web 用 `requestAnimationFrame` 补一次），发送按钮外层 `View` 挂 `mousedown` preventDefault 防 web 失焦（`Button` 支持 `onPressIn`）
 - **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`/`file`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble`/`FileMessageBubble` 按 emoji 合并并显示计数
 - **屏蔽列表**: `blockList: string[]` 存储在 `AsyncStorage`，入口为 ChatList 头像菜单 + 私聊管理页（`DmSettingsScreen`）+ 群管理成员行；可 Block/Unblock；被 block 用户的消息不存储、不展示；不修改群成员关系
 - **Profile 批量获取**: 多个 DID 的 profile 必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；**ChatListScreen / GroupSettingsScreen / BlockListScreen 等首屏加载**须先读 `profileCacheRef`/`handleCacheRef` 本地缓存同步构造 rows 并立即 `setRows`/`setLoading(false)`，有缺失时再异步调用 `resolveProfiles`/`resolveHandle`，拿到结果后用 `setRows(prev => prev.map(...))` 更新，禁止同步 `await` 网络请求阻塞首屏
-- **消息操作菜单**: 长按（原生）/右键（web）气泡弹出 `MessageActionMenu`（复制/转发/删除）；`MessageBubble` 与 `FileMessageBubble` 均支持；文件消息隐藏「复制」，保留「转发/删除」；复制走 `expo-clipboard`，文本转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，文件转发通过 `forwardFile` 路由参数走 `sendFileMessage`，删除仅本地删除（PDS 密文不变）
+- **消息操作菜单**: 长按（原生）/右键（web）气泡弹出 `MessageActionMenu`（复制/转发/删除）；`MessageBubble` 与 `FileMessageBubble` 均支持；文件消息隐藏「复制」，保留「转发/删除」；`FileMessageBubble` 对图片/视频预览等内部可交互元素也单独挂了 `onLongPress`，并对容器加 `userSelect: 'none'`，Web 端 `public/index.html` 全局禁用 `img/video` 的 `-webkit-touch-callout` 与 `-webkit-user-select`，避免 iOS 长按触发原生选字/图片预览导致自定义菜单出不来；复制走 `expo-clipboard`，文本转发跳 ChatList 选择目标后 `sendMessage` 再 `replace` 跳 ChatView，文件转发通过 `forwardFile` 路由参数走 `sendFileMessage`，删除仅本地删除（PDS 密文不变）
 - **消息提示音**: `playMessageSound()`（`src/utils/sound.ts`）播放「嘀嘀嘀」3 声 880Hz；Web 用 Web Audio API（`AudioContext` + `decodeAudioData` 解码运行时生成的 WAV buffer），Native 用 `expo-av` 播放运行时生成的 WAV（写入 `expo-file-system` 临时文件，首次生成后缓存）；`unlockWebAudio()` 在 ChatListScreen 会话行 `onTap` 首次手势时播放 1-sample 静音 buffer 解锁（iOS Safari 唯一可靠方式）；`handleIncomingMessage` 对 `kind: 'text'` 和 `kind: 'group_invite'` 消息触发，`kind: 'group_system'` 和 `type: 'reaction'` 不触发；`activeConversationRef`（ref，不触发重渲染）追踪当前 ChatView 会话 ID 决定是否播放，`soundEnabled`（state）控制全局开关
 - **身份备份**: `backup.ts` 用 PBKDF2-SHA256(100k iter)+AES-256-GCM 加密 FullBackupData（身份密钥+MLS会话+KeyPackage池+群聊元数据+屏蔽列表），存 PDS `dme.backup.identity` record（rkey=self）。Settings 页设密码备份，Setup 页检测到 DID 有 key 但本地不匹配时提供恢复入口
 - **did:web 支持**: did:web 用户无法 PLC 操作，Setup 页 `web_instructions` step 提供 did.json 全文（DME 新增部分绿色高亮）供用户手动更新后点「检测」验证
@@ -144,7 +144,8 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **文件消息 reactions**: `FileMessageBubble` 支持 `reactions`/`onReactionPress`/`onOpenPicker`，和文本消息一样的 emoji 反应交互
 - **视频预览**: 视频消息用 `expo-video` 播放，用 `expo-video-thumbnails`（native）或隐藏 `<video>`+`<canvas>`（web）生成首帧缩略图；`sendFileMessage`/`downloadFile`/`retryUploadFileMessage` 在本地文件就绪后为视频生成 `thumbnailPath`
   - 全屏播放器用 `expo-video` 的 `VideoView` + `useVideoPlayer`
-  - 自动播放需 `player.muted = true`；iOS 上在 `statusChange` 监听到 `readyToPlay` 时再调一次 `player.play()`，解决首次进入未自动播放问题
+  - Native 自动播放需 `player.muted = true`；iOS 上在 `statusChange` 监听到 `readyToPlay` 时再调一次 `player.play()`，解决首次进入未自动播放问题
+  - Web/PWA 端绕过 `expo-video`，直接渲染原生 `<video muted playsInline autoplay controls>`，解决 iOS WebClip 进入后需二次点击的问题
   - web 缩略图生成需把隐藏 `<video>` 插入 DOM（`opacity:0` + 移出可视区 + 640x480），并显式 `video.load()`；不能依赖 detached video 的 `loadedmetadata`
   - 浏览器不支持的编码会有 duration 但 `videoWidth/videoHeight=0`，应回退提示下载，不转码
   - `expo-sharing` 无 web 支持，native 分享用 `react-native` 的 `Share`

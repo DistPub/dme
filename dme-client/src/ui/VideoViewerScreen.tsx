@@ -2,7 +2,7 @@
  * ui/VideoViewerScreen.tsx - Full-screen video viewer with system controls.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -53,6 +53,52 @@ function VideoPlayback({ uri, onError }: VideoPlaybackProps): React.JSX.Element 
       style={styles.video}
     />
   );
+}
+
+function WebVideoPlayback({ uri, onError }: VideoPlaybackProps): React.JSX.Element {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    let cancelled = false;
+    video.muted = true;
+    video.playsInline = true;
+    video.controls = true;
+    video.src = uri;
+    video.load();
+
+    const handleError = (): void => {
+      if (cancelled) return;
+      onError();
+    };
+
+    video.addEventListener('error', handleError);
+
+    const playPromise = video.play();
+    if (playPromise) {
+      playPromise.catch((err: unknown) => {
+        console.warn('web video autoplay failed:', err instanceof Error ? err.message : String(err));
+      });
+    }
+
+    return () => {
+      cancelled = true;
+      video.removeEventListener('error', handleError);
+      video.pause();
+      video.src = '';
+      video.load();
+    };
+  }, [uri, onError]);
+
+  return React.createElement('video', {
+    ref: videoRef,
+    style: { width: '100%', height: '100%', objectFit: 'contain' },
+    muted: true,
+    playsInline: true,
+    autoPlay: true,
+    controls: true,
+  }) as React.JSX.Element;
 }
 
 export function VideoViewerScreen(): React.JSX.Element {
@@ -177,6 +223,8 @@ export function VideoViewerScreen(): React.JSX.Element {
             </Text>
             <Button label={t('videoviewer.download')} onPress={handleDownload} variant="primary" style={styles.downloadButton} />
           </View>
+        ) : Platform.OS === 'web' ? (
+          <WebVideoPlayback uri={resolvedUri} onError={handleError} />
         ) : (
           <VideoPlayback uri={resolvedUri} onError={handleError} />
         )}

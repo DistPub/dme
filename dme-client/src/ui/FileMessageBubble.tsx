@@ -247,6 +247,8 @@ export function FileMessageBubble({
         <View style={styles.audioCard}>
           <TouchableOpacity
             onPress={canPlay ? handleAudioPress : undefined}
+            onLongPress={onShowActionMenu ? showActionMenu : undefined}
+            delayLongPress={300}
             disabled={playDisabled}
             activeOpacity={playDisabled ? 1 : 0.7}
           >
@@ -280,7 +282,12 @@ export function FileMessageBubble({
 
     if (downloadStatus === 'ready' && resolvedUri && isImage) {
       return (
-        <Pressable onPress={onImagePress} disabled={!onImagePress}>
+        <Pressable
+          onPress={onImagePress}
+          onLongPress={onShowActionMenu ? showActionMenu : undefined}
+          delayLongPress={300}
+          disabled={!onImagePress}
+        >
           <Image
             source={{ uri: resolvedUri }}
             style={styles.imagePreview}
@@ -293,7 +300,12 @@ export function FileMessageBubble({
     if (downloadStatus === 'ready' && isVideo && onVideoPress) {
       if (thumbUri) {
         return (
-          <Pressable onPress={onVideoPress} style={styles.videoPreviewWrap}>
+          <Pressable
+            onPress={onVideoPress}
+            onLongPress={onShowActionMenu ? showActionMenu : undefined}
+            delayLongPress={300}
+            style={styles.videoPreviewWrap}
+          >
             <Image
               source={{ uri: thumbUri }}
               style={styles.imagePreview}
@@ -306,7 +318,13 @@ export function FileMessageBubble({
         );
       }
       return (
-        <TouchableOpacity onPress={onVideoPress} style={styles.fileCard} activeOpacity={0.7}>
+        <TouchableOpacity
+          onPress={onVideoPress}
+          onLongPress={onShowActionMenu ? showActionMenu : undefined}
+          delayLongPress={300}
+          style={styles.fileCard}
+          activeOpacity={0.7}
+        >
           <Text style={styles.fileIcon}>▶</Text>
           <View style={styles.fileInfo}>
             <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
@@ -517,6 +535,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.sm,
     maxWidth: 320,
+    userSelect: 'none',
   },
   outgoing: {
     backgroundColor: theme.colors.outgoingBubble,

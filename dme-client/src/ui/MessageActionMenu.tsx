@@ -15,6 +15,7 @@ export interface MessageActionMenuProps {
   visible: boolean;
   layout: { x: number; y: number; width: number; height: number } | null;
   isOutgoing: boolean;
+  showCopy?: boolean;
   onCopy: () => void;
   onForward: () => void;
   onDelete: () => void;
@@ -25,6 +26,7 @@ export function MessageActionMenu({
   visible,
   layout,
   isOutgoing,
+  showCopy = true,
   onCopy,
   onForward,
   onDelete,
@@ -70,10 +72,14 @@ export function MessageActionMenu({
           }}
           onPress={(e) => e.stopPropagation()}
         >
-          <Pressable style={styles.item} onPress={() => handlePress(onCopy)}>
-            <Text style={styles.itemText}>{t('menu.copy')}</Text>
-          </Pressable>
-          <View style={styles.divider} />
+          {showCopy ? (
+            <>
+              <Pressable style={styles.item} onPress={() => handlePress(onCopy)}>
+                <Text style={styles.itemText}>{t('menu.copy')}</Text>
+              </Pressable>
+              <View style={styles.divider} />
+            </>
+          ) : null}
           <Pressable style={styles.item} onPress={() => handlePress(onForward)}>
             <Text style={styles.itemText}>{t('menu.forward')}</Text>
           </Pressable>

@@ -126,6 +126,7 @@ export function ChatListScreen(): React.JSX.Element {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<ChatListRouteProp>();
   const forwardText = route.params?.forwardText;
+  const forwardFile = route.params?.forwardFile;
 
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -393,6 +394,20 @@ const resolveProfiles = useCallback(async (
         } catch (err) {
           console.error('Forward sendMessage failed:', err);
         }
+      } else if (forwardFile) {
+        try {
+          await app.sendFileMessage(
+            groupId,
+            forwardFile.localPath,
+            forwardFile.fileName,
+            forwardFile.mimeType,
+            forwardFile.fileSize,
+          );
+        } catch (err) {
+          console.error('Forward sendFileMessage failed:', err);
+        }
+      }
+      if (forwardText || forwardFile) {
         if (isGroup) {
           navigation.replace('ChatView', { groupId });
         } else {
@@ -406,7 +421,7 @@ const resolveProfiles = useCallback(async (
         navigation.navigate('ChatView', { friendDid: groupId });
       }
     },
-    [navigation, forwardText, app],
+    [navigation, forwardText, forwardFile, app],
   );
 
   const navigateToQrDisplay = useCallback((): void => {
@@ -606,7 +621,7 @@ const resolveProfiles = useCallback(async (
       <ScreenBackground />
 
       <View style={styles.topBar}>
-        {forwardText ? (
+        {forwardText || forwardFile ? (
           <>
             <Button
               label={t('common.cancel')}

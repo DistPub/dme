@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
+  KeyboardAvoidingView,
   Platform,
   StyleSheet,
   Text,
@@ -405,6 +406,21 @@ export function ChatViewScreen(): React.JSX.Element {
   }, []);
 
   const handleForward = useCallback((msg: StoredMessage): void => {
+    if (msg.kind === 'file') {
+      if (msg.fileMeta?.localPath) {
+        navigation.navigate('ChatList', {
+          forwardFile: {
+            localPath: msg.fileMeta.localPath,
+            fileName: msg.fileMeta.fileName,
+            mimeType: msg.fileMeta.mimeType,
+            fileSize: msg.fileMeta.fileSize,
+          },
+        });
+      } else {
+        navigation.navigate('ChatList');
+      }
+      return;
+    }
     navigation.navigate('ChatList', { forwardText: msg.plaintext });
   }, [navigation]);
 
@@ -551,6 +567,7 @@ export function ChatViewScreen(): React.JSX.Element {
             } : undefined}
             onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
             onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
+            onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
           />
         );
       }
@@ -654,58 +671,63 @@ export function ChatViewScreen(): React.JSX.Element {
         )}
       </View>
 
-      <FlatList
-        ref={listRef}
-        style={styles.list}
-        contentContainerStyle={styles.listContent}
-        data={messages}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
-        inverted={true}
-        onEndReached={loadOlderMessages}
-        onEndReachedThreshold={0.3}
-        keyboardShouldPersistTaps="handled"
-      />
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoider}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <FlatList
+          ref={listRef}
+          style={styles.list}
+          contentContainerStyle={styles.listContent}
+          data={messages}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          inverted={true}
+          onEndReached={loadOlderMessages}
+          onEndReachedThreshold={0.3}
+          keyboardShouldPersistTaps="handled"
+        />
 
-      {dissolved || removed || left ? (
-        <View style={styles.inputBar}>
-          <Text style={styles.dissolvedText}>
-            {dissolved ? t('chatview.dissolved') : removed ? t('chatview.removed') : t('chatview.left')}
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.inputBar}>
-          <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
-            <Text style={styles.attachBtnText}>📄</Text>
-          </TouchableOpacity>
-          <TextInput
-            ref={inputRef}
-            style={[styles.input, { height: inputHeight }]}
-            value={text}
-            onChangeText={setText}
-            placeholder={t('chatview.typeMessage')}
-            placeholderTextColor={theme.colors.placeholder}
-            autoCapitalize="none"
-            autoCorrect={false}
-            multiline
-            onKeyPress={handleKeyPress}
-            blurOnSubmit={false}
-            onContentSizeChange={(e) => {
-              const h = e.nativeEvent.contentSize.height;
-              setInputHeight(Math.min(Math.max(h, 44), 240));
-            }}
-          />
-          <View ref={sendBtnRef} style={styles.sendBtnWrap}>
-            <Button
-              label={sending ? '…' : t('chatview.send')}
-              onPress={onSend}
-              onPressIn={keepInputFocused}
-              variant="primary"
-              style={styles.sendBtn}
-            />
+        {dissolved || removed || left ? (
+          <View style={styles.inputBar}>
+            <Text style={styles.dissolvedText}>
+              {dissolved ? t('chatview.dissolved') : removed ? t('chatview.removed') : t('chatview.left')}
+            </Text>
           </View>
-        </View>
-      )}
+        ) : (
+          <View style={styles.inputBar}>
+            <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
+              <Text style={styles.attachBtnText}>📄</Text>
+            </TouchableOpacity>
+            <TextInput
+              ref={inputRef}
+              style={[styles.input, { height: inputHeight }]}
+              value={text}
+              onChangeText={setText}
+              placeholder={t('chatview.typeMessage')}
+              placeholderTextColor={theme.colors.placeholder}
+              autoCapitalize="none"
+              autoCorrect={false}
+              multiline
+              onKeyPress={handleKeyPress}
+              blurOnSubmit={false}
+              onContentSizeChange={(e) => {
+                const h = e.nativeEvent.contentSize.height;
+                setInputHeight(Math.min(Math.max(h, 44), 240));
+              }}
+            />
+            <View ref={sendBtnRef} style={styles.sendBtnWrap}>
+              <Button
+                label={sending ? '…' : t('chatview.send')}
+                onPress={onSend}
+                onPressIn={keepInputFocused}
+                variant="primary"
+                style={styles.sendBtn}
+              />
+            </View>
+          </View>
+        )}
+      </KeyboardAvoidingView>
       <EmojiPicker
         visible={pickerTarget !== null}
         layout={pickerLayout}
@@ -716,6 +738,7 @@ export function ChatViewScreen(): React.JSX.Element {
         visible={actionMenuTarget !== null}
         layout={actionMenuLayout}
         isOutgoing={actionMenuTarget ? actionMenuTarget.fromDid === session?.did : false}
+        showCopy={actionMenuTarget ? actionMenuTarget.kind !== 'file' : true}
         onCopy={() => { if (actionMenuTarget) void handleCopy(actionMenuTarget); }}
         onForward={() => { if (actionMenuTarget) void handleForward(actionMenuTarget); }}
         onDelete={() => { if (actionMenuTarget) void handleDeleteMessage(actionMenuTarget); }}
@@ -729,6 +752,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
+  },
+  keyboardAvoider: {
+    flex: 1,
   },
   header: {
     flexDirection: 'row',

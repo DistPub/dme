@@ -25,6 +25,7 @@ interface FileMessageBubbleProps {
   onSave?: () => void;
   onReactionPress?: (emoji: string) => void;
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
+  onShowActionMenu?: (layout: { x: number; y: number; width: number; height: number }) => void;
 }
 
 function formatFileSize(
@@ -52,6 +53,7 @@ export function FileMessageBubble({
   onVideoPress,
   onReactionPress,
   onOpenPicker,
+  onShowActionMenu,
   onSave,
 }: FileMessageBubbleProps): React.JSX.Element {
   const { t } = useI18n();
@@ -62,6 +64,7 @@ export function FileMessageBubble({
   const isVideo = mimeType.startsWith('video/');
   const isAudio = mimeType.startsWith('audio/');
   const emojiBtnRef = useRef<View>(null);
+  const bubbleRef = useRef<View>(null);
   const [avatarError, setAvatarError] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -70,6 +73,22 @@ export function FileMessageBubble({
   useEffect(() => {
     setAvatarError(false);
   }, [senderAvatarUrl]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !onShowActionMenu) return;
+    const node = bubbleRef.current as unknown as HTMLElement | null;
+    if (!node) return;
+
+    const handleContextMenu = (e: MouseEvent): void => {
+      e.preventDefault();
+      bubbleRef.current?.measureInWindow((x, y, width, height) => {
+        onShowActionMenu({ x, y, width, height });
+      });
+    };
+
+    node.addEventListener('contextmenu', handleContextMenu);
+    return () => node.removeEventListener('contextmenu', handleContextMenu);
+  }, [onShowActionMenu]);
 
   useEffect(() => {
     return () => {
@@ -161,6 +180,12 @@ export function FileMessageBubble({
       onOpenPicker?.({ x, y, width, height });
     });
   }, [onOpenPicker]);
+
+  const showActionMenu = useCallback(() => {
+    bubbleRef.current?.measureInWindow((x, y, width, height) => {
+      onShowActionMenu?.({ x, y, width, height });
+    });
+  }, [onShowActionMenu]);
 
   const effectiveAvatarError = senderAvatarError || avatarError;
 
@@ -375,12 +400,17 @@ export function FileMessageBubble({
               </Pressable>
             </View>
           )}
-          <View style={[
-            styles.container,
-            isOutgoing ? styles.outgoing : styles.incoming,
-          ]}>
+          <Pressable
+            ref={bubbleRef}
+            onLongPress={onShowActionMenu ? showActionMenu : undefined}
+            delayLongPress={300}
+            style={[
+              styles.container,
+              isOutgoing ? styles.outgoing : styles.incoming,
+            ]}
+          >
             {renderFileContent()}
-          </View>
+          </Pressable>
           {!isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
               <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>

@@ -38,6 +38,8 @@ function VideoPlayback({ uri, onError }: VideoPlaybackProps): React.JSX.Element 
     const subscription = player.addListener('statusChange', ({ status }) => {
       if (status === 'error') {
         onError();
+      } else if (status === 'readyToPlay') {
+        player.play();
       }
     });
     return () => subscription.remove();

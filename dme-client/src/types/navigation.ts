@@ -3,7 +3,17 @@
 export type RootStackParamList = {
   Login: undefined;
   Setup: undefined;
-  ChatList: { forwardText?: string } | undefined;
+  ChatList:
+    | {
+        forwardText?: string;
+        forwardFile?: {
+          localPath: string;
+          fileName: string;
+          mimeType: string;
+          fileSize: number;
+        };
+      }
+    | undefined;
   ChatView: { friendDid: string } | { groupId: string };
   QrDisplay: undefined;
   QrScan: undefined;

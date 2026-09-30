@@ -5,7 +5,7 @@
  * Positioning logic mirrors EmojiPicker: above-first, clamp to screen bounds.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from './theme';
@@ -35,6 +35,15 @@ export function MessageActionMenu({
   const { t } = useI18n();
   const [panelSize, setPanelSize] = useState({ width: 0, height: 0 });
   const screen = Dimensions.get('window');
+
+  useEffect(() => {
+    if (!visible) return;
+    // iOS Web: dismiss any active text selection when the menu appears so the
+    // system callout menu does not pop over the custom action menu.
+    if (typeof window !== 'undefined' && window.getSelection) {
+      window.getSelection()?.removeAllRanges();
+    }
+  }, [visible]);
 
   if (!visible || !layout) {
     return <></>;
@@ -108,6 +117,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
+    // Prevent iOS Web from selecting the menu labels and showing the system callout.
+    userSelect: 'none',
   },
   item: {
     paddingHorizontal: theme.spacing.md,
@@ -116,6 +127,7 @@ const styles = StyleSheet.create({
   itemText: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.body,
+    userSelect: 'none',
   },
   deleteText: {
     color: theme.colors.error,

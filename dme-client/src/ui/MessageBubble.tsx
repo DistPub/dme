@@ -57,6 +57,11 @@ export function MessageBubble({
 
     const handleContextMenu = (e: MouseEvent): void => {
       e.preventDefault();
+      // iOS Web: long-press may start a text selection before contextmenu fires.
+      // Clear any selection so the system callout menu does not appear over our menu.
+      if (typeof window !== 'undefined' && window.getSelection) {
+        window.getSelection()?.removeAllRanges();
+      }
       bubbleRef.current?.measureInWindow((x, y, width, height) => {
         onShowActionMenu({ x, y, width, height });
       });
@@ -83,11 +88,18 @@ export function MessageBubble({
     });
   }, [onOpenPicker]);
 
+  const clearSelection = useCallback((): void => {
+    if (typeof window !== 'undefined' && window.getSelection) {
+      window.getSelection()?.removeAllRanges();
+    }
+  }, []);
+
   const showActionMenu = useCallback(() => {
+    clearSelection();
     bubbleRef.current?.measureInWindow((x, y, width, height) => {
       onShowActionMenu?.({ x, y, width, height });
     });
-  }, [onShowActionMenu]);
+  }, [onShowActionMenu, clearSelection]);
 
   const effectiveAvatarError = senderAvatarError || avatarError;
 
@@ -135,6 +147,7 @@ export function MessageBubble({
         <Pressable
           ref={bubbleRef}
           onLongPress={onShowActionMenu ? showActionMenu : undefined}
+          onTouchStart={onShowActionMenu ? clearSelection : undefined}
           delayLongPress={300}
           style={[
             styles.bubble,

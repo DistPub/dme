@@ -598,8 +598,8 @@ export function ChatViewScreen(): React.JSX.Element {
   );
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
+    <View style={[styles.container, Platform.OS === 'web' && styles.containerWeb]}>
+      <View style={[styles.header, Platform.OS === 'web' && styles.headerWeb]}>
         <Button
           label={t('common.back')}
           onPress={() => {
@@ -753,6 +753,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background,
   },
+  containerWeb: {
+    paddingTop: 56,
+  },
   keyboardAvoider: {
     flex: 1,
   },
@@ -762,6 +765,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.md,
     paddingTop: theme.spacing.sm,
     height: 56,
+  },
+  headerWeb: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    backgroundColor: theme.colors.background,
   },
   backBtn: {
     width: 60,

@@ -171,10 +171,20 @@ interface AppState {
   soundEnabled: boolean;
   /** 上次恢复会话时是否因 token 失效而失败。 */
   sessionExpired: boolean;
+  loginStep: 'idle' | 'loggingIn' | 'awaiting2FA';
+  loginFormSnapshot: { identifier: string; password: string; pdsUrl: string } | null;
+}
+
+export interface LoginParams {
+  identifier: string;
+  password: string;
+  pdsUrl?: string;
+  authFactorToken?: string;
 }
 
 interface AppActions {
-  login: (identifier: string, password: string, pdsUrl?: string) => Promise<void>;
+  login: (params: LoginParams) => Promise<void>;
+  cancel2FA: () => void;
   logout: () => Promise<void>;
   /**
    * 仅清除会话（吊销 token + 删除本地持久化 session），**保留**身份密钥与
@@ -319,6 +329,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [soundEnabled, setSoundEnabledState] = useState(true);
   /** 恢复会话时发现 token 已失效（用于 LoginScreen 提示）。 */
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [loginStep, setLoginStep] = useState<'idle' | 'loggingIn' | 'awaiting2FA'>('idle');
+  const [loginFormSnapshot, setLoginFormSnapshot] = useState<{ identifier: string; password: string; pdsUrl: string } | null>(null);
 
   /**
    * ⚠️ 初始值**故意抛错**而不是空函数。
@@ -529,7 +541,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   // -------------------------------------------------------------------------
 
   const login = useCallback(
-    async (identifier: string, password: string, pdsUrl?: string): Promise<void> => {
+    async (params: LoginParams): Promise<void> => {
+      const { identifier, password, pdsUrl, authFactorToken } = params;
       setLoading(true);
       setError(null);
 
@@ -539,7 +552,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         const newSession = new DmeSession();
         const tempStorage = new DmeStorage(userDidPlaceholder);
         newSession.setStorage(tempStorage);
-        await newSession.login(identifier, password, tempStorage, resolvedPds);
+        await newSession.login(identifier, password, tempStorage, resolvedPds, authFactorToken);
 
         const userDid = newSession.did;
         const correctStorage = new DmeStorage(userDid);
@@ -560,15 +573,32 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         }
 
         await bootstrapForDid(userDid, newSession);
-      } catch (err) {
+        setLoginStep('idle');
+        setLoginFormSnapshot(null);
+    } catch (err) {
+      const newSession = new DmeSession();
+      if (newSession.isAuthFactorTokenRequired(err) && !authFactorToken) {
+        setLoginStep('awaiting2FA');
+        setLoginFormSnapshot({ identifier, password, pdsUrl: pdsUrl?.trim() || PDS_URL });
+        setError(t(language, 'login.2faHint'));
+      } else {
+        setLoginStep('idle');
+        setLoginFormSnapshot(null);
         setError(err instanceof Error ? err.message : t(language, 'login.failed'));
-        throw err;
-      } finally {
-        setLoading(false);
       }
-    },
-    [language, bootstrapForDid],
-  );
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  },
+  [language, bootstrapForDid],
+);
+
+  const cancel2FA = useCallback((): void => {
+    setLoginStep('idle');
+    setLoginFormSnapshot(null);
+    setError(null);
+  }, []);
 
   const logout = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -602,6 +632,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setServerUrlState(DME_SERVER_URL);
       setGatewayUrlState(DEFAULT_DME_GATEWAY_URL);
       setBlockList([]);
+      setLoginStep('idle');
+      setLoginFormSnapshot(null);
       setLoading(false);
       setChatListVersion((v) => v + 1);
     }
@@ -627,6 +659,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       pollerRef.current = null;
       setError(null);
       setSessionExpired(false);
+      setLoginStep('idle');
+      setLoginFormSnapshot(null);
     }
   }, [session, storage, poller]);
 
@@ -2592,7 +2626,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       blockList,
       soundEnabled,
       sessionExpired,
+      loginStep,
+      loginFormSnapshot,
       login,
+      cancel2FA,
       logout,
       clearSession,
       restoreSession,
@@ -2659,7 +2696,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       blockList,
       soundEnabled,
       sessionExpired,
+      loginStep,
+      loginFormSnapshot,
       login,
+      cancel2FA,
       logout,
       clearSession,
       restoreSession,

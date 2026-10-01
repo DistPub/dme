@@ -67,13 +67,14 @@ export class DmeSession {
     password: string,
     storage?: DmeStorage,
     pdsUrl: string = PDS_URL,
+    authFactorToken?: string,
   ): Promise<void> {
     this.storageRef = storage ?? null;
     this.pdsUrl = pdsUrl.replace(/\/+$/, '');
 
     const res = await xrpcPostJson<CreateSessionResponse>(
       joinUrl(this.pdsUrl, 'xrpc/com.atproto.server.createSession'),
-      { identifier, password },
+      { identifier, password, authFactorToken },
     );
 
     this.sessionData = {
@@ -295,6 +296,17 @@ export class DmeSession {
   setPdsUrl(url: string): void {
     this.pdsUrl = url.replace(/\/+$/, '');
     if (this.sessionData) this.sessionData.pdsUrl = this.pdsUrl;
+  }
+
+  /**
+   * 判断服务端是否要求二步验证验证码。
+   *
+   * 开启邮箱 2FA 时，PDS 返回的错误体形如
+   * `{ error: 'AuthFactorTokenRequired', message: '...' }`。
+   */
+  isAuthFactorTokenRequired(err: unknown): boolean {
+    if (!(err instanceof HttpError)) return false;
+    return /AuthFactorTokenRequired/i.test(err.body);
   }
 
   private async persist(): Promise<void> {

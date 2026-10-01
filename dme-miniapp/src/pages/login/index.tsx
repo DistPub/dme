@@ -26,10 +26,10 @@ import logoUrl from '../../assets/images/logo.png';
 import './index.scss';
 
 /**
- * 允许的 PDS 域名白名单（留空表示只允许 config.PDS_URL）。
- * 小程序 request 合法域名在微信后台配置，此处做二次防线。
+ * ⚠️ 小程序前端不再做 PDS 域名白名单校验 —— 合法域名校验是微信后台的功能。
+ *    微信公众平台 → 开发管理 → 开发设置 → 服务器域名 里配的域名才允许 request，
+ *    前端写死白名单只会给用户制造"我输对了但被前端拦下"的体验问题（2026-10-01 真机实测）。
  */
-const PDS_ALLOWLIST: readonly string[] = [PDS_URL];
 
 /**
  * 上次登录 handle 的本地存储 key。
@@ -45,19 +45,24 @@ export default function LoginPage(): React.JSX.Element {
   const { t } = useI18n();
   const {
     login,
+    cancel2FA,
     restoreSession,
     loading,
     error,
     setupIdentity,
     session,
     sessionExpired,
+    loginStep,
   } = useApp();
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [pdsUrl, setPdsUrl] = useState(PDS_URL);
+  const [authFactorToken, setAuthFactorToken] = useState('');
   const [bootstrapping, setBootstrapping] = useState(true);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  const awaiting2FA = loginStep === 'awaiting2FA';
 
   useWebTitle(t('login.title'));
 
@@ -106,6 +111,11 @@ export default function LoginPage(): React.JSX.Element {
     }
   }, [sessionExpired, bootstrapping, t]);
 
+  const onBackToPassword = useCallback((): void => {
+    cancel2FA();
+    setAuthFactorToken('');
+  }, [cancel2FA]);
+
   const handleLogin = useCallback(async (): Promise<void> => {
     setLocalError(null);
 
@@ -119,15 +129,19 @@ export default function LoginPage(): React.JSX.Element {
     }
 
     const trimmedPds = pdsUrl.trim() || PDS_URL;
-    if (!PDS_ALLOWLIST.includes(trimmedPds)) {
-      setLocalError(
-        `${t('login.failed')}: PDS 必须是白名单域名（${PDS_ALLOWLIST.join(', ')}）`,
-      );
-      return;
-    }
 
     try {
-      await login(identifier.trim(), password, trimmedPds);
+      await login({
+        identifier: identifier.trim(),
+        password,
+        pdsUrl: trimmedPds,
+        authFactorToken: awaiting2FA ? authFactorToken.trim() || undefined : undefined,
+      });
+
+      if (awaiting2FA) {
+        // 2FA 验证通过，继续后续引导流程
+      }
+
       // 记住本次 handle，下次登录页自动回填
       await DmeAsyncStorage.setItem(LAST_IDENTIFIER_KEY, identifier.trim());
       // 确保身份密钥存在（首次登录会生成）
@@ -144,7 +158,7 @@ export default function LoginPage(): React.JSX.Element {
       console.error('登录失败:', err);
       setLocalError(err instanceof Error ? err.message : t('login.failed'));
     }
-  }, [identifier, password, pdsUrl, login, setupIdentity, t]);
+  }, [identifier, password, pdsUrl, authFactorToken, awaiting2FA, login, setupIdentity, t]);
 
   if (bootstrapping || loading) {
     // 品牌过渡屏（对齐 web App.tsx 恢复会话时的 LogoSpinner），
@@ -174,29 +188,31 @@ export default function LoginPage(): React.JSX.Element {
       <View className="login__field">
         <Text className="login__label">{t('login.pdsPlaceholder')}</Text>
         <Input
-          className="login__input"
+          className={`login__input ${awaiting2FA ? 'login__input--disabled' : ''}`}
           value={pdsUrl}
           placeholder={t('login.pdsPlaceholder')}
           onInput={(e) => setPdsUrl(e.detail.value)}
+          disabled={awaiting2FA}
         />
       </View>
 
       <View className="login__field">
         <Text className="login__label">{t('login.handlePlaceholder')}</Text>
         <Input
-          className="login__input"
+          className={`login__input ${awaiting2FA ? 'login__input--disabled' : ''}`}
           type="text"
           name="username"
           value={identifier}
           placeholder={t('login.handlePlaceholder')}
           onInput={(e) => setIdentifier(e.detail.value)}
+          disabled={awaiting2FA}
         />
       </View>
 
       <View className="login__field">
         <Text className="login__label">{t('login.passwordPlaceholder')}</Text>
         <Input
-          className="login__input"
+          className={`login__input ${awaiting2FA ? 'login__input--disabled' : ''}`}
           password
           name="password"
           confirmType="send"
@@ -204,14 +220,36 @@ export default function LoginPage(): React.JSX.Element {
           placeholder={t('login.passwordPlaceholder')}
           onInput={(e) => setPassword(e.detail.value)}
           onConfirm={handleLogin}
+          disabled={awaiting2FA}
         />
       </View>
+
+      {awaiting2FA ? (
+        <View className="login__field">
+          <Text className="login__label">{t('login.2faPlaceholder')}</Text>
+          {/* ⚠️ 不设 maxlength：2FA 验证码长度目前无统一标准，可能是 6 位以上 */}
+          <Input
+            className="login__input login__input--code"
+            value={authFactorToken}
+            placeholder={t('login.2faPlaceholder')}
+            onInput={(e) => setAuthFactorToken(e.detail.value)}
+            onConfirm={handleLogin}
+            focus={awaiting2FA}
+          />
+        </View>
+      ) : null}
 
       {shownError ? <Text className="login__error">{shownError}</Text> : null}
 
       <Button className="login__button" onClick={handleLogin}>
-        {loading ? t('login.loggingIn') : t('login.button')}
+        {loading ? t('login.loggingIn') : awaiting2FA ? t('login.verify') : t('login.button')}
       </Button>
+
+      {awaiting2FA ? (
+        <Button className="login__button login__button--secondary" onClick={onBackToPassword}>
+          {t('login.backToPassword')}
+        </Button>
+      ) : null}
 
       {session ? (
         <Text className="login__hint">

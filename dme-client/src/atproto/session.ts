@@ -80,11 +80,12 @@ export class DmeSession {
     password: string,
     storage?: DmeStorage,
     pdsUrl: string = PDS_URL,
+    authFactorToken?: string,
   ): Promise<void> {
     this.storageRef = storage ?? null;
     this.pdsUrl = pdsUrl;
     const session = this.createCredentialSession();
-    await session.login({ identifier, password });
+    await session.login({ identifier, password, authFactorToken });
 
     this.session = session;
     this.agentInstance = new Agent(session);
@@ -224,6 +225,19 @@ export class DmeSession {
 
   get sessionData(): AtpSessionData | null {
     return this.session?.session ?? null;
+  }
+
+  /**
+   * 判断服务端是否要求二步验证验证码。
+   *
+   * @atproto/api 的 CredentialSession 会将 PDS 返回的 XRPC 错误原样抛出，
+   * 错误对象上通常带有 `error`（字符串）或 `message` 字段。开启邮箱 2FA 时
+   * 服务端返回的错误名为 `AuthFactorTokenRequired`。
+   */
+  isAuthFactorTokenRequired(err: unknown): boolean {
+    const e = err as { error?: string; message?: string } | undefined;
+    const haystack = `${e?.error ?? ''} ${e?.message ?? ''}`;
+    return /AuthFactorTokenRequired/i.test(haystack);
   }
 
   get pdsUrlStr(): string {

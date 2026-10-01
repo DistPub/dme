@@ -27,7 +27,7 @@ import {
   type IdentityKeys,
 } from '../crypto/identity';
 import { PLC_DIRECTORY_URL } from '../config';
-import { HttpError, joinUrl, xrpcGetJson, xrpcPostJson } from '../platform/http';
+import { HttpError, joinUrl, xrpcGetJson, xrpcPostEmpty, xrpcPostJson } from '../platform/http';
 import type { DmeSession } from './session';
 
 /** DID_KEY_PREFIX prepended to multibase values from PLC documents. */
@@ -183,12 +183,18 @@ export function getDidMethod(did: string): 'plc' | 'web' | 'other' {
 // 密钥声明（写入 DID 文档）
 // ---------------------------------------------------------------------------
 
-/** 通过 PDS 请求 PLC 操作签名 token（发送到用户邮箱）。 */
+/**
+ * 通过 PDS 请求 PLC 操作签名 token（发送到用户邮箱）。
+ *
+ * ⚠️ requestPlcOperationSignature 是**无输入体** procedure：传 `{}` 会被 PDS
+ *    拒绝（`400 InvalidRequest: A request body was provided when none was
+ *    expected`，2026-10-01 真机实测，与 refreshSession/deleteSession 同坑）。
+ *    必须用 xrpcPostEmpty 完全不携带 body。
+ */
 export async function requestPlcSignature(session: DmeSession): Promise<void> {
   const token = requireToken(session);
-  await xrpcPostJson(
+  await xrpcPostEmpty(
     joinUrl(session.pdsUrlStr, 'xrpc/com.atproto.identity.requestPlcOperationSignature'),
-    {},
     { headers: { Authorization: `Bearer ${token}` } },
   );
 }

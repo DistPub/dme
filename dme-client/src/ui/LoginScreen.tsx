@@ -28,24 +28,37 @@ export function LoginScreen(): React.JSX.Element {
   const [pdsUrl, setPdsUrl] = useState(() => readWebQuery('pds') ?? PDS_URL);
   const [handle, setHandle] = useState(() => readWebQuery('handle') ?? '');
   const [password, setPassword] = useState(() => readWebQuery('password') ?? '');
+  const [authFactorToken, setAuthFactorToken] = useState('');
   const autoLogin = readWebQuery('auto') === '1';
   const autoLoginRan = useRef(false);
+
+  const awaiting2FA = app.loginStep === 'awaiting2FA';
 
   const onLogin = useCallback(async (): Promise<void> => {
     if (!handle.trim() || !password.trim()) return;
     try {
-      await app.login(handle.trim(), password.trim(), pdsUrl.trim() || PDS_URL);
+      await app.login({
+        identifier: handle.trim(),
+        password: password.trim(),
+        pdsUrl: pdsUrl.trim() || PDS_URL,
+        authFactorToken: awaiting2FA ? authFactorToken.trim() || undefined : undefined,
+      });
     } catch (err) {
       console.error('Login failed:', err);
     }
-  }, [app, handle, password, pdsUrl]);
+  }, [app, handle, password, pdsUrl, authFactorToken, awaiting2FA]);
+
+  const onBackToPassword = useCallback((): void => {
+    app.cancel2FA();
+    setAuthFactorToken('');
+  }, [app]);
 
   useEffect(() => {
-    if (autoLogin && !autoLoginRan.current && handle && password) {
+    if (autoLogin && !autoLoginRan.current && handle && password && !awaiting2FA) {
       autoLoginRan.current = true;
       onLogin();
     }
-  }, [autoLogin, handle, password, onLogin]);
+  }, [autoLogin, handle, password, onLogin, awaiting2FA]);
 
   return (
     <View style={styles.container}>
@@ -68,6 +81,7 @@ export function LoginScreen(): React.JSX.Element {
           placeholderTextColor={theme.colors.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
+          editable={!awaiting2FA}
         />
 
         <TextInput
@@ -78,6 +92,7 @@ export function LoginScreen(): React.JSX.Element {
           placeholderTextColor={theme.colors.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
+          editable={!awaiting2FA}
         />
 
         <TextInput
@@ -91,14 +106,46 @@ export function LoginScreen(): React.JSX.Element {
           autoCorrect={false}
           onSubmitEditing={onLogin}
           returnKeyType="send"
+          editable={!awaiting2FA}
         />
 
+        {awaiting2FA ? (
+          // ⚠️ 不设 maxLength：2FA 验证码长度目前无统一标准，可能是 6 位以上
+          <TextInput
+            style={[styles.input, styles.codeInput]}
+            value={authFactorToken}
+            onChangeText={setAuthFactorToken}
+            placeholder={t('login.2faPlaceholder')}
+            placeholderTextColor={theme.colors.placeholder}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus
+            onSubmitEditing={onLogin}
+            returnKeyType="send"
+          />
+        ) : null}
+
         <Button
-          label={app.loading ? t('login.loggingIn') : t('login.button')}
+          label={
+            app.loading
+              ? t('login.loggingIn')
+              : awaiting2FA
+                ? t('login.verify')
+                : t('login.button')
+          }
           onPress={onLogin}
           variant="primary"
           style={styles.button}
         />
+
+        {awaiting2FA ? (
+          <Button
+            label={t('login.backToPassword')}
+            onPress={onBackToPassword}
+            variant="secondary"
+            style={styles.secondaryButton}
+          />
+        ) : null}
 
         {app.error ? (
           <Text style={styles.error}>{app.error}</Text>
@@ -142,7 +189,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.md,
     marginBottom: theme.spacing.md,
   },
+  codeInput: {
+    borderColor: theme.colors.accent,
+    textAlign: 'center',
+    letterSpacing: 8,
+  },
   button: {
+    width: '100%',
+    height: 48,
+    marginTop: theme.spacing.sm,
+  },
+  secondaryButton: {
     width: '100%',
     height: 48,
     marginTop: theme.spacing.sm,

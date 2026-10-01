@@ -36,6 +36,11 @@ export const zh: Record<string, string> = {
   'login.loggingIn': '登录中...',
   'login.failed': '登录失败',
   'login.restoreFailed': '会话恢复失败',
+  'login.2faHint': '该账号已开启二步验证，请输入邮箱验证码',
+  'login.2faPlaceholder': '邮箱验证码',
+  'login.verify': '验证并登录',
+  'login.backToPassword': '返回修改密码',
+  'login.2faInvalid': '验证码无效或已过期，请重试',
 
   // setup
   'setup.title': '设置身份',
@@ -292,6 +297,11 @@ export const en: Record<string, string> = {
   'login.loggingIn': 'Logging in...',
   'login.failed': 'Login failed',
   'login.restoreFailed': 'Session restore failed',
+  'login.2faHint': 'Two-factor authentication is enabled. Enter the email code.',
+  'login.2faPlaceholder': 'Email code',
+  'login.verify': 'Verify & Sign in',
+  'login.backToPassword': 'Back to password',
+  'login.2faInvalid': 'Invalid or expired code. Please try again.',
 
   // setup
   'setup.title': 'Setup Identity',

@@ -255,10 +255,20 @@ interface AppState {
   soundEnabled: boolean;
   embedMismatch: { localDid: string | null; tokenDid: string } | null;
   embedTokenApplied: boolean;
+  loginStep: 'idle' | 'loggingIn' | 'awaiting2FA';
+  loginFormSnapshot: { identifier: string; password: string; pdsUrl: string } | null;
+}
+
+export interface LoginParams {
+  identifier: string;
+  password: string;
+  pdsUrl?: string;
+  authFactorToken?: string;
 }
 
 interface AppActions {
-  login: (identifier: string, password: string, pdsUrl?: string) => Promise<void>;
+  login: (params: LoginParams) => Promise<void>;
+  cancel2FA: () => void;
   logout: () => Promise<void>;
   restoreSession: () => Promise<boolean>;
   setupIdentity: () => Promise<void>;
@@ -333,6 +343,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [soundEnabled, setSoundEnabledState] = useState(true);
   const [embedMismatch, setEmbedMismatch] = useState<{ localDid: string | null; tokenDid: string } | null>(null);
   const [embedTokenApplied, setEmbedTokenApplied] = useState(false);
+  const [loginStep, setLoginStep] = useState<'idle' | 'loggingIn' | 'awaiting2FA'>('idle');
+  const [loginFormSnapshot, setLoginFormSnapshot] = useState<{ identifier: string; password: string; pdsUrl: string } | null>(null);
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
@@ -510,7 +522,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   // Login / Logout / Restore
   // -------------------------------------------------------------------------
 
-  const login = useCallback(async (identifier: string, password: string, pdsUrl?: string): Promise<void> => {
+  const login = useCallback(async (params: LoginParams): Promise<void> => {
+    const { identifier, password, pdsUrl, authFactorToken } = params;
     setLoading(true);
     setError(null);
 
@@ -520,7 +533,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const newSession = new DmeSession();
       const tempStorage = new DmeStorage(userDidPlaceholder);
       newSession.setStorage(tempStorage);
-      await newSession.login(identifier, password, tempStorage, resolvedPds);
+      await newSession.login(identifier, password, tempStorage, resolvedPds, authFactorToken);
 
       const userDid = newSession.did;
       const correctStorage = new DmeStorage(userDid);
@@ -612,13 +625,30 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroupInfos(storedGroupInfos);
       setBlockList(await correctStorage.getBlockList());
       setSoundEnabledState(await correctStorage.getSoundEnabled());
+      setLoginStep('idle');
+      setLoginFormSnapshot(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t(language, 'login.failed'));
+      const newSession = new DmeSession();
+      if (newSession.isAuthFactorTokenRequired(err) && !authFactorToken) {
+        setLoginStep('awaiting2FA');
+        setLoginFormSnapshot({ identifier, password, pdsUrl: pdsUrl?.trim() || PDS_URL });
+        setError(t(language, 'login.2faHint'));
+      } else {
+        setLoginStep('idle');
+        setLoginFormSnapshot(null);
+        setError(err instanceof Error ? err.message : t(language, 'login.failed'));
+      }
       throw err;
     } finally {
       setLoading(false);
     }
   }, [language]);
+
+  const cancel2FA = useCallback((): void => {
+    setLoginStep('idle');
+    setLoginFormSnapshot(null);
+    setError(null);
+  }, []);
 
   const logout = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -649,6 +679,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setAppViewProxyState(DEFAULT_APPVIEW_PROXY);
       setServerUrlState(DME_SERVER_URL);
       setGatewayUrlState(DEFAULT_DME_GATEWAY_URL);
+      setLoginStep('idle');
+      setLoginFormSnapshot(null);
       setLoading(false);
     }
   }, [session, storage, poller]);
@@ -2715,7 +2747,10 @@ blockList,
       soundEnabled,
       embedMismatch,
       embedTokenApplied,
+      loginStep,
+      loginFormSnapshot,
       login,
+      cancel2FA,
       logout,
       restoreSession,
       setupIdentity,
@@ -2760,8 +2795,8 @@ blockList,
       session, storage, identityKeys, poller, pds, loading, error,
       groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy, serverUrl, gatewayUrl,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
-      embedMismatch, embedTokenApplied,
-      login, logout, restoreSession, setupIdentity, declareKeysAction,
+      embedMismatch, embedTokenApplied, loginStep, loginFormSnapshot,
+      login, cancel2FA, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, sendFileMessage, retryUploadFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, trackInvitePendingWelcome, deletePendingWelcome, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy, setServerUrl, setGatewayUrl,

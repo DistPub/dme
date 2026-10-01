@@ -56,6 +56,17 @@
     color: #111111;
     background: #f5f5f7;
     border-radius: 16px;
+
+    &--code {
+      text-align: center;
+      letter-spacing: 16px;
+      border: 2px solid #111111;
+    }
+
+    &--disabled {
+      color: #999999;
+      background: #eeeeee;
+    }
   }
 
   &__error {
@@ -73,6 +84,11 @@
     color: #ffffff;
     background: #111111;
     border-radius: 16px;
+
+    &--secondary {
+      color: #111111;
+      background: #f5f5f7;
+    }
   }
 
   &__hint {

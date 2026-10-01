@@ -111,6 +111,18 @@ PDS 对过期 accessJwt 返回 **HTTP 400**（不是 401），响应体 `{"error
 - **资料获取必须经 PDS `appViewGet()`**（`{PDS}/xrpc/app.bsky.actor.*` + `atproto-proxy`），**禁止直连 `public.api.bsky.app`**（省白名单名额，dme-client 也从未用过）。
 - **禁止请求 `https://{handle}/.well-known/atproto-did`**：handle 用户可控，域名不可枚举。
 - PDS URL 解析用 `atproto/did.ts` 的 `resolvePdsUrl`；profile 缓存走 `atproto/profile-cache.ts`（24h TTL + 持久化 + 去重）。
+- **登录页前端不再做 PDS 域名白名单校验**：合法域名校验是微信后台的功能，前端写死白名单只会给用户制造「我输对了但被前端拦下」的体验问题（2026-10-01 真机实测删除 `PDS_ALLOWLIST`）。
+- **AT Protocol 无输入体 procedure 必须用 `xrpcPostEmpty`**：包括 `com.atproto.server.refreshSession` / `com.atproto.server.deleteSession` / `com.atproto.identity.requestPlcOperationSignature`。传 `{}`（Content-Length: 2）会被 PDS 拒绝为 `400 InvalidRequest: A request body was provided when none was expected`（2026-09-29 / 2026-10-01 多次真机踩坑）。
+
+### 6.3.1 2FA 登录（authFactorToken）
+
+登录页（`pages/login/index.tsx`）支持 AT Protocol 邮箱二步验证（`authFactorToken`），账号未开 2FA 时行为与之前完全一致：
+
+- `DmeSession.login(identifier, password, storage?, pdsUrl?, authFactorToken?)` 透传到请求体。
+- `isAuthFactorTokenRequired(err)` 识别响应体里的 `AuthFactorTokenRequired` 错误（正则匹配，匹配 status 或 message）。
+- `AppContext.loginStep: 'idle' | 'loggingIn' | 'awaiting2FA'` + `loginFormSnapshot` + `cancel2FA()`：触发 2FA 时保存当前表单状态、切到验证码输入页；二次提交时携带 `authFactorToken`；`cancel2FA()` 回退到 idle。
+- **验证码输入框不设 `maxlength`、不限定数字键盘**（`type="number"` / `number-pad`）——AT Protocol 2FA 验证码长度目前无统一标准，可能 6 位以上或非纯数字。
+- 2FA 状态下 PDS / Handle / Password 输入框 `disabled` 置灰，主按钮文案切到 `login.verify`（验证并登录），提供 `login.backToPassword`（返回修改密码）按钮。
 
 ### 6.4 React 时序：核心引用一律「state + ref 双写」
 
@@ -119,6 +131,7 @@ PDS 对过期 accessJwt 返回 **HTTP 400**（不是 401），响应体 `{"error
 - `storageRef` / `identityKeysRef` / `sessionRef` / `pdsRef` / `pollerRef` 与 state 双写；写用 `putXxx()`（ref 同步生效 + state 触发渲染）；await 链里读 ref 或 `useApp()` 暴露的 `xxxSync` 只读镜像。
 - **自查规则**：useCallback 里出现 `await ...; if (!someState) throw` 就是 bug，改读 `xxxRef.current`。
 - logout/clearSession 清空时**必须连 ref 一起清**。`putXxx` 是 const useCallback 无函数提升，必须声明在所有使用它的 useCallback 之前。
+- **hook 必须声明在所有条件提前 return 之前**：在 `if (loading) return ...` 这类提前 return 之后再放 useCallback/useEffect 会得到 `Minified React error #310`（2026-10-01 真机触发）。
 - `clearSession()`（吊销 + 删本地 session key + 清内存，**保留** storage 与 identityKeys）用于「返回登录」；全量 logout 会连密钥删掉，重登后密钥比对不过。
 
 ### 6.5 幂等去重标记：消费成功之后才写，失败可回滚

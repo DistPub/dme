@@ -33,6 +33,21 @@ dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，
 - **构建管线**（`scripts/deploy.mjs`，顺序不可换）：`taro build → es5ify.mjs（ES5 降级，CI 拒收 ?. ??）→ strip-hpke-dead-code.mjs → verify → inject-polyfills.mjs`；产物冒烟 `verify-artifact.mjs`；上传走 miniprogram-ci（需 IP 白名单）。真机合法域名白名单仅 4 个：`network.hukoubook.com` / `dme.mymutual.fans` / `e2ee.hukoubook.com` / `plc.directory`
 - **详细文档**：`dme-miniapp/AGENTS.md`（硬性约束、平台坑、与 dme-client 的模块对应关系、构建自检清单）——改小程序代码前必读
 
+## 登录：PDS + 2FA 兼容（2026-10-01 落地）
+
+登录页（两端）统一支持 AT Protocol 邮箱二步验证（`authFactorToken`），账号未开 2FA 时行为与之前完全一致：
+
+| 项 | 实现 |
+|---|---|
+| DmeSession.login | 新增 `authFactorToken?: string` 参数，直接透传到 `com.atproto.server.createSession` |
+| 2FA 错误识别 | `isAuthFactorTokenRequired(err)`：正则匹配响应体里的 `AuthFactorTokenRequired` |
+| AppContext 状态流 | `loginStep: 'idle' \| 'loggingIn' \| 'awaiting2FA'` + `loginFormSnapshot`；触发 2FA 时保存当前表单、二次提交带 token；`cancel2FA()` 回退到 idle |
+| UI | 2FA 状态显示验证码输入框（**不限长度**、不限数字——目前没有统一标准），PDS/Handle/Password 输入框置灰，主按钮变「验证并登录」，提供「返回修改密码」按钮 |
+| 验证码长度限制 | **故意去掉** `maxLength`/`maxlength` 与 `number-pad` 键盘：2FA 验证码长度无统一标准，可能是 6 位以上或非纯数字 |
+| PDS 前端白名单 | **完全移除**：原 `pages/login/index.tsx` 里的 `PDS_ALLOWLIST` 硬编码拦截非白名单 PDS，与用户实际输入矛盾（2026-10-01 真机实测）。合法域名校验是微信后台的事，前端不再做 |
+| requestPlcSignature 空 body | `atproto/did.ts` 的 `requestPlcOperationSignature` 是无输入体 procedure，原 `xrpcPostJson(url, {}, ...)` 会被 PDS 拒绝（`400 InvalidRequest: A request body was provided when none was expected`，2026-10-01 真机踩坑，与 `refreshSession`/`deleteSession` 同类）。**改用 `xrpcPostEmpty` 完全不携带 body**。dme-client 用 `@atproto/api` 的 `agent.com.atproto.identity.requestPlcOperationSignature()`，SDK 内部已正确处理 |
+| React hooks 顺序 | 登录页的 `useCallback` 必须在所有提前 return 之前声明（2026-10-01 真机触发 `Minified React error #310`）；不要把任何 hook 写在 `if (loading) return ...` 这类提前 return 之后 |
+
 ## 数据流
 
 ```

@@ -33,6 +33,31 @@ dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，
 - **构建管线**（`scripts/deploy.mjs`，顺序不可换）：`taro build → es5ify.mjs（ES5 降级，CI 拒收 ?. ??）→ strip-hpke-dead-code.mjs → verify → inject-polyfills.mjs`；产物冒烟 `verify-artifact.mjs`；上传走 miniprogram-ci（需 IP 白名单）。真机合法域名白名单仅 4 个：`network.hukoubook.com` / `dme.mymutual.fans` / `e2ee.hukoubook.com` / `plc.directory`
 - **详细文档**：`dme-miniapp/AGENTS.md`（硬性约束、平台坑、与 dme-client 的模块对应关系、构建自检清单）——改小程序代码前必读
 
+## Web 嵌入模式：Chat Active 状态通知（2026-10-02 落地）
+
+fatesky web 端在 `/messages` 路由 keep-mounted 一个 iframe 嵌入 DME。iframe 被 `display:none` 隐藏时 DME 自身无法感知，因此 fatesky 通过 postMessage 协议主动同步「用户是否正在看 /messages 页面」。
+
+### 协议变更
+
+- `dme-client/src/embed/protocol.ts` 的 `DME_MSG` 新增 `CHAT_ACTIVE: 'DME_CHAT_ACTIVE'`。
+- fatesky → DME 的消息格式：`{ protocol: 'dme-embed/v1', type: 'DME_CHAT_ACTIVE', payload: { active: boolean } }`。
+
+### DME 行为
+
+- `dme-client/src/embed/bridge.ts` 维护模块级 `isChatActive` 状态；校验 `payload.active` 为 boolean 后更新；提供 `onChatActiveChange` / `offChatActiveChange` / `getIsChatActive`。
+- `dme-client/src/state/AppContext.tsx`：
+  - 订阅 chat active 变化，`false → true` 且当前有打开会话时，调用 `markConversationAsRead(activeConversationRef.current)`，触发 `DME_UNREAD` 重新上报。
+  - `handleIncomingMessage` 收到新消息后，仅在以下条件同时满足时标记为已读：
+    - 处于 embed 模式（`isEmbedContext()`）
+    - fatesky 报告 `chatActiveRef.current === true`
+    - DME 当前打开的就是该消息所属会话（`activeConversationRef.current === msg.groupId`）
+    - 浏览器标签页可见（`document.visibilityState === 'visible'`）
+  - 任一条件不满足则消息计入未读，fatesky 侧显示红点。
+- 不做 `document.visibilitychange` 兜底，一切以 fatesky 发送的 `DME_CHAT_ACTIVE` 为准。
+- 仅影响 `dme-client` web 嵌入模式，未改动 `dme-miniapp` / `dme-server` / `dme-gateway`。
+
+---
+
 ## 登录：PDS + 2FA 兼容（2026-10-01 落地）
 
 登录页（两端）统一支持 AT Protocol 邮箱二步验证（`authFactorToken`），账号未开 2FA 时行为与之前完全一致：
@@ -211,6 +236,10 @@ dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，
 | `unlockWebAudio` | func | sound.ts | 首次用户手势时用 `AudioContext` 播放 1-sample 静音 buffer 解锁音频（ChatListScreen 会话行 `onTap` 调用）；iOS Safari 可靠解锁 |
 | `setActiveConversation` | action | AppContext.tsx | 设置当前活跃会话 ID（ref，不触发重渲染）；ChatView focus 时设置，blur 时清空 |
 | `activeConversationRef` | ref | AppContext.tsx | `useRef<string \| null>`，当前 ChatView 的会话 ID，`handleIncomingMessage` 据此判断是否播放提示音 |
+| `chatActiveRef` | ref | AppContext.tsx | `useRef<boolean>`，web 嵌入模式下由 fatesky 的 `DME_CHAT_ACTIVE` 消息驱动；`handleIncomingMessage` 结合 `activeConversationRef` 与 `document.visibilityState` 决定是否 mark read |
+| `onChatActiveChange` | func | bridge.ts | 注册 fatesky chat-active 状态变化回调 |
+| `offChatActiveChange` | func | bridge.ts | 移除已注册的 chat-active 状态变化回调 |
+| `getIsChatActive` | func | bridge.ts | 返回当前已知的 chat-active 状态（默认 false） |
 | `soundEnabled` | state | AppContext.tsx | `boolean`，提示音开关；`handleIncomingMessage` 在播放前检查，Settings 页 Switch 控制 |
 | `setSoundEnabled` | action | AppContext.tsx | 切换提示音开关（持久化到 AsyncStorage + 更新 state） |
 | `getSoundEnabled`/`setSoundEnabled` | method | db.ts | AsyncStorage 提示音开关读写（key `soundEnabled`，默认 `true`） |

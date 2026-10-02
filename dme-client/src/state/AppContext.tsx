@@ -83,7 +83,13 @@ import { useI18n } from '../i18n/I18nContext';
 import { t } from '../i18n/format';
 import { isEmbedContext } from '../embed/protocol';
 import type { EmbedTokenPayload } from '../embed/protocol';
-import { start, notifySessionInvalid, sendUnread } from '../embed/bridge';
+import {
+  start,
+  notifySessionInvalid,
+  sendUnread,
+  onChatActiveChange,
+  offChatActiveChange,
+} from '../embed/bridge';
 import { computeTotalUnread } from '../embed/unread';
 
 // ---------------------------------------------------------------------------
@@ -350,6 +356,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
 
   const activeConversationRef = useRef<string | null>(null);
+  const chatActiveRef = useRef<boolean>(false);
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
@@ -1535,6 +1542,20 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         void playMessageSound();
       }
     }
+
+    // In embed mode, mark the message as read only when the parent frame
+    // reports the user is actively viewing the chat route, the current DME
+    // screen is this exact conversation, and the browser tab is visible.
+    const shouldMarkReadInEmbed =
+      isEmbedContext() &&
+      chatActiveRef.current === true &&
+      activeConversationRef.current === msg.groupId &&
+      typeof document !== 'undefined' &&
+      document.visibilityState === 'visible';
+    if (shouldMarkReadInEmbed) {
+      await msgStorage.markMessagesAsRead(msg.groupId);
+    }
+
     setChatListVersion((v) => v + 1);
   }, [identityKeys, poller, pds, soundEnabled, downloadFile, language]);
 
@@ -2686,6 +2707,29 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       inst?.setEmbedRefreshBlockedHandler(null);
     };
   }, [session]);
+
+  // Track the parent's chat-active state in embed mode. When the user returns
+  // to the /messages route, mark the currently-opened conversation as read so
+  // the unread badge updates immediately.
+  useEffect(() => {
+    if (!isEmbedContext()) return;
+    const handler = (active: boolean): void => {
+      const wasActive = chatActiveRef.current;
+      chatActiveRef.current = active;
+      if (!wasActive && active) {
+        const conversationId = activeConversationRef.current;
+        if (conversationId) {
+          markConversationAsRead(conversationId).catch((err: unknown) => {
+            console.error('embed mark-conversation-read on activate failed:', err);
+          });
+        }
+      }
+    };
+    onChatActiveChange(handler);
+    return () => {
+      offChatActiveChange(handler);
+    };
+  }, [markConversationAsRead]);
 
   // Push total unread count to the parent frame (embed mode only). Reports
   // immediately on every chatListVersion bump and every 30s as a fallback.

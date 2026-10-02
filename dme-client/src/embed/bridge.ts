@@ -15,6 +15,9 @@ import {
 } from './protocol';
 import type { EmbedTokenPayload } from './protocol';
 
+/** Callback signature for chat-active state changes. */
+export type ChatActiveChangeHandler = (active: boolean) => void;
+
 // ---------------------------------------------------------------------------
 // Module-level singleton state
 // ---------------------------------------------------------------------------
@@ -26,6 +29,8 @@ let readyRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let readyRetryCount = 0;
 let lastUnread: { count: number; hasNew: boolean } | null = null;
 let lastInvalidJwt: string | null = null;
+let isChatActive = false;
+const chatActiveHandlers = new Set<ChatActiveChangeHandler>();
 
 const READY_RETRY_MS = 2500;
 const READY_RETRY_MAX = 3;
@@ -66,6 +71,24 @@ function handleMessage(event: MessageEvent): void {
       { protocol: DME_EMBED_PROTOCOL, type: DME_MSG.PONG },
       event.origin,
     );
+    return;
+  }
+
+  if (data.type === DME_MSG.CHAT_ACTIVE) {
+    const payload = data.payload;
+    if (payload && typeof payload.active === 'boolean') {
+      const next = payload.active;
+      if (next !== isChatActive) {
+        isChatActive = next;
+        for (const handler of chatActiveHandlers) {
+          try {
+            handler(next);
+          } catch (err) {
+            console.error('embed chat-active handler failed:', err);
+          }
+        }
+      }
+    }
     return;
   }
 
@@ -187,4 +210,29 @@ export function stop(): void {
   lastUnread = null;
   lastInvalidJwt = null;
   readyRetryCount = 0;
+  isChatActive = false;
+  chatActiveHandlers.clear();
+}
+
+/**
+ * Register a callback invoked whenever the parent reports a chat-active
+ * state change. Idempotent for the same handler reference.
+ */
+export function onChatActiveChange(handler: ChatActiveChangeHandler): void {
+  chatActiveHandlers.add(handler);
+}
+
+/**
+ * Remove a previously registered chat-active change callback.
+ */
+export function offChatActiveChange(handler: ChatActiveChangeHandler): void {
+  chatActiveHandlers.delete(handler);
+}
+
+/**
+ * Return the last known chat-active state reported by the parent.
+ * Defaults to false until a DME_CHAT_ACTIVE message is received.
+ */
+export function getIsChatActive(): boolean {
+  return isChatActive;
 }

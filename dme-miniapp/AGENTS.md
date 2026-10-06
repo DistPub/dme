@@ -51,6 +51,7 @@ dme-client 的微信小程序移植版，**Taro 4 + React 18 + TypeScript**，�
 | `src/atproto/**` | dme-client | **重写**（走 platform/http）；`pds.ts` 有 `uploadBlob`（octet-stream 直传，**禁 wx.uploadFile**，它强制 multipart 且重写 Content-Type）/ `createRecord` / `resolveHandle` |
 | `src/state/AppContext.tsx` | dme-client | 裁剪移植，剔除全部 embed 符号 |
 | `src/ui` | dme-client/src/ui | → `src/components` + `src/pages`，Taro 组件 + SCSS 重写 |
+| `src/utils/sound.ts` | dme-client/src/utils/sound.ts | 小程序重写：WAV 生成复用，播放改用 `Taro.createInnerAudioContext()`，并需用户手势解锁 |
 | **（不移植）** | dme-client/src/embed/** | 唯一排除项 |
 
 **embed 排除边界**（审计时不要误删/误移植）：
@@ -198,6 +199,24 @@ PBKDF2、AES-GCM、大对象 JSON 序列化等**纯 JS 同步计算**嵌在 asyn
 | 绘制分辨率 | canvas.width/height | **px** | effect 里设，宽高同值 |
 
 scss 里给 canvas 写任何 width/height 都会覆盖内联产生变形；`max-width`/`height:auto` 兜底对 canvas 不成立。⚠️ Taro SCSS 编译器会把 scss 里的 `px` 转 rpx，但 **JSX 内联 style 的 px 不转换**——内联一律写 rpx。
+
+### 6.13 消息提示音
+
+小程序端提示音实现与触发规则：
+
+- **实现**：`src/utils/sound.ts`。
+  - WAV 数据与 dme-client 完全一致（880Hz 三声），运行时生成 base64；
+  - 播放端用 `Taro.createInnerAudioContext()`；
+  - WAV 先通过 `Taro.getFileSystemManager().writeFileSync` 写到 `Taro.env.USER_DATA_PATH/dme_beep.wav`，再用**本地文件路径**作为 `src`（data URI 在真机播放不稳定）。
+- **解锁**：微信小程序要求音频在**用户手势后**才能自动播放。`chat-list` 会话行 `onClick` 时调用 `unlockMiniappAudio()`，播放一段极短/极轻的同一音频完成解锁。用户首次点击会话行之前收到的消息不会响。
+- **触发逻辑**（`AppContext.handleIncomingMessage`）：
+  - `soundEnabled` 采用 **state + ref 双写**（handleIncomingMessage deps 为 `[]`，只能读 ref）；
+  - 收到 `kind: 'text'` / `'group_invite'` / `'file'` 消息时，若开关打开且满足以下场景则调用 `playMessageSound()`：
+    - 当前不在任何聊天页面（`activeConversationRef.current === null`）→ 响；
+    - 在当前会话的聊天页面（`activeConversationRef.current === msg.groupId`）→ 响；
+    - 在别的会话页面 → 不响；
+  - `group_system` / `reaction` 不触发提示音。
+- **调试**：真机排查时过滤 `[dme:sound]` 日志，应能看到 `unlockMiniappAudio` → `提示音文件已写入` → `onCanplay` → `onPlay` → 新消息时 `playMessageSound` → `play onCanplay` → `play onPlay`。
 
 ## 7. 构建管线
 

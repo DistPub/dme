@@ -26,6 +26,7 @@ import type { PendingWelcome, StoredMessage } from '../../storage/db';
 import { getProfileCached, getProfilesCached, resolveHandleCached } from '../../atproto/profile-cache';
 import { useWebTitle } from '../../utils/web-title';
 import { getScreenSize, touchOf } from '../../utils/screen';
+import { unlockMiniappAudio } from '../../utils/sound';
 import { LogoSpinner } from '../../components/LogoSpinner';
 import './index.scss';
 
@@ -828,6 +829,7 @@ export default function ChatListPage(): React.JSX.Element {
                       setSwipe(null);
                       return;
                     }
+                    unlockMiniappAudio();
                     void navigateToChat(row.conversationId, row.isGroup);
                   }}
                 >

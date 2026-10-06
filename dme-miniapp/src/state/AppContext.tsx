@@ -72,6 +72,7 @@ import type {
 } from '../protocol/types';
 import { FILE_MANIFEST_TYPE } from '../protocol/types';
 import type { ReactionMessage } from '../protocol/reaction';
+import { playMessageSound } from '../utils/sound';
 import {
   DME_SERVER_URL,
   PDS_URL,
@@ -327,6 +328,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
   const [blockList, setBlockList] = useState<string[]>([]);
   const [soundEnabled, setSoundEnabledState] = useState(true);
+  const soundEnabledRef = useRef(true);
   /** 恢复会话时发现 token 已失效（用于 LoginScreen 提示）。 */
   const [sessionExpired, setSessionExpired] = useState(false);
   const [loginStep, setLoginStep] = useState<'idle' | 'loggingIn' | 'awaiting2FA'>('idle');
@@ -373,6 +375,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     async (enabled: boolean): Promise<void> => {
       if (!storage) return;
       await storage.setSoundEnabled(enabled);
+      soundEnabledRef.current = enabled;
       setSoundEnabledState(enabled);
     },
     [storage],
@@ -531,7 +534,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingInvites(mySentInvites);
       setReceivedGroupInvites(myReceivedInvites);
       setBlockList(await correctStorage.getBlockList());
-      setSoundEnabledState(await correctStorage.getSoundEnabled());
+      const soundEnabledValue = await correctStorage.getSoundEnabled();
+      soundEnabledRef.current = soundEnabledValue;
+      setSoundEnabledState(soundEnabledValue);
     },
     [putStorage, putIdentityKeys],
   );
@@ -1104,6 +1109,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               sent: false,
               kind: 'group_invite',
             });
+            if (
+              soundEnabledRef.current &&
+              (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
+            ) {
+              void playMessageSound();
+            }
             break;
           }
 
@@ -1372,6 +1383,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               kind: 'text',
               conversationId: msg.groupId,
             });
+            if (
+              soundEnabledRef.current &&
+              (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
+            ) {
+              void playMessageSound();
+            }
             break;
           }
         }
@@ -1424,6 +1441,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             console.error('handleIncomingMessage: 自动下载图片失败', err);
           });
         }
+
+        if (
+          soundEnabledRef.current &&
+          (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
+        ) {
+          void playMessageSound();
+        }
       } else {
         if (await msgStorage.hasMessage(msg.groupId, msg.envelope.queueId)) {
           console.log('handleIncomingMessage: 重复文本消息，跳过', msg.envelope.queueId);
@@ -1439,6 +1463,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           kind: 'text',
           conversationId: msg.groupId,
         });
+
+        if (
+          soundEnabledRef.current &&
+          (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
+        ) {
+          void playMessageSound();
+        }
       }
 
       setChatListVersion((v) => v + 1);

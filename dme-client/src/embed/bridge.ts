@@ -76,6 +76,7 @@ function handleMessage(event: MessageEvent): void {
 
   if (data.type === DME_MSG.CHAT_ACTIVE) {
     const payload = data.payload;
+    console.log('[DME embed] received CHAT_ACTIVE', payload);
     if (payload && typeof payload.active === 'boolean') {
       const next = payload.active;
       if (next !== isChatActive) {

@@ -1546,6 +1546,13 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     // In embed mode, mark the message as read only when the parent frame
     // reports the user is actively viewing the chat route, the current DME
     // screen is this exact conversation, and the browser tab is visible.
+    console.log('[DME embed] markRead check', {
+      isEmbed: isEmbedContext(),
+      chatActive: chatActiveRef.current,
+      activeConversation: activeConversationRef.current,
+      msgGroup: msg.groupId,
+      visibility: typeof document !== 'undefined' ? document.visibilityState : 'n/a',
+    });
     const shouldMarkReadInEmbed =
       isEmbedContext() &&
       chatActiveRef.current === true &&

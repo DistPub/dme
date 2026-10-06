@@ -34,6 +34,8 @@ import {
 import type { StoredMessage } from '../storage/db';
 import type { GroupInviteRequest } from '../protocol/group-message';
 import type { RootStackParamList } from '../types/navigation';
+import { getIsChatActive } from '../embed/bridge';
+import { isEmbedContext } from '../embed/protocol';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { Image } from 'expo-image';
@@ -181,6 +183,13 @@ export function ChatViewScreen(): React.JSX.Element {
       }).catch((err: unknown) => {
         console.error('merge messages failed:', err);
       });
+    }
+    // In embed mode, only auto-mark messages as read while fatesky reports
+    // the user is actively viewing the /messages route. The iframe itself may
+    // still be showing ChatView when the parent navigates away, so we gate the
+    // automatic read marker on the parent's chat-active signal.
+    if (isEmbedContext() && !getIsChatActive()) {
+      return;
     }
     storage.markMessagesAsRead(conversationId).catch((err: unknown) => {
       console.error('markMessagesAsRead failed:', err);

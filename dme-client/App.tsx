@@ -26,7 +26,6 @@ import { Platform, StyleSheet, Text, View } from 'react-native';
 import { AppProvider, useApp } from './src/state/AppContext';
 import { I18nProvider, useI18n } from './src/i18n/I18nContext';
 import { isEmbedContext } from './src/embed/protocol';
-import { sendReady } from './src/embed/bridge';
 import { theme } from './src/ui/theme';
 import { FontProvider } from './src/ui/FontProvider';
 import { LogoSpinner } from './src/ui/LogoSpinner';
@@ -112,9 +111,7 @@ function NavigationRoot(): React.JSX.Element {
       const restored = await app.restoreSession();
       restoredRef.current = restored;
       if (cancelled) return;
-      if (isEmbedContext()) {
-        sendReady();
-      } else {
+      if (!isEmbedContext()) {
         setInitialRoute(computeGotoRoute(restored));
         setIsReady(true);
       }

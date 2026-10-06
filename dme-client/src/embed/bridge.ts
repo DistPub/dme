@@ -121,12 +121,14 @@ export function start(onToken: (p: EmbedTokenPayload) => void): void {
 
   if (started) {
     onTokenHandler = onToken;
+    sendReady();
     return;
   }
 
   onTokenHandler = onToken;
   started = true;
   window.addEventListener('message', handleMessage);
+  sendReady();
 }
 
 /**

@@ -220,6 +220,17 @@ export class DmeSession {
         refreshJwt: payload.refreshJwt,
         active: true,
       };
+    } else {
+      const credentialSession = this.createCredentialSession();
+      credentialSession.session = {
+        did: payload.did,
+        handle: payload.handle,
+        accessJwt: payload.accessJwt,
+        refreshJwt: payload.refreshJwt,
+        active: true,
+      };
+      this.session = credentialSession;
+      this.agentInstance = new Agent(credentialSession);
     }
   }
 

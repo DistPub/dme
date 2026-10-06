@@ -261,6 +261,12 @@ export function SetupScreen({ navigation }: SetupScreenProps): React.JSX.Element
             <Text style={styles.statusText}>
               {t('setup.restoreChoice')}
             </Text>
+            <Text style={[styles.statusText, styles.accountHandle]}>
+              @{app.session?.handle ?? ''}
+            </Text>
+            <Text style={[styles.statusText, styles.accountDid]} selectable>
+              {app.session?.did ?? ''}
+            </Text>
             <Button
               label={t('setup.restoreFromBackup')}
               onPress={() => setStep('restore_password')}
@@ -445,5 +451,16 @@ const styles = StyleSheet.create({
   },
   jsonLineHighlightBg: {
     backgroundColor: 'rgba(52, 199, 89, 0.15)',
+  },
+  accountHandle: {
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+    marginTop: theme.spacing.sm,
+  },
+  accountDid: {
+    fontSize: theme.typography.caption,
+    color: theme.colors.textSecondary,
+    marginTop: theme.spacing.xs,
+    textAlign: 'center',
   },
 });

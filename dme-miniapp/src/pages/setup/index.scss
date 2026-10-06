@@ -77,6 +77,23 @@
     white-space: pre;
   }
 
+  &__accountHandle {
+    font-size: 36rpx;
+    font-weight: 600;
+    color: #111111;
+    margin-bottom: 12rpx;
+    text-align: center;
+  }
+
+  &__accountDid {
+    font-size: 22rpx;
+    line-height: 34rpx;
+    color: #666666;
+    margin-bottom: 48rpx;
+    text-align: center;
+    word-break: break-all;
+  }
+
   &__button {
     margin-bottom: 20px;
     height: 88px;

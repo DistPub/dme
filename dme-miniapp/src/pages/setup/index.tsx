@@ -280,14 +280,10 @@ export default function SetupPage(): React.JSX.Element {
       {mode === 'restore' ? (
         <View className="setup__block">
           <Text className="setup__hint">{t('setup.restoreChoice')}</Text>
-          <Text className="setup__title" style={{ fontSize: 36, marginBottom: 12 }}>
+          <Text className="setup__accountHandle">
             @{session?.handle ?? ''}
           </Text>
-          <Text
-            className="setup__codeText"
-            style={{ fontSize: 22, lineHeight: 34, marginBottom: 24 }}
-            selectable
-          >
+          <Text className="setup__accountDid" selectable>
             {session?.did ?? ''}
           </Text>
           <Input

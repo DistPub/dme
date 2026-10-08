@@ -1,13 +1,13 @@
 /**
  * atproto/profile-cache.ts - Cached DID resolution and profile fetching.
  *
- * Provides 24h TTL, AsyncStorage persistence, an in-memory hot cache, and
+ * Provides 24h TTL, storage persistence, an in-memory hot cache, and
  * per-DID request deduplication. DID cache entries atomically store the DID
  * document together with derived fields (handle, PDS URL, encryption/signing
  * public keys) so callers can read derived values without re-parsing.
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { storage } from '../storage/backend';
 import { Agent, AppBskyActorDefs } from '@atproto/api';
 
 import { sharedDidResolver } from './resolver';
@@ -112,7 +112,7 @@ async function readDidCache(did: string): Promise<DidCacheEntry | null> {
   }
 
   try {
-    const raw = await AsyncStorage.getItem(didCacheKey(did));
+    const raw = await storage.getItem(didCacheKey(did));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as DidCacheEntry;
     if (!parsed.doc || typeof parsed.fetchedAt !== 'number') return null;
@@ -131,7 +131,7 @@ async function writeDidCache(
 ): Promise<void> {
   didMemoryCache.set(did, entry);
   try {
-    await AsyncStorage.setItem(didCacheKey(did), JSON.stringify(entry));
+    await storage.setItem(didCacheKey(did), JSON.stringify(entry));
   } catch (err) {
     console.warn('profile-cache: failed to write DID cache', did, err);
   }
@@ -181,7 +181,7 @@ async function readProfileCache(did: string): Promise<ProfileView | null> {
   }
 
   try {
-    const raw = await AsyncStorage.getItem(profileCacheKey(did));
+    const raw = await storage.getItem(profileCacheKey(did));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as ProfileCacheEntry;
     if (!parsed.profile || typeof parsed.fetchedAt !== 'number') return null;
@@ -201,7 +201,7 @@ async function writeProfileCache(
   const entry: ProfileCacheEntry = { profile, fetchedAt: Date.now() };
   profileMemoryCache.set(did, entry);
   try {
-    await AsyncStorage.setItem(profileCacheKey(did), JSON.stringify(entry));
+    await storage.setItem(profileCacheKey(did), JSON.stringify(entry));
   } catch (err) {
     console.warn('profile-cache: failed to write profile cache', did, err);
   }

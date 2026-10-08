@@ -1,5 +1,5 @@
 /**
- * storage/db.ts - AsyncStorage 持久化层。
+ * storage/db.ts - 持久化层（storage 后端抽象，embed 模式经 postMessage 委托 fatesky）。
  *
  * 存储所有客户端长期状态：
  *   1. 身份密钥对（Ed25519 + X25519，每用户一份）
@@ -12,7 +12,7 @@
  * 所有数据以 DID 为前缀命名空间，切换账号互不干扰。
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { storage } from './backend';
 
 import type { IdentityKeys } from '../crypto/identity';
 import type { GroupInfo, PendingInvite } from '../protocol/group-message';
@@ -65,7 +65,7 @@ const QUEUEID_LRU_MAX = 1000;
 const KEY_PACKAGE_POOL_KEY = 'keyPackagePool';
 
 /**
- * AsyncStorage 封装，所有 key 以 `dme:<did>:` 为前缀。
+ * 存储封装，所有 key 以 `dme:<did>:` 为前缀。
  */
 export class DmeStorage {
   private readonly prefix: string;
@@ -81,15 +81,15 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async putRaw(key: string, value: string): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + key, value);
+    await storage.setItem(this.prefix + key, value);
   }
 
   async getRaw(key: string): Promise<string | null> {
-    return AsyncStorage.getItem(this.prefix + key);
+    return storage.getItem(this.prefix + key);
   }
 
   async deleteRaw(key: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + key);
+    await storage.removeItem(this.prefix + key);
   }
 
   // -----------------------------------------------------------------------
@@ -97,7 +97,7 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async putIdentityKeys(keys: IdentityKeys): Promise<void> {
-    await AsyncStorage.setItem(
+    await storage.setItem(
       this.prefix + 'identity',
       JSON.stringify(keys, (k, v) => {
         // Uint8Array -> base64
@@ -110,7 +110,7 @@ export class DmeStorage {
   }
 
   async getIdentityKeys(): Promise<IdentityKeys | null> {
-    const raw = await AsyncStorage.getItem(this.prefix + 'identity');
+    const raw = await storage.getItem(this.prefix + 'identity');
     if (!raw) return null;
     return JSON.parse(raw, (k, v) => {
       if (v && typeof v === 'object' && v.__type === 'Uint8Array') {
@@ -125,15 +125,15 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async putMlsSession(groupId: string, serialized: string): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + `mlsSession:${groupId}`, serialized);
+    await storage.setItem(this.prefix + `mlsSession:${groupId}`, serialized);
   }
 
   async getMlsSession(groupId: string): Promise<string | null> {
-    return AsyncStorage.getItem(this.prefix + `mlsSession:${groupId}`);
+    return storage.getItem(this.prefix + `mlsSession:${groupId}`);
   }
 
   async deleteMlsSession(groupId: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `mlsSession:${groupId}`);
+    await storage.removeItem(this.prefix + `mlsSession:${groupId}`);
   }
 
   // -----------------------------------------------------------------------
@@ -143,21 +143,21 @@ export class DmeStorage {
   async putMessage(msg: StoredMessage): Promise<void> {
     const storageKey = msg.conversationId ?? (msg.fromDid === this.userDid ? msg.toDid : msg.fromDid);
     const key = this.prefix + `messages:${storageKey}`;
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await storage.getItem(key);
     const messages: StoredMessage[] = raw ? JSON.parse(raw) : [];
     messages.push(msg);
-    await AsyncStorage.setItem(key, JSON.stringify(messages));
+    await storage.setItem(key, JSON.stringify(messages));
   }
 
   async getMessages(groupId: string): Promise<StoredMessage[]> {
-    const raw = await AsyncStorage.getItem(this.prefix + `messages:${groupId}`);
+    const raw = await storage.getItem(this.prefix + `messages:${groupId}`);
     if (!raw) return [];
     const messages = JSON.parse(raw) as StoredMessage[];
     return messages;
   }
 
   async hasMessage(conversationId: string, messageId: string): Promise<boolean> {
-    const raw = await AsyncStorage.getItem(this.prefix + `messages:${conversationId}`);
+    const raw = await storage.getItem(this.prefix + `messages:${conversationId}`);
     if (!raw) return false;
     const messages = JSON.parse(raw) as StoredMessage[];
     return messages.some((m) => m.id === messageId);
@@ -190,7 +190,7 @@ export class DmeStorage {
 
   async markMessagesAsRead(groupId: string): Promise<void> {
     const key = this.prefix + `messages:${groupId}`;
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await storage.getItem(key);
     if (!raw) return;
     const messages = JSON.parse(raw) as StoredMessage[];
     let changed = false;
@@ -203,7 +203,7 @@ export class DmeStorage {
       return msg;
     });
     if (changed) {
-      await AsyncStorage.setItem(key, JSON.stringify(updated));
+      await storage.setItem(key, JSON.stringify(updated));
     }
   }
 
@@ -213,7 +213,7 @@ export class DmeStorage {
     partial: Partial<FileMeta>,
   ): Promise<void> {
     const key = this.prefix + `messages:${conversationId}`;
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await storage.getItem(key);
     if (!raw) return;
     const messages: StoredMessage[] = JSON.parse(raw);
     const idx = messages.findIndex(m => m.id === msgId);
@@ -222,26 +222,26 @@ export class DmeStorage {
       ...messages[idx],
       fileMeta: { ...(messages[idx].fileMeta ?? {}), ...partial } as FileMeta,
     };
-    await AsyncStorage.setItem(key, JSON.stringify(messages));
+    await storage.setItem(key, JSON.stringify(messages));
   }
 
   async deleteMessages(groupId: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `messages:${groupId}`);
+    await storage.removeItem(this.prefix + `messages:${groupId}`);
   }
 
   async deleteMessage(conversationId: string, messageId: string): Promise<void> {
     const key = this.prefix + `messages:${conversationId}`;
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await storage.getItem(key);
     if (!raw) return;
     const messages = JSON.parse(raw) as StoredMessage[];
     const filtered = messages.filter((msg) => msg.id !== messageId);
     if (filtered.length === messages.length) return;
-    await AsyncStorage.setItem(key, JSON.stringify(filtered));
+    await storage.setItem(key, JSON.stringify(filtered));
   }
 
   async addReaction(conversationId: string, messageId: string, reaction: Reaction): Promise<void> {
     const key = this.prefix + `messages:${conversationId}`;
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await storage.getItem(key);
     if (!raw) return;
     const messages: StoredMessage[] = JSON.parse(raw);
     const index = messages.findIndex((msg) => msg.id === messageId);
@@ -252,12 +252,12 @@ export class DmeStorage {
       ...messages[index],
       reactions: [...(messages[index].reactions ?? []), reaction],
     };
-    await AsyncStorage.setItem(key, JSON.stringify(messages));
+    await storage.setItem(key, JSON.stringify(messages));
   }
 
   async removeReaction(conversationId: string, messageId: string, did: string, emoji: string): Promise<void> {
     const key = this.prefix + `messages:${conversationId}`;
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await storage.getItem(key);
     if (!raw) return;
     const messages: StoredMessage[] = JSON.parse(raw);
     const index = messages.findIndex((msg) => msg.id === messageId);
@@ -269,11 +269,11 @@ export class DmeStorage {
       ...messages[index],
       reactions: filtered,
     };
-    await AsyncStorage.setItem(key, JSON.stringify(messages));
+    await storage.setItem(key, JSON.stringify(messages));
   }
 
   async listGroups(): Promise<string[]> {
-    const keys = await AsyncStorage.getAllKeys();
+    const keys = await storage.getAllKeys();
     const msgPrefix = this.prefix + 'messages:';
     const mlsSessionPrefix = this.prefix + 'mlsSession:';
     const groups = new Set<string>();
@@ -293,14 +293,14 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async isQueueIdProcessed(queueId: string): Promise<boolean> {
-    const raw = await AsyncStorage.getItem(this.prefix + 'queueIdLru');
+    const raw = await storage.getItem(this.prefix + 'queueIdLru');
     if (!raw) return false;
     const entries = new Map<string, number>(JSON.parse(raw) as [string, number][]);
     return entries.has(queueId);
   }
 
   async markQueueIdProcessed(queueId: string): Promise<void> {
-    const raw = await AsyncStorage.getItem(this.prefix + 'queueIdLru');
+    const raw = await storage.getItem(this.prefix + 'queueIdLru');
     const entries: Map<string, number> = raw
       ? new Map(JSON.parse(raw))
       : new Map();
@@ -316,7 +316,7 @@ export class DmeStorage {
       }
     }
 
-    await AsyncStorage.setItem(
+    await storage.setItem(
       this.prefix + 'queueIdLru',
       JSON.stringify([...entries]),
     );
@@ -327,14 +327,14 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async putKeyPackagePool(entries: KeyPackagePoolEntry[]): Promise<void> {
-    await AsyncStorage.setItem(
+    await storage.setItem(
       this.prefix + KEY_PACKAGE_POOL_KEY,
       JSON.stringify(entries),
     );
   }
 
   async getKeyPackagePool(): Promise<KeyPackagePoolEntry[]> {
-    const raw = await AsyncStorage.getItem(this.prefix + KEY_PACKAGE_POOL_KEY);
+    const raw = await storage.getItem(this.prefix + KEY_PACKAGE_POOL_KEY);
     if (!raw) return [];
     return JSON.parse(raw) as KeyPackagePoolEntry[];
   }
@@ -365,23 +365,23 @@ export class DmeStorage {
 
   async putPendingWelcome(entry: PendingWelcome): Promise<void> {
     const key = this.prefix + `pendingWelcome:${entry.queueId}`;
-    await AsyncStorage.setItem(key, JSON.stringify(entry));
+    await storage.setItem(key, JSON.stringify(entry));
   }
 
   async getPendingWelcomes(): Promise<PendingWelcome[]> {
-    const keys = await AsyncStorage.getAllKeys();
+    const keys = await storage.getAllKeys();
     const prefix = this.prefix + 'pendingWelcome:';
     const welcomeKeys = keys.filter((k) => k.startsWith(prefix));
     const results: PendingWelcome[] = [];
     for (const k of welcomeKeys) {
-      const raw = await AsyncStorage.getItem(k);
+      const raw = await storage.getItem(k);
       if (raw) results.push(JSON.parse(raw) as PendingWelcome);
     }
     return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
   async deletePendingWelcome(queueId: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `pendingWelcome:${queueId}`);
+    await storage.removeItem(this.prefix + `pendingWelcome:${queueId}`);
   }
 
   // -----------------------------------------------------------------------
@@ -390,26 +390,26 @@ export class DmeStorage {
 
   async putGroupInfo(info: GroupInfo): Promise<void> {
     const key = this.prefix + `groupInfo:${info.groupId}`;
-    await AsyncStorage.setItem(key, JSON.stringify(info));
+    await storage.setItem(key, JSON.stringify(info));
   }
 
   async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
-    const raw = await AsyncStorage.getItem(this.prefix + `groupInfo:${groupId}`);
+    const raw = await storage.getItem(this.prefix + `groupInfo:${groupId}`);
     if (!raw) return null;
     return JSON.parse(raw) as GroupInfo;
   }
 
   async deleteGroupInfo(groupId: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `groupInfo:${groupId}`);
+    await storage.removeItem(this.prefix + `groupInfo:${groupId}`);
   }
 
   async listGroupInfos(): Promise<GroupInfo[]> {
-    const keys = await AsyncStorage.getAllKeys();
+    const keys = await storage.getAllKeys();
     const prefix = this.prefix + 'groupInfo:';
     const groupKeys = keys.filter((k) => k.startsWith(prefix));
     const results: GroupInfo[] = [];
     for (const k of groupKeys) {
-      const raw = await AsyncStorage.getItem(k);
+      const raw = await storage.getItem(k);
       if (raw) results.push(JSON.parse(raw) as GroupInfo);
     }
     return results;
@@ -421,11 +421,11 @@ export class DmeStorage {
 
   async putPendingInvite(invite: PendingInvite): Promise<void> {
     const key = this.prefix + `pendingInvite:${invite.inviteId}`;
-    await AsyncStorage.setItem(key, JSON.stringify(invite));
+    await storage.setItem(key, JSON.stringify(invite));
   }
 
   async getPendingInvite(inviteId: string): Promise<PendingInvite | null> {
-    const raw = await AsyncStorage.getItem(this.prefix + `pendingInvite:${inviteId}`);
+    const raw = await storage.getItem(this.prefix + `pendingInvite:${inviteId}`);
     if (!raw) return null;
     return JSON.parse(raw) as PendingInvite;
   }
@@ -440,19 +440,19 @@ export class DmeStorage {
   }
 
   async getPendingInvites(): Promise<PendingInvite[]> {
-    const keys = await AsyncStorage.getAllKeys();
+    const keys = await storage.getAllKeys();
     const prefix = this.prefix + 'pendingInvite:';
     const inviteKeys = keys.filter((k) => k.startsWith(prefix));
     const results: PendingInvite[] = [];
     for (const k of inviteKeys) {
-      const raw = await AsyncStorage.getItem(k);
+      const raw = await storage.getItem(k);
       if (raw) results.push(JSON.parse(raw) as PendingInvite);
     }
     return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
   async deletePendingInvite(inviteId: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `pendingInvite:${inviteId}`);
+    await storage.removeItem(this.prefix + `pendingInvite:${inviteId}`);
   }
 
   // -----------------------------------------------------------------------
@@ -460,7 +460,7 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async getBlockList(): Promise<string[]> {
-    const raw = await AsyncStorage.getItem(this.prefix + 'blockList');
+    const raw = await storage.getItem(this.prefix + 'blockList');
     if (!raw) return [];
     return JSON.parse(raw) as string[];
   }
@@ -469,14 +469,14 @@ export class DmeStorage {
     const list = await this.getBlockList();
     if (list.includes(blockedDid)) return;
     list.push(blockedDid);
-    await AsyncStorage.setItem(this.prefix + 'blockList', JSON.stringify(list));
+    await storage.setItem(this.prefix + 'blockList', JSON.stringify(list));
   }
 
   async removeBlockedDid(blockedDid: string): Promise<void> {
     const list = await this.getBlockList();
     const filtered = list.filter((d) => d !== blockedDid);
     if (filtered.length === list.length) return;
-    await AsyncStorage.setItem(this.prefix + 'blockList', JSON.stringify(filtered));
+    await storage.setItem(this.prefix + 'blockList', JSON.stringify(filtered));
   }
 
   async isBlocked(did: string): Promise<boolean> {
@@ -485,7 +485,7 @@ export class DmeStorage {
   }
 
   async setBlockList(blockList: string[]): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + 'blockList', JSON.stringify(blockList));
+    await storage.setItem(this.prefix + 'blockList', JSON.stringify(blockList));
   }
 
   // -----------------------------------------------------------------------
@@ -495,7 +495,7 @@ export class DmeStorage {
   private readonly POLL_BATCH_SIZE_KEY = 'pollBatchSize';
 
   async getPollBatchSize(): Promise<number> {
-    const raw = await AsyncStorage.getItem(this.prefix + this.POLL_BATCH_SIZE_KEY);
+    const raw = await storage.getItem(this.prefix + this.POLL_BATCH_SIZE_KEY);
     if (!raw) return 3;
     const n = parseInt(raw, 10);
     return Number.isFinite(n) && n >= 1 && n <= 20 ? n : 3;
@@ -503,19 +503,19 @@ export class DmeStorage {
 
   async setPollBatchSize(size: number): Promise<void> {
     const clamped = Math.max(1, Math.min(20, size));
-    await AsyncStorage.setItem(this.prefix + this.POLL_BATCH_SIZE_KEY, String(clamped));
+    await storage.setItem(this.prefix + this.POLL_BATCH_SIZE_KEY, String(clamped));
   }
 
   private readonly APPVIEW_PROXY_KEY = 'appViewProxy';
 
   async getAppViewProxy(): Promise<string> {
-    const raw = await AsyncStorage.getItem(this.prefix + this.APPVIEW_PROXY_KEY);
+    const raw = await storage.getItem(this.prefix + this.APPVIEW_PROXY_KEY);
     return raw ?? DEFAULT_APPVIEW_PROXY;
   }
 
   async setAppViewProxy(value: string): Promise<void> {
     const trimmed = value.trim();
-    await AsyncStorage.setItem(
+    await storage.setItem(
       this.prefix + this.APPVIEW_PROXY_KEY,
       trimmed || DEFAULT_APPVIEW_PROXY,
     );
@@ -524,13 +524,13 @@ export class DmeStorage {
   private readonly DME_SERVER_URL_KEY = 'dmeServerUrl';
 
   async getDmeServerUrl(): Promise<string> {
-    const raw = await AsyncStorage.getItem(this.prefix + this.DME_SERVER_URL_KEY);
+    const raw = await storage.getItem(this.prefix + this.DME_SERVER_URL_KEY);
     return raw ?? DME_SERVER_URL;
   }
 
   async setDmeServerUrl(value: string): Promise<void> {
     const trimmed = value.trim();
-    await AsyncStorage.setItem(
+    await storage.setItem(
       this.prefix + this.DME_SERVER_URL_KEY,
       trimmed || DME_SERVER_URL,
     );
@@ -539,13 +539,13 @@ export class DmeStorage {
   private readonly DME_GATEWAY_URL_KEY = 'dmeGatewayUrl';
 
   async getDmeGatewayUrl(): Promise<string> {
-    const raw = await AsyncStorage.getItem(this.prefix + this.DME_GATEWAY_URL_KEY);
+    const raw = await storage.getItem(this.prefix + this.DME_GATEWAY_URL_KEY);
     return raw ?? DEFAULT_DME_GATEWAY_URL;
   }
 
   async setDmeGatewayUrl(value: string): Promise<void> {
     const trimmed = value.trim();
-    await AsyncStorage.setItem(
+    await storage.setItem(
       this.prefix + this.DME_GATEWAY_URL_KEY,
       trimmed || DEFAULT_DME_GATEWAY_URL,
     );
@@ -554,12 +554,12 @@ export class DmeStorage {
   private readonly SOUND_ENABLED_KEY = 'soundEnabled';
 
   async getSoundEnabled(): Promise<boolean> {
-    const raw = await AsyncStorage.getItem(this.prefix + this.SOUND_ENABLED_KEY);
+    const raw = await storage.getItem(this.prefix + this.SOUND_ENABLED_KEY);
     return raw !== 'false';
   }
 
   async setSoundEnabled(enabled: boolean): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + this.SOUND_ENABLED_KEY, String(enabled));
+    await storage.setItem(this.prefix + this.SOUND_ENABLED_KEY, String(enabled));
   }
 
   // -----------------------------------------------------------------------
@@ -567,10 +567,10 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async clear(): Promise<void> {
-    const keys = await AsyncStorage.getAllKeys();
+    const keys = await storage.getAllKeys();
     const dmeKeys = keys.filter((k) => k.startsWith(this.prefix));
     if (dmeKeys.length > 0) {
-      await Promise.all(dmeKeys.map((key) => AsyncStorage.removeItem(key)));
+      await Promise.all(dmeKeys.map((key) => storage.removeItem(key)));
     }
   }
 }

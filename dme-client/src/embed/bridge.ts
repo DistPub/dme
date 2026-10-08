@@ -14,6 +14,7 @@ import {
   resolveParentTargetOrigin,
 } from './protocol';
 import type { EmbedTokenPayload } from './protocol';
+import { embedStorageBackend } from './embed-storage';
 
 /** Callback signature for chat-active state changes. */
 export type ChatActiveChangeHandler = (active: boolean) => void;
@@ -30,10 +31,28 @@ let readyRetryCount = 0;
 let lastUnread: { count: number; hasNew: boolean } | null = null;
 let lastInvalidJwt: string | null = null;
 let isChatActive = false;
+let storageDataReceived = false;
+let pendingToken: EmbedTokenPayload | null = null;
+let pendingTokenTimer: ReturnType<typeof setTimeout> | null = null;
 const chatActiveHandlers = new Set<ChatActiveChangeHandler>();
 
 const READY_RETRY_MS = 2500;
 const READY_RETRY_MAX = 3;
+
+const PENDING_TOKEN_TIMEOUT_MS = 10_000;
+
+function flushPendingToken(): void {
+  if (pendingTokenTimer !== null) {
+    clearTimeout(pendingTokenTimer);
+    pendingTokenTimer = null;
+  }
+  if (pendingToken) {
+    const pt = pendingToken;
+    pendingToken = null;
+    storageDataReceived = true;
+    onTokenHandler?.(pt);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Inbound message handler (registered once)
@@ -60,7 +79,14 @@ function handleMessage(event: MessageEvent): void {
       typeof payload.refreshJwt === 'string' && payload.refreshJwt.length > 0
     ) {
       clearReadyRetry();
-      onTokenHandler?.(payload as EmbedTokenPayload);
+      if (!storageDataReceived) {
+        // 首个 TOKEN：缓存直到 STORAGE_DATA 到达（保证 hydrate 时镜像已有数据）。
+        // 10s 超时强制转发（空镜像降级），防 fatesky 异常/部署顺序导致 token 永久挂起。
+        pendingToken = payload as EmbedTokenPayload;
+        pendingTokenTimer = setTimeout(flushPendingToken, PENDING_TOKEN_TIMEOUT_MS);
+      } else {
+        onTokenHandler?.(payload as EmbedTokenPayload);
+      }
     }
     // Invalid payload — silently ignore.
     return;
@@ -89,6 +115,20 @@ function handleMessage(event: MessageEvent): void {
           }
         }
       }
+    }
+    return;
+  }
+
+  if (data.type === DME_MSG.STORAGE_DATA) {
+    const payload = data.payload;
+    const entries = payload?.entries;
+    if (entries && typeof entries === 'object' && entries !== null) {
+      embedStorageBackend.loadEntries(
+        entries as Record<string, string>,
+        event.origin,
+      );
+      storageDataReceived = true;
+      flushPendingToken();
     }
     return;
   }
@@ -215,6 +255,13 @@ export function stop(): void {
   readyRetryCount = 0;
   isChatActive = false;
   chatActiveHandlers.clear();
+  storageDataReceived = false;
+  if (pendingTokenTimer !== null) {
+    clearTimeout(pendingTokenTimer);
+    pendingTokenTimer = null;
+  }
+  pendingToken = null;
+  embedStorageBackend.reset();
 }
 
 /**

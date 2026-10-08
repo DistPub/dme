@@ -14,7 +14,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { storage as globalStorage } from '../storage/backend';
 import { sha256 } from '@noble/hashes/sha256';
 import type { KeyPackage, PrivateKeyPackage } from 'ts-mls';
 
@@ -547,18 +547,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       newSession.setStorage(correctStorage);
 
       // Migrate placeholder data
-      const allKeys = await AsyncStorage.getAllKeys();
+      const allKeys = await globalStorage.getAllKeys();
       const placeholderPrefix = `dme:${userDidPlaceholder}:`;
       const placeholderKeys = allKeys.filter((k) => k.startsWith(placeholderPrefix));
       for (const key of placeholderKeys) {
-        const value = await AsyncStorage.getItem(key);
+        const value = await globalStorage.getItem(key);
         if (value !== null) {
           const newKey = `dme:${userDid}:${key.slice(placeholderPrefix.length)}`;
-          await AsyncStorage.setItem(newKey, value);
+          await globalStorage.setItem(newKey, value);
         }
       }
       if (placeholderKeys.length > 0) {
-        await Promise.all(placeholderKeys.map((key) => AsyncStorage.removeItem(key)));
+        await Promise.all(placeholderKeys.map((key) => globalStorage.removeItem(key)));
       }
 
       const appViewProxyValue = await correctStorage.getAppViewProxy();
@@ -693,6 +693,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, [session, storage, poller]);
 
   const restoreSession = useCallback(async (): Promise<boolean> => {
+    // embed 模式会话由 fatesky 注入（applyEmbedToken），不走本地 restore。
+    if (isEmbedContext()) return false;
     setLoading(true);
     setError(null);
 
@@ -706,7 +708,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
 
     try {
-      const keys = await AsyncStorage.getAllKeys();
+      const keys = await globalStorage.getAllKeys();
       const sessionKeys = keys.filter(
         (k) => k.startsWith('dme:') && k.endsWith(':session'),
       );

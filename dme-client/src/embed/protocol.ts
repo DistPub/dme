@@ -20,6 +20,11 @@ export const DME_MSG = {
   CHAT_ACTIVE: 'DME_CHAT_ACTIVE',
   PING: 'DME_PING',
   PONG: 'DME_PONG',
+  STORAGE_LOAD: 'DME_STORAGE_LOAD',
+  STORAGE_SET: 'DME_STORAGE_SET',
+  STORAGE_REMOVE: 'DME_STORAGE_REMOVE',
+  STORAGE_CLEAR: 'DME_STORAGE_CLEAR',
+  STORAGE_DATA: 'DME_STORAGE_DATA',
 } as const;
 
 /** Credentials handed to the embed via the `DME_TOKEN` message. */

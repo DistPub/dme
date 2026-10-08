@@ -58,6 +58,49 @@ fatesky web 端在 `/messages` 路由 keep-mounted 一个 iframe 嵌入 DME。if
 
 ---
 
+## Web 嵌入模式：存储代管（Storage Delegation）（2026-10-08 落地）
+
+fatesky web 端以 iframe 嵌入 DME 时，iOS Safari ITP 会对第三方 iframe 的 localStorage 分区并在 7 天后清除，导致聊天数据丢失。解决方式：embed 模式下 DME 把 AsyncStorage（web 端底层 = localStorage）的全部读写经 postMessage 委托给 fatesky 的第一方 localStorage（per-DID blob `dme-storage:{did}`）。standalone（独立 web + native）行为完全不变。
+
+### 协议
+
+`dme-client/src/embed/protocol.ts` 的 `DME_MSG` 新增 5 个存储消息类型（与 fatesky `src/lib/dme-embed/constants.ts` byte-for-byte 同步）：
+
+| 消息 | 方向 | 用途 |
+|---|---|---|
+| `DME_STORAGE_LOAD` | DME → fatesky | 请求存储快照（协议端点，当前 DME 侧无调用方） |
+| `DME_STORAGE_SET` | DME → fatesky | 写入单 key `{key, value}` |
+| `DME_STORAGE_REMOVE` | DME → fatesky | 删除单 key `{key}` |
+| `DME_STORAGE_CLEAR` | DME → fatesky | 清空存储（协议端点，当前 DME 侧无调用方） |
+| `DME_STORAGE_DATA` | fatesky → DME | 完整存储快照 `{entries: Record<string,string>}`（loadEntries 清空后全量替换，不做 merge） |
+
+### 时序
+
+`DME_READY → DME_TOKEN → DME_STORAGE_DATA → DME_PING`：
+
+- **首个 TOKEN 缓存**：bridge 收到首个 TOKEN 时不立即转发，缓存到 `pendingToken` 直到 STORAGE_DATA 到达后经 `flushPendingToken()` 转发——保证 hydrate 时镜像已有数据。10s 超时（`PENDING_TOKEN_TIMEOUT_MS`）强制转发（空镜像降级），防 fatesky 异常/部署顺序导致 token 永久挂起。
+- **token 轮换**：`storageDataReceived=true` 后 TOKEN 直接转发，无 DATA 重发。
+- **SESSION_INVALID 恢复**：fatesky 只重发 TOKEN → 直转，用现有镜像。
+
+### DME 侧行为
+
+- `dme-client/src/embed/embed-storage.ts`：`EmbedStorageBackend` 类（内存镜像 Map + postMessage 委托）。读操作（getItem/getAllKeys）阻塞到 STORAGE_DATA 到达（`ensureReady()`，10s 超时降级为空镜像）；写操作（setItem/removeItem）即时入镜像 + fire-and-forget 发送 SET/REMOVE。导出 `embedStorageBackend` 单例 + `StorageBackend` 四方法类型。
+- `dme-client/src/storage/backend.ts`：全局 storage 单例 `export const storage: StorageBackend = isEmbedContext() ? embedStorageBackend : AsyncStorage`。isEmbedContext() 模块加载时求值且 iframe 上下文终身不变，无需动态切换。db.ts / I18nContext / profile-cache / AppContext 全部改用该单例。
+- `dme-client/src/state/AppContext.tsx`：`restoreSession` 在 embed 模式 early return false（会话由 fatesky token 注入走 applyEmbedToken，不走本地 restore；消除与 applyEmbedToken 的竞态、跳过 navigator.storage.persist()）。
+- `DmeStorage.clear()` 保持 getAllKeys + N×removeItem（每项发 STORAGE_REMOVE），语义等价"清空当前账号全部存储"；不发 STORAGE_CLEAR（该端点为协议完整性保留，无调用方）。
+
+### 边界场景
+
+- **账号切换** = fatesky iframe remount（`key={did}`）→ 全部模块级状态重置 → pendingToken 流程重走。
+- **STORAGE_DATA 为完整快照**：loadEntries 清空后全量替换，不做 merge。
+- **已知限制**：STORAGE_DATA 迟到（>10s）时 token 先转发、hydrate 在空镜像上执行，数据在 DATA 到达后进镜像，下次消息到达/列表刷新自愈。
+
+### 关键文件
+
+`dme-client/src/embed/protocol.ts`（5 常量）/ `dme-client/src/embed/embed-storage.ts`（EmbedStorageBackend）/ `dme-client/src/storage/backend.ts`（storage 单例）/ `dme-client/src/embed/bridge.ts`（STORAGE_DATA 处理 + pendingToken 时序）
+
+---
+
 ## 登录：PDS + 2FA 兼容（2026-10-01 落地）
 
 登录页（两端）统一支持 AT Protocol 邮箱二步验证（`authFactorToken`），账号未开 2FA 时行为与之前完全一致：
@@ -123,6 +166,8 @@ fatesky web 端在 `/messages` 路由 keep-mounted 一个 iframe 嵌入 DME。if
 | 全局状态 | `dme-client/src/state/AppContext.tsx` (17 字段，28 action) |
 | 消息轮询 | `dme-client/src/poll/poller.ts` |
 | 存储 schema | `dme-client/src/storage/db.ts` |
+| 存储后端单例 | `dme-client/src/storage/backend.ts`（storage 全局单例：embed=EmbedStorageBackend，standalone=AsyncStorage） |
+| Embed 存储后端 | `dme-client/src/embed/embed-storage.ts`（EmbedStorageBackend 内存镜像 + postMessage 委托 + 读阻塞/写 fire-and-forget） |
 | DID 公钥读写 | `dme-client/src/atproto/did.ts` (`declareKeys` + `getRemoteEncryptionKey` + `getRemoteSigningKey` + `getDidMethod` + `generateDidWebUpdate`)；`sharedDidResolver` 单例在 `atproto/resolver.ts` |
 | DID 解析缓存 | `dme-client/src/atproto/profile-cache.ts`（24h TTL + AsyncStorage 持久化 + 内存热缓存 + 请求去重）；底层解析用 `atproto/resolver.ts` 的 `sharedDidResolver` |
 | DID Resolver 单例 | `dme-client/src/atproto/resolver.ts` (`sharedDidResolver`: `DidResolver` + `MemoryCache`) |
@@ -191,6 +236,10 @@ fatesky web 端在 `/messages` 路由 keep-mounted 一个 iframe 嵌入 DME。if
 | `DmePds` | class | pds.ts | PDS 记录操作 + AppView proxy（agent.configureProxy 设置 atproto-proxy header）；网关模式 `batchGetEnvelopes` 自动加 `dme-server` header 指定目标 server |
 | `DmeStorage` | class | db.ts | AsyncStorage 持久化（含 appViewProxy 配置）；`hasMessage(conversationId, messageId)` 幂等检查 |
 | `hasMessage` | method | db.ts | 判断某会话是否已存指定 messageId（`handleIncomingMessage` text/file 入口处做幂等检查，防重复存储与误播提示音） |
+| `EmbedStorageBackend` | class | embed-storage.ts | 内存镜像 + postMessage 委托（embed 存储后端） |
+| `embedStorageBackend` | const | embed-storage.ts | EmbedStorageBackend 单例 |
+| `storage` | const | storage/backend.ts | 全局存储后端单例（embed/standalone 切换） |
+| `StorageBackend` | type | embed-storage.ts | 四方法存储接口（getItem/setItem/removeItem/getAllKeys） |
 | `AppProvider` | component | AppContext.tsx | 全局状态中心 |
 | `declareKeys` | func | did.ts | PLC 操作发布 Ed25519 + X25519 到 DID 文档 |
 | `getDidMethod` | func | did.ts | 判断 DID 方法类型（plc/web/other） |

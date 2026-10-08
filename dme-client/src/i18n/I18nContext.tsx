@@ -6,7 +6,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { storage } from '../storage/backend';
 
 import { t as tRaw } from './format';
 import type { Language } from './translations';
@@ -25,7 +25,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }): React
   const [language, setLanguageState] = useState<Language>('zh');
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY)
+    storage.getItem(STORAGE_KEY)
       .then((stored) => {
         if (stored === 'zh' || stored === 'en') {
           setLanguageState(stored);
@@ -37,7 +37,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }): React
   }, []);
 
   const setLanguage = useCallback(async (lang: Language) => {
-    await AsyncStorage.setItem(STORAGE_KEY, lang);
+    await storage.setItem(STORAGE_KEY, lang);
     setLanguageState(lang);
   }, []);
 

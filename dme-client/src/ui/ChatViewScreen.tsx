@@ -22,6 +22,7 @@ import { MessageBubble } from './MessageBubble';
 import { EmojiPicker } from './EmojiPicker';
 import { MessageActionMenu } from './MessageActionMenu';
 import { FileMessageBubble } from './FileMessageBubble';
+import { PostCardBubble } from './PostCardBubble';
 import { exportFileToDevice } from '../utils/file-export';
 import { useWebTitle } from '../utils/web-title';
 import { useApp } from '../state/AppContext';
@@ -415,6 +416,17 @@ export function ChatViewScreen(): React.JSX.Element {
   }, []);
 
   const handleForward = useCallback((msg: StoredMessage): void => {
+    if (msg.kind === 'post') {
+      try {
+        const post = JSON.parse(msg.plaintext) as { uri: string; url: string; html?: string };
+        if (post.uri && post.url) {
+          navigation.navigate('ChatList', { forwardPost: post });
+          return;
+        }
+      } catch {
+        // fall through to text forwarding on a malformed payload
+      }
+    }
     if (msg.kind === 'file') {
       if (msg.fileMeta?.localPath) {
         navigation.navigate('ChatList', {
@@ -579,6 +591,38 @@ export function ChatViewScreen(): React.JSX.Element {
             onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
           />
         );
+      }
+
+      if (item.kind === 'post') {
+        let post: { uri: string; url: string; html?: string } | null = null;
+        try {
+          const parsed = JSON.parse(item.plaintext) as { uri?: string; url?: string; html?: string };
+          if (parsed.uri && parsed.url) {
+            post = { uri: parsed.uri, url: parsed.url, html: parsed.html };
+          }
+        } catch {
+          post = null;
+        }
+        if (post) {
+          const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
+          const isOutgoing = item.fromDid === session?.did;
+          return (
+            <PostCardBubble
+              uri={post.uri}
+              url={post.url}
+              isOutgoing={isOutgoing}
+              senderDisplayName={senderDisplayName}
+              senderHandle={senderHandle}
+              senderAvatarUrl={senderAvatarUrl}
+              reactions={item.reactions}
+              currentDid={session?.did}
+              onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
+              onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
+              onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
+            />
+          );
+        }
+        // Malformed post payload — fall through to the plain-text bubble.
       }
 
       const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);

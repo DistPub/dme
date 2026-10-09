@@ -152,6 +152,15 @@ function NavigationRoot(): React.JSX.Element {
     }
   }, [app.embedTokenApplied, app.embedMismatch]);
 
+  // Embed: a fatesky share intent (`DME_SHARE`) routes to the conversation
+  // picker with the post pre-filled. The intent is consumed so it fires once.
+  useEffect(() => {
+    if (!app.shareIntent) return;
+    if (!navigationRef.isReady()) return;
+    navigationRef.navigate('ChatList', { forwardPost: app.shareIntent });
+    app.consumeShareIntent();
+  }, [app.shareIntent, app.consumeShareIntent]);
+
   useEffect(() => {
     const hadSession = prevSessionRef.current !== null;
     const hasSession = app.session !== null;

@@ -13,11 +13,14 @@ import {
   isAllowedParentOrigin,
   resolveParentTargetOrigin,
 } from './protocol';
-import type { EmbedTokenPayload } from './protocol';
+import type { EmbedTokenPayload, EmbedSharePayload } from './protocol';
 import { embedStorageBackend } from './embed-storage';
 
 /** Callback signature for chat-active state changes. */
 export type ChatActiveChangeHandler = (active: boolean) => void;
+
+/** Callback signature for inbound share intents (fatesky → DME). */
+export type ShareHandler = (share: EmbedSharePayload) => void;
 
 // ---------------------------------------------------------------------------
 // Module-level singleton state
@@ -34,6 +37,7 @@ let isChatActive = false;
 let storageDataReceived = false;
 let pendingToken: EmbedTokenPayload | null = null;
 let pendingTokenTimer: ReturnType<typeof setTimeout> | null = null;
+let onShareHandler: ShareHandler | null = null;
 const chatActiveHandlers = new Set<ChatActiveChangeHandler>();
 
 const READY_RETRY_MS = 2500;
@@ -116,6 +120,28 @@ function handleMessage(event: MessageEvent): void {
         }
       }
     }
+    return;
+  }
+
+  if (data.type === DME_MSG.SHARE) {
+    const payload = data.payload;
+    if (
+      payload &&
+      typeof payload.uri === 'string' && payload.uri.length > 0 &&
+      typeof payload.url === 'string' && payload.url.length > 0
+    ) {
+      const share: EmbedSharePayload = {
+        uri: payload.uri,
+        url: payload.url,
+        html: typeof payload.html === 'string' ? payload.html : undefined,
+      };
+      try {
+        onShareHandler?.(share);
+      } catch (err) {
+        console.error('embed share handler failed:', err);
+      }
+    }
+    // Invalid payload — silently ignore.
     return;
   }
 
@@ -290,6 +316,7 @@ export function stop(): void {
   clearReadyRetry();
   parentOrigin = null;
   onTokenHandler = null;
+  onShareHandler = null;
   lastUnread = null;
   lastInvalidJwt = null;
   readyRetryCount = 0;
@@ -317,6 +344,14 @@ export function onChatActiveChange(handler: ChatActiveChangeHandler): void {
  */
 export function offChatActiveChange(handler: ChatActiveChangeHandler): void {
   chatActiveHandlers.delete(handler);
+}
+
+/**
+ * Register a callback invoked when the parent (fatesky) hands over a share
+ * intent (`DME_SHARE`). Replaces any previously registered handler.
+ */
+export function onShare(handler: ShareHandler | null): void {
+  onShareHandler = handler;
 }
 
 /**

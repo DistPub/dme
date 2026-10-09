@@ -105,6 +105,41 @@ export interface FileManifestMessage {
 export const FILE_MANIFEST_TYPE = 'file' as const;
 
 /**
+ * Embedded post-card message (shared from fatesky via `DME_SHARE`).
+ *
+ * Sent as an MLS application message whose plaintext is
+ * `JSON.stringify(PostMessage)`. The web client renders an `uri`-derived
+ * sandboxed iframe preview (non-navigable); tapping the card reuses the same
+ * platform-aware link logic as a text-message URL (`openMessageLink`).
+ * Native / mini-program clients have no iframe and fall back to plain link text.
+ */
+export interface PostMessage {
+  readonly type: 'post';
+  /** Post's AT URI (`at://did:plc:xxx/app.bsky.feed.post/yyy`). */
+  readonly uri: string;
+  /** Shareable web link used as the tap target. */
+  readonly url: string;
+  /** Optional fatesky HTML embed snippet (currently unused by DME). */
+  readonly html?: string;
+}
+
+/** Type discriminator for embedded post-card messages. */
+export const POST_MESSAGE_TYPE = 'post' as const;
+
+/** fatesky SSR host that serves the `/embed/<aturi>` iframe. */
+export const POST_EMBED_ORIGIN = 'https://fatesky-ssr.hukoubook.com';
+
+/**
+ * Build the sandboxed post-embed iframe src from an AT URI, mirroring
+ * fatesky's `embed.js`: `<origin>/embed/<uri without the 'at://' prefix>`.
+ * Returns null when the URI is not an `at://` URI.
+ */
+export function buildPostEmbedUrl(uri: string): string | null {
+  if (!uri.startsWith('at://')) return null;
+  return `${POST_EMBED_ORIGIN}/embed/${uri.slice('at://'.length)}`;
+}
+
+/**
  * The Lexicon NSID (Namespaced Identifier) for the envelope record.
  * Used in PDS createRecord calls.
  */

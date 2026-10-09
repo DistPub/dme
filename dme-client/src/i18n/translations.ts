@@ -127,6 +127,7 @@ export const zh: Record<string, string> = {
   'chatlist.waitingWelcome': '等待握手… {time}',
   'chatlist.invitePreview': '@{handle} 邀请你加入群聊：{group}',
   'chatlist.filePreview': '📎 {name}',
+  'chatlist.postPreview': '🔗 帖子',
   'chatlist.timeJustNow': '刚刚',
   'chatlist.timeMinutes': '{n} 分钟前',
   'chatlist.timeHours': '{n} 小时前',
@@ -220,6 +221,7 @@ export const zh: Record<string, string> = {
 
   // bubble
   'bubble.uploading': '上传中...{pct}',
+  'bubble.postCard': '帖子',
   'bubble.uploadFailed': '上传失败',
   'bubble.retry': '重试',
   'bubble.downloading': '下载中... {pct}%',
@@ -388,6 +390,7 @@ export const en: Record<string, string> = {
   'chatlist.waitingWelcome': 'Waiting for welcome… {time}',
   'chatlist.invitePreview': '@{handle} invited you to join group: {group}',
   'chatlist.filePreview': '📎 {name}',
+  'chatlist.postPreview': '🔗 Post',
   'chatlist.timeJustNow': 'Just now',
   'chatlist.timeMinutes': '{n}m ago',
   'chatlist.timeHours': '{n}h ago',
@@ -481,6 +484,7 @@ export const en: Record<string, string> = {
 
   // bubble
   'bubble.uploading': 'Uploading...{pct}',
+  'bubble.postCard': 'Post',
   'bubble.uploadFailed': 'Upload failed',
   'bubble.retry': 'Retry',
   'bubble.downloading': 'Downloading... {pct}%',

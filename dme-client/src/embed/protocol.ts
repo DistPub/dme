@@ -27,7 +27,18 @@ export const DME_MSG = {
   STORAGE_DATA: 'DME_STORAGE_DATA',
   NAVIGATE: 'DME_NAVIGATE',
   OPEN_URL: 'DME_OPEN_URL',
+  SHARE: 'DME_SHARE',
 } as const;
+
+/** Payload of the inbound `DME_SHARE` message (fatesky → DME). */
+export type EmbedSharePayload = {
+  /** Post AT URI (`at://did:plc:xxx/app.bsky.feed.post/yyy`). */
+  uri: string;
+  /** Shareable web link (`https://app.hukoubook.com/...`). */
+  url: string;
+  /** Optional HTML embed snippet — currently unused by DME. */
+  html?: string;
+};
 
 /** Credentials handed to the embed via the `DME_TOKEN` message. */
 export type EmbedTokenPayload = {

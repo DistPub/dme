@@ -19,7 +19,7 @@ import type { GroupInfo, PendingInvite } from '../protocol/group-message';
 import type { FileMeta } from '../protocol/types';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../config';
 
-export type MessageKind = 'text' | 'group_invite' | 'group_system' | 'file';
+export type MessageKind = 'text' | 'group_invite' | 'group_system' | 'file' | 'post';
 
 /** 表情回应。 */
 export interface Reaction {

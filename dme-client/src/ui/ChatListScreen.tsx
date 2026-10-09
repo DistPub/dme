@@ -127,6 +127,7 @@ export function ChatListScreen(): React.JSX.Element {
   const route = useRoute<ChatListRouteProp>();
   const forwardText = route.params?.forwardText;
   const forwardFile = route.params?.forwardFile;
+  const forwardPost = route.params?.forwardPost;
 
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -406,8 +407,14 @@ const resolveProfiles = useCallback(async (
         } catch (err) {
           console.error('Forward sendFileMessage failed:', err);
         }
+      } else if (forwardPost) {
+        try {
+          await app.sendPostMessage(groupId, forwardPost);
+        } catch (err) {
+          console.error('Forward sendPostMessage failed:', err);
+        }
       }
-      if (forwardText || forwardFile) {
+      if (forwardText || forwardFile || forwardPost) {
         if (isGroup) {
           navigation.replace('ChatView', { groupId });
         } else {
@@ -421,7 +428,7 @@ const resolveProfiles = useCallback(async (
         navigation.navigate('ChatView', { friendDid: groupId });
       }
     },
-    [navigation, forwardText, forwardFile, app],
+    [navigation, forwardText, forwardFile, forwardPost, app],
   );
 
   const navigateToQrDisplay = useCallback((): void => {
@@ -551,8 +558,10 @@ const resolveProfiles = useCallback(async (
             ? t('chatlist.invitePreview', { handle: item.handle, group: inviteGroupName })
             : item.lastMessage.kind === 'file' && item.lastMessage.fileMeta
               ? t('chatlist.filePreview', { name: item.lastMessage.fileMeta.fileName })
-              : item.lastMessage.plaintext.slice(0, 40) +
-                (item.lastMessage.plaintext.length > 40 ? '…' : '')
+              : item.lastMessage.kind === 'post'
+                ? t('chatlist.postPreview')
+                : item.lastMessage.plaintext.slice(0, 40) +
+                  (item.lastMessage.plaintext.length > 40 ? '…' : '')
           : t('chatlist.noMessages');
       return (
         <SwipeableRow
@@ -621,7 +630,7 @@ const resolveProfiles = useCallback(async (
       <ScreenBackground />
 
       <View style={styles.topBar}>
-        {forwardText || forwardFile ? (
+        {forwardText || forwardFile || forwardPost ? (
           <>
             <Button
               label={t('common.cancel')}

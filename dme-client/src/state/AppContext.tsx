@@ -54,7 +54,7 @@ import { generateVideoThumbnail } from '../utils/video-thumbnail';
 import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 import { DME_SERVER_URL, PDS_URL, DEFAULT_APPVIEW_PROXY, DEFAULT_DME_GATEWAY_URL } from '../config';
-import { type DmeBlobRef, type DmeEnvelope, type FileManifestMessage, FILE_MANIFEST_TYPE } from '../protocol/types';
+import { type DmeBlobRef, type DmeEnvelope, type FileManifestMessage, FILE_MANIFEST_TYPE, type PostMessage, POST_MESSAGE_TYPE } from '../protocol/types';
 import type { ReactionMessage } from '../protocol/reaction';
 import type {
   GroupInfo,
@@ -89,7 +89,9 @@ import {
   sendUnread,
   onChatActiveChange,
   offChatActiveChange,
+  onShare,
 } from '../embed/bridge';
+import type { EmbedSharePayload } from '../embed/protocol';
 import { computeTotalUnread } from '../embed/unread';
 
 // ---------------------------------------------------------------------------
@@ -283,6 +285,9 @@ interface AppActions {
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
+  sendPostMessage: (groupId: string, post: { uri: string; url: string; html?: string }) => Promise<void>;
+  shareIntent: EmbedSharePayload | null;
+  consumeShareIntent: () => void;
   sendFileMessage: (conversationId: string, fileUri: string, fileName: string, mimeType: string, fileSize: number) => Promise<void>;
   retryUploadFileMessage: (conversationId: string, msgId: string) => Promise<void>;
   downloadFile: (conversationId: string, msgId: string) => Promise<void>;
@@ -351,6 +356,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [embedTokenApplied, setEmbedTokenApplied] = useState(false);
   const [loginStep, setLoginStep] = useState<'idle' | 'loggingIn' | 'awaiting2FA'>('idle');
   const [loginFormSnapshot, setLoginFormSnapshot] = useState<{ identifier: string; password: string; pdsUrl: string } | null>(null);
+  const [shareIntent, setShareIntent] = useState<EmbedSharePayload | null>(null);
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
@@ -1524,6 +1530,25 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
           if (shouldPlayFile) {
         void playMessageSound();
       }
+    } else if (msgType === POST_MESSAGE_TYPE) {
+      if (await msgStorage.hasMessage(msg.groupId, msg.envelope.queueId)) {
+        console.log('handleIncomingMessage: duplicate post message, skipping', msg.envelope.queueId);
+        return;
+      }
+      await msgStorage.putMessage({
+        id: msg.envelope.queueId,
+        fromDid: msg.senderDid,
+        toDid: userDid,
+        plaintext: msg.plaintext,
+        createdAt: msg.envelope.createdAt,
+        sent: false,
+        kind: 'post',
+        conversationId: msg.groupId,
+      });
+      const shouldPlayPost = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
+      if (shouldPlayPost) {
+        void playMessageSound();
+      }
     } else {
       if (await msgStorage.hasMessage(msg.groupId, msg.envelope.queueId)) {
         console.log('handleIncomingMessage: duplicate text message, skipping', msg.envelope.queueId);
@@ -1600,6 +1625,57 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     await storage.putMessage(msg);
 
     // Send via PDS
+    const envelope: DmeEnvelope = {
+      $type: 'dme.queue.envelope',
+      queueId: result.queueId,
+      payload: bytesToBase64url(result.ciphertext),
+      createdAt: new Date().toISOString(),
+      messageType: 'application',
+    };
+    await pds.createEnvelope(envelope);
+
+    setChatListVersion((v) => v + 1);
+  }, [session, storage, pds, poller]);
+
+  /**
+   * Send an embedded post-card message. The fatesky-provided share payload is
+   * serialized as a `PostMessage` JSON plaintext and sent through the existing
+   * MLS application-message path (same wire shape as text/file messages).
+   */
+  const sendPostMessage = useCallback(async (
+    groupId: string,
+    post: { uri: string; url: string; html?: string },
+  ): Promise<void> => {
+    if (!session || !storage || !pds || !poller) {
+      throw new Error('sendPostMessage: not fully initialized');
+    }
+
+    const mlsSession = poller.getSession(groupId);
+    if (!mlsSession) throw new Error(`sendPostMessage: no MLS session for ${groupId}`);
+
+    const plaintext = JSON.stringify({
+      type: POST_MESSAGE_TYPE,
+      uri: post.uri,
+      url: post.url,
+      ...(post.html ? { html: post.html } : {}),
+    } as PostMessage);
+
+    const plaintextBytes = new TextEncoder().encode(plaintext);
+    const result = await mlsSession.encrypt(plaintextBytes);
+    await storage.putMlsSession(groupId, mlsSession.serialize());
+
+    const msg: StoredMessage = {
+      id: result.queueId,
+      fromDid: session.did,
+      toDid: groupId,
+      plaintext,
+      createdAt: new Date().toISOString(),
+      sent: true,
+      kind: 'post',
+      conversationId: groupId,
+    };
+    await storage.putMessage(msg);
+
     const envelope: DmeEnvelope = {
       $type: 'dme.queue.envelope',
       queueId: result.queueId,
@@ -2670,6 +2746,10 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
   // Embed token application
   // -------------------------------------------------------------------------
 
+  const consumeShareIntent = useCallback((): void => {
+    setShareIntent(null);
+  }, []);
+
   const applyEmbedToken = useCallback(async (payload: EmbedTokenPayload): Promise<void> => {
     if (!isEmbedContext()) return;
     if (embedMismatch) return;
@@ -2704,6 +2784,14 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
   useEffect(() => {
     start(applyEmbedToken);
   }, [applyEmbedToken]);
+
+  // Inbound share intents from fatesky: surfaced as `shareIntent` state so the
+  // navigation root can route to the conversation picker, then cleared via
+  // `consumeShareIntent`.
+  useEffect(() => {
+    onShare((share) => { setShareIntent(share); });
+    return () => { onShare(null); };
+  }, []);
 
   useEffect(() => {
     if (!isEmbedContext()) return;
@@ -2842,6 +2930,9 @@ blockList,
       unblockMember,
       setActiveConversation,
       setSoundEnabled,
+      sendPostMessage,
+      shareIntent,
+      consumeShareIntent,
       applyEmbedToken,
     }),
     [
@@ -2856,6 +2947,7 @@ blockList,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
       leaveGroup, refreshBlockList, blockMember, unblockMember, setActiveConversation, setSoundEnabled,
+      sendPostMessage, shareIntent, consumeShareIntent,
       applyEmbedToken,
     ],
   );

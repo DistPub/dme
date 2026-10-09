@@ -49,6 +49,9 @@ dme-client/
 | 文件协议类型 | `src/protocol/types.ts`（`FileManifestMessage` + `FileMeta`） |
 | 文件发送/下载/重试上传 | `src/state/AppContext.tsx`（`sendFileMessage` + `retryUploadFileMessage` + `downloadFile`，XHR/reader 字节级进度） |
 | 文件消息气泡 | `src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片） |
+| 帖子卡片消息协议 | `src/protocol/types.ts`（`PostMessage` + `POST_MESSAGE_TYPE` + `buildPostEmbedUrl`） |
+| 帖子卡片发送 | `src/state/AppContext.tsx`（`sendPostMessage`） |
+| 帖子卡片气泡 | `src/ui/PostCardBubble.tsx`（web sandbox iframe 预览 + 点击复用 `openMessageLink`；native 纯链接文本） |
 | PDS URL 解析 | `src/atproto/did.ts`（`resolvePdsUrl`） |
 | 改主题 | `src/ui/theme.ts` |
 | 加新加密操作 | `src/crypto/`（见 crypto/AGENTS.md） |
@@ -115,7 +118,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理；`pollOnce` 用 `polling` 布尔标志防重入，`inFlightQueueIds`（Set）跳过本轮已投递 queueId，且 `markQueueIdProcessed` 在 `onMessage`/`onWelcome` 之前调用（先标记后处理，避免回调 await 期间被下一轮重复处理）
 - **消息去重**: `DmeStorage.hasMessage(conversationId, messageId)` 判断会话是否已存指定 messageId；`handleIncomingMessage` 的 text/file 分支（含群聊 default 分支）入口做幂等检查，已存在则跳过存储，防止重复存储与误播提示音
 - **输入框多行自适应**: `ChatViewScreen` 输入框 `multiline`，`onContentSizeChange` 动态调高度（clamp 44–240px）；`FlatList + 输入栏` 外层包 `KeyboardAvoidingView`（iOS `behavior='padding'`）；Web/PWA 端 `public/index.html` 把 `html/body/#root` 设为 `100dvh`，让键盘弹起时根容器随可视窗口缩放，避免整页被顶上去；Web 端 header 额外用 `position: fixed` 置顶，`container` 用 `paddingTop: 56` 预留空间，确保标题栏始终可见；Enter 发送仅在**非触屏**设备（`navigator.maxTouchPoints === 0`）的 web 端生效（`onKeyPress` 且 `!shiftKey`），触屏设备回车换行；发送后 `keepInputFocused()` 保持焦点（web 用 `requestAnimationFrame` 补一次），发送按钮外层 `View` 挂 `mousedown` preventDefault 防 web 失焦（`Button` 支持 `onPressIn`）
-- **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`/`file`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
+- **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`/`file`/`post`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble`/`FileMessageBubble` 按 emoji 合并并显示计数
 - **屏蔽列表**: `blockList: string[]` 存储在 `AsyncStorage`，入口为 ChatList 头像菜单 + 私聊管理页（`DmSettingsScreen`）+ 群管理成员行；可 Block/Unblock；被 block 用户的消息不存储、不展示；不修改群成员关系
 - **Profile 批量获取**: 多个 DID 的 profile 必须用 `app.bsky.actor.getProfiles({ actors: string[] })` 批量接口，`getProfiles` 失败时 fallback 到 `sharedDidResolver`（仅 handle）；**ChatListScreen / GroupSettingsScreen / BlockListScreen 等首屏加载**须先读 `profileCacheRef`/`handleCacheRef` 本地缓存同步构造 rows 并立即 `setRows`/`setLoading(false)`，有缺失时再异步调用 `resolveProfiles`/`resolveHandle`，拿到结果后用 `setRows(prev => prev.map(...))` 更新，禁止同步 `await` 网络请求阻塞首屏

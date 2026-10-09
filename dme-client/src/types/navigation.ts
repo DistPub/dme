@@ -12,6 +12,12 @@ export type RootStackParamList = {
           mimeType: string;
           fileSize: number;
         };
+        /** Post-card share intent (from fatesky `DME_SHARE`). */
+        forwardPost?: {
+          uri: string;
+          url: string;
+          html?: string;
+        };
       }
     | undefined;
   ChatView: { friendDid: string } | { groupId: string };

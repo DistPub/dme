@@ -51,7 +51,7 @@ dme-client/
 | 文件消息气泡 | `src/ui/FileMessageBubble.tsx`（图片/视频/音频/文件卡片） |
 | 帖子卡片消息协议 | `src/protocol/types.ts`（`PostMessage` + `POST_MESSAGE_TYPE` + `buildPostEmbedUrl`） |
 | 帖子卡片发送 | `src/state/AppContext.tsx`（`sendPostMessage`） |
-| 帖子卡片气泡 | `src/ui/PostCardBubble.tsx`（web sandbox iframe 预览 + 点击复用 `openMessageLink`；native 纯链接文本） |
+| 帖子卡片气泡 | `src/ui/PostCardBubble.tsx`（web 用 `sandbox="allow-scripts allow-same-origin"` iframe 预览 `fatesky-ssr.../embed/<aturi>` + 点击复用 `openMessageLink`；native 纯链接文本） |
 | PDS URL 解析 | `src/atproto/did.ts`（`resolvePdsUrl`） |
 | 改主题 | `src/ui/theme.ts` |
 | 加新加密操作 | `src/crypto/`（见 crypto/AGENTS.md） |
@@ -160,5 +160,6 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **中断传输重置**: `restoreSession` 启动时把 `downloadStatus:'downloading'` 重置为 `'pending'`（清 downloadProgress）、`uploadStatus:'uploading'` 重置为 `'failed'`，避免刷新/杀进程后消息永远转圈
 - **Web 上传数据源**: web 端上传/重试从 IndexedDB 读原始字节（`getCachedFileBytes(fileId)`），native 端从本地副本 `FileSystem.readAsStringAsync`（position/length 分段）；禁止用 document picker 的原始 fileUri 做上传数据源（刷新/重试后可能失效）
 - **消息文本 URL 链接**: 仅 web 端生效（`linkify`：`http(s)://` 与 `www.`，结尾 `.,;:!?` 不并入链接）；native 纯文本不变。点击走 `openMessageLink`：embed + host 精确匹配 `app.hukoubook.com` → `sendNavigate(path)`（fatesky SPA 跳转）；iOS web + embed → `sendOpenUrl(url)`（fatesky 拉起网页视图）；iOS web 独立 / PC web → `window.open`。`DME_MSG.NAVIGATE`/`OPEN_URL` 须与 fatesky `src/lib/dme-embed/constants.ts` byte-for-byte 同步，fatesky 侧需求文档 `fatesky-embed-link-requirements.md`
+- **帖子卡片 embed iframe 必须 `allow-same-origin`**: `PostCardBubble.tsx` 的 web iframe 用 `sandbox="allow-scripts allow-same-origin"` 预览 `fatesky-ssr.hukoubook.com/embed/<aturi>`。**缺 `allow-same-origin` 会让 iframe 文档变 opaque `null` origin**，导致页面内同域 `<script src="fatesky-ssr.../static/post-*.js">` 被当跨源 CORS 拦截（报 `from origin 'null'`），embed 白屏。加 `allow-same-origin` 只是让子文档保留自身真实 origin（src 域 ≠ DME 域，跨域仍跨域，不泄漏 DME 页面权限）；其余限制（no top-nav/forms/popups）与 `pointerEvents:none` 保持不变
 - **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/字体/图标，离线可启动，**不含 canvaskit.wasm**）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 只注入长缓存 `Cache-Control: public, max-age=31536000, immutable`（**不再需要 COOP/COEP**——web 已无 Skia/CanvasKit/SharedArrayBuffer 依赖），并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`** 直接 `registerRootComponent`（不再 `LoadSkiaWeb` 预加载 CanvasKit）；禁止改回动态 `import('./App')`（会产生 async chunk，手写 `public/index.html` 未注入 `__loadBundleAsync` 运行时会报 `Requiring unknown module`）
 - **`expo export` 构建完不退出**: `expo export -p web` 打完产物（打印 `Exported: dist`）后 Metro 后台 worker 可能 hung 住导致命令不 return；CI/脚本应以产物落盘（`dist/_expo/static/js/web/index-*.js` 存在）为完成判据，再单独跑 workbox。步骤用 `&&` 串联时若 expo 挂起，workbox 永不执行

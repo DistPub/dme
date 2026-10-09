@@ -6,10 +6,17 @@
  *
  *   - Web:      an `uri`-derived sandboxed iframe preview, matching fatesky's
  *               `embed.js` (`<origin>/embed/<uri without at://>`). The iframe is
- *               locked down (`sandbox="allow-scripts"` — no top-navigation, no
- *               same-origin) and made pointer-transparent so the whole card is
- *               one tap target. Tapping reuses `openMessageLink(url)`, i.e. the
- *               exact same platform-aware behavior as a text-message URL.
+ *               locked down (`sandbox="allow-scripts allow-same-origin"` — no
+ *               top-navigation, no forms, no popups) and made pointer-transparent
+ *               so the whole card is one tap target. `allow-same-origin` is
+ *               REQUIRED: without it the iframe document gets an opaque `null`
+ *               origin, which makes its in-page same-origin `<script
+ *               src="fatesky-ssr.../static/*.js">` requests look cross-origin and
+ *               fail CORS (no `Access-Control-Allow-Origin` on those assets). The
+ *               iframe src is a different subdomain from DME, so this does NOT
+ *               grant the embed script access to the DME page's DOM/permissions.
+ *               Tapping reuses `openMessageLink(url)`, i.e. the exact same
+ *               platform-aware behavior as a text-message URL.
  *   - Native:   no iframe — a plain link-text card (per product decision),
  *               tapping is a no-op (consistent with the native URL behavior).
  *
@@ -152,7 +159,7 @@ export function PostCardBubble({
         <View style={styles.embedWrap}>
           {React.createElement('iframe', {
             src: embedUrl,
-            sandbox: 'allow-scripts',
+            sandbox: 'allow-scripts allow-same-origin',
             style: {
               width: '100%',
               height: 240,

@@ -130,6 +130,23 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 
 ---
 
+## 帖子卡片消息：embed iframe s​andbox（2026-10-10 修复）
+
+`kind: 'post'` 消息（fatesky 分享的帖子卡片）在 web 端由 `dme-client/src/ui/PostCardBubble.tsx` 用 iframe 预览 `https://fatesky-ssr.hukoubook.com/embed/<aturi>`（`buildPostEmbedUrl`）。
+
+**iframe 必须用 `s​andbox="allow-scripts allow-same-origin"`**，两个 token 都不可省：
+
+- 缺 `allow-same-origin` 时，iframe 文档获得 **opaque `null` origin**。此时页面内加载**同域**的 `<script src="fatesky-ssr.hukoubook.com/static/post-*.js">`（fatesky-ssr 自己的 SSR 产物 chunk）会被浏览器判定为**跨源请求**（`null !== https://fatesky-ssr.hukoubook.com`），进而要求 CORS，而该静态资源不带 `Access-Control-Allow-Origin` → 报 `blocked by CORS policy ... from origin 'null'`，embed 页白屏。
+- iframe 的 src 域（`fatesky-ssr.hukoubook.com`）与 DME 域（`dme.hukoubook.com`）不同，加 `allow-same-origin` **只是让子文档保留自身真实 origin**，并不会让 embed 脚本访问 DME 页面的 DOM/权限（跨域仍然是跨域）。其余限制（no top-navigation / no forms / no popups）保持不变，`pointerEvents: 'none'` 也保留，交互仍走 `openMessageLink`。
+
+**排查要点**：报错里的 `from origin 'null'` 是 opaque origin 特征——凡是 sandboxed iframe 里出现「同源资源被当跨源 CORS 拦截」，根因都是缺 `allow-same-origin`，而非目标资源缺 CORS 头。
+
+### 关键文件
+
+`dme-client/src/ui/PostCardBubble.tsx`（iframe s​andbox + 指针穿透 + 点击复用 `openMessageLink`）/ `dme-client/src/protocol/types.ts`（`POST_EMBED_ORIGIN` = `https://fatesky-ssr.hukoubook.com` / `buildPostEmbedUrl`）
+
+---
+
 ## 登录：PDS + 2FA 兼容（2026-10-01 落地）
 
 登录页（两端）统一支持 AT Protocol 邮箱二步验证（`authFactorToken`），账号未开 2FA 时行为与之前完全一致：

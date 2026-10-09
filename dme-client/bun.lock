@@ -15,7 +15,6 @@
         "@react-navigation/native": "^7.0.0",
         "@react-navigation/native-stack": "^7.0.0",
         "@scure/base": "^1.2.0",
-        "@shopify/react-native-skia": "1.5.0",
         "expo": "~52.0.0",
         "expo-av": "~15.0.0",
         "expo-clipboard": "~7.0.0",
@@ -540,8 +539,6 @@
 
     "@segment/loosely-validate-event": ["@segment/loosely-validate-event@2.0.0", "https://registry.npmmirror.com/@segment/loosely-validate-event/-/loosely-validate-event-2.0.0.tgz", { "dependencies": { "component-type": "^1.2.1", "join-component": "^1.1.0" } }, "sha512-ZMCSfztDBqwotkl848ODgVcAmN4OItEWDCkshcKz0/W6gGSQayuuCtWV/MlodFivAZD793d6UgANd6wCXUfrIw=="],
 
-    "@shopify/react-native-skia": ["@shopify/react-native-skia@1.5.0", "https://registry.npmmirror.com/@shopify/react-native-skia/-/react-native-skia-1.5.0.tgz", { "dependencies": { "canvaskit-wasm": "0.39.1", "react-reconciler": "0.27.0" }, "peerDependencies": { "react": ">=18.0", "react-native": ">=0.64", "react-native-reanimated": ">=2.0.0" }, "optionalPeers": ["react-native", "react-native-reanimated"], "bin": { "setup-skia-web": "./scripts/setup-canvaskit.js" } }, "sha512-YNcw7cbksiMJ3d8uxh14LFRztUhjQFphFV/GCm8cSO4SxFc4niqnvsGklXNv68DLESMdn5hQnfYpa0oJqaW20w=="],
-
     "@sinclair/typebox": ["@sinclair/typebox@0.27.12", "https://registry.npmmirror.com/@sinclair/typebox/-/typebox-0.27.12.tgz", {}, "sha512-hhyNJ+nbR6ZR7pToHvllEFun9TL0sbL+tk/ON75lo+Xas054uez98qRbsuNt7MBCyZKK4+8Yli/OAGZhmfBZ/g=="],
 
     "@sinonjs/commons": ["@sinonjs/commons@3.0.1", "https://registry.npmmirror.com/@sinonjs/commons/-/commons-3.0.1.tgz", { "dependencies": { "type-detect": "4.0.8" } }, "sha512-K3mCHKQ9sVh8o1C9cxkwxaOmXoAMlDxC1mYyHrjqOWEcBjYr76t96zL2zlj5dUGZ3HSw240X1qgH3Mjf1yJWpQ=="],
@@ -595,8 +592,6 @@
     "@urql/core": ["@urql/core@5.2.0", "https://registry.npmmirror.com/@urql/core/-/core-5.2.0.tgz", { "dependencies": { "@0no-co/graphql.web": "^1.0.13", "wonka": "^6.3.2" } }, "sha512-/n0ieD0mvvDnVAXEQgX/7qJiVcvYvNkOHeBvkwtylfjydar123caCXcl58PXFY11oU1oquJocVXHxLAbtv4x1A=="],
 
     "@urql/exchange-retry": ["@urql/exchange-retry@1.3.2", "https://registry.npmmirror.com/@urql/exchange-retry/-/exchange-retry-1.3.2.tgz", { "dependencies": { "@urql/core": "^5.1.2", "wonka": "^6.3.2" } }, "sha512-TQMCz2pFJMfpNxmSfX1VSfTjwUIFx/mL+p1bnfM1xjjdla7Z+KnGMW/EhFbpckp3LyWAH4PgOsMwOMnIN+MBFg=="],
-
-    "@webgpu/types": ["@webgpu/types@0.1.21", "https://registry.npmmirror.com/@webgpu/types/-/types-0.1.21.tgz", {}, "sha512-pUrWq3V5PiSGFLeLxoGqReTZmiiXwY3jRkIG5sLLKjyqNxrwm/04b4nw7LSmGWJcKk59XOM/YRTUwOzo4MMlow=="],
 
     "@xmldom/xmldom": ["@xmldom/xmldom@0.7.13", "https://registry.npmmirror.com/@xmldom/xmldom/-/xmldom-0.7.13.tgz", {}, "sha512-lm2GW5PkosIzccsaZIz7tp8cPADSIlIHWDFTR1N0SzfinhhYgeIQjFMz4rYzanCScr3DqQLeomUDArp6MWKm+g=="],
 
@@ -741,8 +736,6 @@
     "camelcase-keys": ["camelcase-keys@6.2.2", "https://registry.npmmirror.com/camelcase-keys/-/camelcase-keys-6.2.2.tgz", { "dependencies": { "camelcase": "^5.3.1", "map-obj": "^4.0.0", "quick-lru": "^4.0.1" } }, "sha512-YrwaA0vEKazPBkn0ipTiMpSajYDSe+KjQfrjhcBMxJt/znbvlHd8Pw/Vamaz5EB4Wfhs3SUR3Z9mwRu/P3s3Yg=="],
 
     "caniuse-lite": ["caniuse-lite@1.0.30001806", "https://registry.npmmirror.com/caniuse-lite/-/caniuse-lite-1.0.30001806.tgz", {}, "sha512-72Cuvd95zbSYPKq6Fhg8eDJRlzgWDf7/mtoZv6Qe/DYNCEBdNxoA3+rZAU2ZhGCpZlns3EssFavaZomckT5Uuw=="],
-
-    "canvaskit-wasm": ["canvaskit-wasm@0.39.1", "https://registry.npmmirror.com/canvaskit-wasm/-/canvaskit-wasm-0.39.1.tgz", { "dependencies": { "@webgpu/types": "0.1.21" } }, "sha512-Gy3lCmhUdKq+8bvDrs9t8+qf7RvcjuQn+we7vTVVyqgOVO1UVfHpsnBxkTZw+R4ApEJ3D5fKySl9TU11hmjl/A=="],
 
     "chalk": ["chalk@4.1.2", "https://registry.npmmirror.com/chalk/-/chalk-4.1.2.tgz", { "dependencies": { "ansi-styles": "^4.1.0", "supports-color": "^7.1.0" } }, "sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA=="],
 
@@ -1604,8 +1597,6 @@
 
     "react-native-web": ["react-native-web@0.19.13", "https://registry.npmmirror.com/react-native-web/-/react-native-web-0.19.13.tgz", { "dependencies": { "@babel/runtime": "^7.18.6", "@react-native/normalize-colors": "^0.74.1", "fbjs": "^3.0.4", "inline-style-prefixer": "^6.0.1", "memoize-one": "^6.0.0", "nullthrows": "^1.1.1", "postcss-value-parser": "^4.2.0", "styleq": "^0.1.3" }, "peerDependencies": { "react": "^18.0.0", "react-dom": "^18.0.0" } }, "sha512-etv3bN8rJglrRCp/uL4p7l8QvUNUC++QwDbdZ8CB7BvZiMvsxfFIRM1j04vxNldG3uo2puRd6OSWR3ibtmc29A=="],
 
-    "react-reconciler": ["react-reconciler@0.27.0", "https://registry.npmmirror.com/react-reconciler/-/react-reconciler-0.27.0.tgz", { "dependencies": { "loose-envify": "^1.1.0", "scheduler": "^0.21.0" }, "peerDependencies": { "react": "^18.0.0" } }, "sha512-HmMDKciQjYmBRGuuhIaKA1ba/7a+UsM5FzOZsMO2JYHt9Jh8reCb7j1eDC95NOyUlKM9KRyvdx0flBuDvYSBoA=="],
-
     "react-refresh": ["react-refresh@0.14.2", "https://registry.npmmirror.com/react-refresh/-/react-refresh-0.14.2.tgz", {}, "sha512-jCvmsr+1IUSMUyzOkRcvnVbX3ZYC6g9TDrDbFuFmRDq7PD4yaGbLKNQL6k2jnArV8hjYxh7hVhAZB6s9HDGpZA=="],
 
     "read-pkg": ["read-pkg@5.2.0", "https://registry.npmmirror.com/read-pkg/-/read-pkg-5.2.0.tgz", { "dependencies": { "@types/normalize-package-data": "^2.4.0", "normalize-package-data": "^2.5.0", "parse-json": "^5.0.0", "type-fest": "^0.6.0" } }, "sha512-Ug69mNOpfvKDAc2Q8DRpMjjzdtrnv9HcSMX+4VsZxD1aZ6ZzrIE7rlzXBtWTyhULSMKg076AW6WR5iZpD0JiOg=="],
@@ -2279,8 +2270,6 @@
     "react-native-web/@react-native/normalize-colors": ["@react-native/normalize-colors@0.74.89", "https://registry.npmmirror.com/@react-native/normalize-colors/-/normalize-colors-0.74.89.tgz", {}, "sha512-qoMMXddVKVhZ8PA1AbUCk83trpd6N+1nF2A6k1i6LsQObyS92fELuk8kU/lQs6M7BsMHwqyLCpQJ1uFgNvIQXg=="],
 
     "react-native-web/memoize-one": ["memoize-one@6.0.0", "https://registry.npmmirror.com/memoize-one/-/memoize-one-6.0.0.tgz", {}, "sha512-rkpe71W0N0c0Xz6QD0eJETuWAJGnJ9afsl1srmwPrI+yBCkge5EycXXbYRyvL29zZVUWQCY7InPRCv3GDXuZNw=="],
-
-    "react-reconciler/scheduler": ["scheduler@0.21.0", "https://registry.npmmirror.com/scheduler/-/scheduler-0.21.0.tgz", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-1r87x5fz9MXqswA2ERLo0EbOAU74DpIUO090gIasYTqlVoJeMcl+Z1Rg7WHz+qtPujhS/hGIt9kxZOYBV3faRQ=="],
 
     "read-pkg/type-fest": ["type-fest@0.6.0", "https://registry.npmmirror.com/type-fest/-/type-fest-0.6.0.tgz", {}, "sha512-q+MB8nYR1KDLrgr4G5yemftpMC7/QLqVndBmEEdqzmNj5dcFOO4Oo8qlwZE3ULT3+Zim1F8Kq4cBnikNhlCMlg=="],
 

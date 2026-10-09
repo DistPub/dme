@@ -415,10 +415,18 @@ const resolveProfiles = useCallback(async (
         }
       }
       if (forwardText || forwardFile || forwardPost) {
+        // 推送（而非替换）ChatView，保留 ChatList 在导航栈中，
+        // 使会话内返回按钮能正常回到会话列表；同时清除 forward* 参数，
+        // 避免返回列表时仍停留在「选择转发目标」状态。
+        navigation.setParams({
+          forwardText: undefined,
+          forwardFile: undefined,
+          forwardPost: undefined,
+        } as Partial<NonNullable<RootStackParamList['ChatList']>>);
         if (isGroup) {
-          navigation.replace('ChatView', { groupId });
+          navigation.navigate('ChatView', { groupId });
         } else {
-          navigation.replace('ChatView', { friendDid: groupId });
+          navigation.navigate('ChatView', { friendDid: groupId });
         }
         return;
       }

@@ -101,6 +101,35 @@ fatesky web 端以 iframe 嵌入 DME 时，iOS Safari ITP 会对第三方 iframe
 
 ---
 
+## 消息文本 URL 链接（2026-10-09 落地）
+
+DME web 端文字消息支持 URL 链接：`MessageBubble` 在 web 端 linkify 渲染（`http(s)://` 与 `www.` 自动补 `https://`），链接下划线可点击，结尾句读标点 `.,;:!?` 不并入链接。native 端暂不处理（纯文本，行为不变）。
+
+### 协议变更
+
+`dme-client/src/embed/protocol.ts` 的 `DME_MSG` 新增 2 个消息（与 fatesky `src/lib/dme-embed/constants.ts` byte-for-byte 同步；fatesky 侧需求见 `fatesky-embed-link-requirements.md`）：
+
+| 消息 | 方向 | 用途 |
+|---|---|---|
+| `DME_NAVIGATE` | DME → fatesky | 嵌入模式下点击 fatesky 链接（host 精确匹配 `app.hukoubook.com`），payload `{path}`（pathname+search+hash，不含 origin），fatesky SPA 路由跳转 |
+| `DME_OPEN_URL` | DME → fatesky | iOS web + 嵌入模式点击外部链接，payload `{url}`（绝对 http/https 地址），fatesky 拉起网页视图（iframe 内 `window.open` 不可靠） |
+
+### 点击分流（`dme-client/src/utils/link-open.ts` 的 `openMessageLink`）
+
+1. native → no-op（先不管）
+2. embed + fatesky 链接 → `sendNavigate(path)`（不开新窗口）
+3. iOS web + embed → `sendOpenUrl(href)`
+4. iOS web 独立（非嵌入）→ `window.open` 兜底
+5. PC web → `window.open` 新窗口（`noopener,noreferrer`）
+
+iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'MacIntel' && maxTouchPoints > 1`）。链接配色：outgoing 蓝底气泡白色+下划线，incoming 深灰气泡主题蓝 `#007AFF`+下划线。
+
+### 关键文件
+
+`dme-client/src/utils/link-open.ts`（linkify/parseLink/isIOSWeb/openMessageLink）/ `dme-client/src/ui/MessageBubble.tsx`（web 端 linkify 渲染 + linkIncoming/linkOutgoing 样式）/ `dme-client/src/embed/bridge.ts`（sendNavigate/sendOpenUrl）
+
+---
+
 ## 登录：PDS + 2FA 兼容（2026-10-01 落地）
 
 登录页（两端）统一支持 AT Protocol 邮箱二步验证（`authFactorToken`），账号未开 2FA 时行为与之前完全一致：

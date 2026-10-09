@@ -8,6 +8,8 @@ import { Image } from 'expo-image';
 
 import { theme } from './theme';
 import type { Reaction } from '../storage/db';
+import { linkify, openMessageLink } from '../utils/link-open';
+import type { TextSegment } from '../utils/link-open';
 
 export interface MessageBubbleProps {
   text: string;
@@ -101,6 +103,30 @@ export function MessageBubble({
     });
   }, [onShowActionMenu, clearSelection]);
 
+  const renderText = (): React.ReactNode => {
+    // Native: links not handled yet — render plain text as before.
+    if (Platform.OS !== 'web') {
+      return text;
+    }
+    const segments = linkify(text);
+    const linkStyle = isOutgoing ? styles.linkOutgoing : styles.linkIncoming;
+    return segments.map((segment: TextSegment, index: number) => {
+      if (!segment.url) {
+        return <Text key={index}>{segment.text}</Text>;
+      }
+      const url = segment.url;
+      return (
+        <Text
+          key={index}
+          style={linkStyle}
+          onPress={() => openMessageLink(url)}
+        >
+          {segment.text}
+        </Text>
+      );
+    });
+  };
+
   const effectiveAvatarError = senderAvatarError || avatarError;
 
   const renderAvatar = (): React.JSX.Element | null => {
@@ -154,7 +180,7 @@ export function MessageBubble({
             isOutgoing ? styles.outgoing : styles.incoming,
           ]}
         >
-          <Text style={styles.text}>{text}</Text>
+          <Text style={styles.text}>{renderText()}</Text>
         </Pressable>
         {!isOutgoing && (
           <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
@@ -277,6 +303,14 @@ const styles = StyleSheet.create({
   text: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.body,
+  },
+  linkIncoming: {
+    color: theme.colors.accent,
+    textDecorationLine: 'underline',
+  },
+  linkOutgoing: {
+    color: '#FFFFFF',
+    textDecorationLine: 'underline',
   },
   emojiBtnWrap: {
     padding: 2,

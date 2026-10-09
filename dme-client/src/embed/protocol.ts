@@ -25,6 +25,8 @@ export const DME_MSG = {
   STORAGE_REMOVE: 'DME_STORAGE_REMOVE',
   STORAGE_CLEAR: 'DME_STORAGE_CLEAR',
   STORAGE_DATA: 'DME_STORAGE_DATA',
+  NAVIGATE: 'DME_NAVIGATE',
+  OPEN_URL: 'DME_OPEN_URL',
 } as const;
 
 /** Credentials handed to the embed via the `DME_TOKEN` message. */

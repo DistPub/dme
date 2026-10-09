@@ -239,6 +239,46 @@ export function notifySessionInvalid(jwt: string): void {
 }
 
 /**
+ * Ask the parent to navigate its SPA to an internal path. Used when the user
+ * taps a fatesky link (host=app.hukoubook.com) inside a message while embedded
+ * — the parent updates its own route instead of DME opening a new window.
+ */
+export function sendNavigate(path: string): void {
+  if (!isEmbedContext()) return;
+
+  const target = parentOrigin ?? resolveParentTargetOrigin();
+
+  window.parent.postMessage(
+    {
+      protocol: DME_EMBED_PROTOCOL,
+      type: DME_MSG.NAVIGATE,
+      payload: { path },
+    },
+    target,
+  );
+}
+
+/**
+ * Ask the parent to open an external URL in a web view. Used on iOS web, where
+ * `window.open` from inside the embed cannot launch a new browsing context —
+ * the parent presents the page instead (e.g. SFSafariViewController).
+ */
+export function sendOpenUrl(url: string): void {
+  if (!isEmbedContext()) return;
+
+  const target = parentOrigin ?? resolveParentTargetOrigin();
+
+  window.parent.postMessage(
+    {
+      protocol: DME_EMBED_PROTOCOL,
+      type: DME_MSG.OPEN_URL,
+      payload: { url },
+    },
+    target,
+  );
+}
+
+/**
  * Tear down the bridge: remove the message listener and reset all state.
  */
 export function stop(): void {

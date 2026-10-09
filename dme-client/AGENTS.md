@@ -7,14 +7,14 @@
 
 # dme-client
 
-Expo ~52 + React Native + @shopify/react-native-skia 移动 App。TypeScript strict，Bun 管理。支持 1v1 和群组聊天。
+Expo ~52 + React Native 移动/Web App。TypeScript strict，Bun 管理。支持 1v1 和群组聊天。**Web 产物不含 Skia**（原生仅 QR PNG 生成用 Skia，经 `invite-native.ts` 平台隔离文件懒加载，web 走 `invite-native.web.ts` 覆盖，故 web 无需 CanvasKit WASM / COOP+COEP）。
 
 ## 结构
 
 ```
 dme-client/
 ├── index.js              # 原生入口 (registerRootComponent)
-├── index.web.js          # Web 入口（Skia WASM 异步预加载）
+├── index.web.js          # Web 入口（同步 require('./App')，无 Skia WASM 预加载）
 ├── App.tsx               # 导航根 + Provider 栈
 ├── package.json          # @dme/client
 ├── tsconfig.json         # extends expo/tsconfig.base, strict:true
@@ -26,7 +26,7 @@ dme-client/
     ├── config.ts         # PDS_URL, DME_SERVER_URL, PLC_DIRECTORY_URL, 轮询间隔
     ├── crypto/           # MLS 加密模块（见 crypto/AGENTS.md）
     ├── atproto/          # session.ts / pds.ts / did.ts
-    ├── handshake/        # handshake.ts / invite.ts / qr-encode.ts / qr-decode.ts / group-invite.ts
+    ├── handshake/        # handshake.ts / invite.ts / invite-native.ts(.web.ts) / invite-shared.ts / qr-encode.ts / qr-decode.ts / group-invite.ts
     ├── poll/poller.ts    # 5-15s 随机间隔轮询 + LRU 去重 + 批量预计算 future queueId + polling 重入保护 + inFlightQueueIds 防重复投递
     ├── storage/db.ts     # AsyncStorage，key 前缀 dme:<did>:
     ├── state/AppContext.tsx  # 全局状态（17 字段，28 action）
@@ -108,10 +108,9 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **群聊 Commit**: addMember 产生的 Commit 通过1:1通道发给已有成员（poller 只轮询 application 消息）
 - **状态管理**: 每字段一个 `useState` 的 React Context（非 useReducer），28 个 `useCallback` action
 - **chatListVersion**: 单调计数器，storage 变化时递增触发 UI 刷新
-- **屏幕模式**: `<View>` -> 绝对定位 `<Canvas><Fill/></Canvas>` -> flexbox 内容（RN Text/TextInput/Button）
+- **屏幕模式**: `<View>` -> 绝对定位纯色 `View`（`ScreenBackground`）-> flexbox 内容（RN Text/TextInput/Button）
 - **阶段机**: 每个屏幕用联合类型 `Phase` 控制条件渲染
-- **Skia 范围**: 仅屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text）
-- **字体**: `FontProvider` 一次性加载 Roboto-Regular.ttf，`useAppFont(size)` 返回 SkFont
+- **Skia 范围**: 全应用仅剩 **native QR PNG 生成**（`invite-native.ts` 的 `generateQrPngBytesPlatform`）用 Skia；屏幕背景改纯色 `View`（`ScreenBackground`），按钮用原生 `Button`（Pressable+Text），字体用 RN 默认（`FontProvider`/`SkiaButton` 已删除）。web 端因平台后缀隔离（`invite-native.web.ts`）完全不含 Skia，故无需 CanvasKit WASM / COOP+COEP
 - **资产目录分工**: 根级 `assets/images/` = 品牌/图标/启动屏构建资产（由 `app.json` 消费，如 icon / adaptiveIcon / favicon / splash），`src/assets/` = 运行时资源（代码 `require`），两者勿混
 - **主题**: `theme.ts` 单一 `as const` 对象，暗色（#0a0a0a），无切换
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
@@ -133,7 +132,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 
 - **无 Expo Router**: 用手动 `NavigationContainer` 而非文件路由，无 `app/` 目录
 - **MessageBubble 非 Skia**: 实际用原生 RN View/Text，非 Skia Canvas 渲染
-- **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text，支持中文），`SkiaButton.tsx` 保留但无引用
+- **Skia 已彻底移出 web**: `FontProvider.tsx`/`SkiaButton.tsx` 已删除；`invite.ts` 的 Skia 分支抽到平台隔离文件 `invite-native.ts`（native）+ `invite-native.web.ts`（web 空实现返回 null）。**禁止在 web 可达模块里静态 import `@shopify/react-native-skia`，也禁止改回懒 `require` 隔离**（Metro 静态分析会把目标模块打进 bundle，必须用 `.web.ts` 平台后缀）
 - **RootStackParamList**: 集中定义在 `src/types/navigation.ts`，App.tsx 和各屏幕从此 import
 - **secretTree 索引**: ts-mls 的 SecretTree 按树位置索引（0=leaf0, 1=parent, 2=leaf1），`getExpectedGeneration` 内部用 `leafIndex * 2`
 - **群主不能离开**: MLS 禁止 removeMember 移除 committer，群主只能解散群组
@@ -161,4 +160,5 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **中断传输重置**: `restoreSession` 启动时把 `downloadStatus:'downloading'` 重置为 `'pending'`（清 downloadProgress）、`uploadStatus:'uploading'` 重置为 `'failed'`，避免刷新/杀进程后消息永远转圈
 - **Web 上传数据源**: web 端上传/重试从 IndexedDB 读原始字节（`getCachedFileBytes(fileId)`），native 端从本地副本 `FileSystem.readAsStringAsync`（position/length 分段）；禁止用 document picker 的原始 fileUri 做上传数据源（刷新/重试后可能失效）
 - **消息文本 URL 链接**: 仅 web 端生效（`linkify`：`http(s)://` 与 `www.`，结尾 `.,;:!?` 不并入链接）；native 纯文本不变。点击走 `openMessageLink`：embed + host 精确匹配 `app.hukoubook.com` → `sendNavigate(path)`（fatesky SPA 跳转）；iOS web + embed → `sendOpenUrl(url)`（fatesky 拉起网页视图）；iOS web 独立 / PC web → `window.open`。`DME_MSG.NAVIGATE`/`OPEN_URL` 须与 fatesky `src/lib/dme-embed/constants.ts` byte-for-byte 同步，fatesky 侧需求文档 `fatesky-embed-link-requirements.md`
-- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/canvaskit.wasm/字体/图标，离线可启动）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`，并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`**（延迟到 CanvasKit 就绪后执行），`LoadSkiaWeb({ locateFile: (file) => `/${file}` })` 用**绝对路径** `/`；禁止改回动态 `import('./App')`（会产生 async chunk，需 `@expo/metro-runtime` 的 `__loadBundleAsync`，而手写 `public/index.html` 不会注入该运行时，导致 `Requiring unknown module` 报错）
+- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/字体/图标，离线可启动，**不含 canvaskit.wasm**）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 只注入长缓存 `Cache-Control: public, max-age=31536000, immutable`（**不再需要 COOP/COEP**——web 已无 Skia/CanvasKit/SharedArrayBuffer 依赖），并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`** 直接 `registerRootComponent`（不再 `LoadSkiaWeb` 预加载 CanvasKit）；禁止改回动态 `import('./App')`（会产生 async chunk，手写 `public/index.html` 未注入 `__loadBundleAsync` 运行时会报 `Requiring unknown module`）
+- **`expo export` 构建完不退出**: `expo export -p web` 打完产物（打印 `Exported: dist`）后 Metro 后台 worker 可能 hung 住导致命令不 return；CI/脚本应以产物落盘（`dist/_expo/static/js/web/index-*.js` 存在）为完成判据，再单独跑 workbox。步骤用 `&&` 串联时若 expo 挂起，workbox 永不执行

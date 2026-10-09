@@ -4,7 +4,6 @@ module.exports = {
     'index.html',
     'manifest.json',
     'logo.png',
-    'canvaskit.wasm',
     'fonts/*.ttf',
     'icons/*.png',
     '_expo/static/js/**/*.js',
@@ -12,7 +11,7 @@ module.exports = {
     '_expo/static/media/**/*',
   ],
   globIgnores: ['sw.js', 'metadata.json', '_headers'],
-  // 运行时请求用绝对路径（/fonts/Roboto-Regular.ttf、/canvaskit.wasm），
+  // 运行时请求用绝对路径（如 /fonts/Roboto-Regular.ttf），
   // precache URL 必须同为绝对前缀，否则 lookup 失效无法离线命中
   modifyURLPrefix: { '': '/' },
   maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,

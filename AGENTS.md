@@ -15,7 +15,7 @@ DME (Decentralized Message Envelope) 是基于 AT Protocol (Bluesky) 的端到�
 
 ```
 dme/
-├── dme-client/     Expo + RN Skia 移动 App（TS strict, Bun）
+├── dme-client/     Expo + RN 移动/Web App（TS strict, Bun；web 产物不含 Skia）
 ├── dme-miniapp/    微信小程序端（Taro 4 + React 18，复刻 dme-client 全部功能）
 ├── dme-server/     Go AppView - Jetstream 消费 + BadgerDB KV + 批量盲查
 ├── dme-gateway/    Cloudflare Worker - 反向代理 + blob CDN 缓存
@@ -203,7 +203,7 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 | PDS 记录写入 + 批量查询 | `dme-client/src/atproto/pds.ts` (envelope + identity backup + AppView proxy，**网关模式下自动发送 `dme-server` header 指定目标 server**) |
 | AppView proxy 配置 | `dme-client/src/config.ts` (DEFAULT_APPVIEW_PROXY) |
 | 网关默认地址 | `dme-client/src/config.ts` (DEFAULT_DME_GATEWAY_URL = `https://e2ee.hukoubook.com`) |
-| 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代 SkiaButton；支持 `onPressIn`） |
+| 按钮组件 | `dme-client/src/ui/Button.tsx`（Pressable+Text，numberOfLines=1，替代已删除的 SkiaButton；支持 `onPressIn`） |
 | 多语言 (i18n) | `dme-client/src/i18n/I18nContext.tsx`（`I18nProvider` + `useI18n`）+ `i18n/translations.ts`（zh/en 字典，202 key）+ `i18n/format.ts`（`t()` 内插） |
 | Web 页面标题 | `dme-client/src/utils/web-title.ts`（`setWebTitle` + `useWebTitle`，Web 注入 `document.title = "<标题> - DME"`，Native no-op） |
 | 主页（聊天列表） | `dme-client/src/ui/ChatListScreen.tsx`（标题 i18n `chatlist.title`，默认中文「隐世」；顶部栏用户头像右侧上下展示昵称+handle；列表行 1:1 头像+昵称+时间+@handle+预览，群聊同样布局 + 头像占位 + creator handle；时间/预览文案走 `t()`） |
@@ -287,7 +287,7 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 | `decryptBackup` | func | backup.ts | 解密 base64url -> FullBackupData |
 | `backupIdentity` | action | AppContext.tsx | 密码加密身份+MLS会话+KeyPackage+群聊元数据+屏蔽列表，写入 PDS |
 | `restoreIdentityFromBackup` | action | AppContext.tsx | 从 PDS 解密恢复全部数据（含屏蔽列表），reload poller sessions |
-| `Button` | component | Button.tsx | Pressable+Text 按钮（numberOfLines=1，支持中文，替代 SkiaButton） |
+| `Button` | component | Button.tsx | Pressable+Text 按钮（numberOfLines=1，支持中文，替代已删除的 SkiaButton） |
 | `setAppViewProxy` | action | AppContext.tsx | 更新 atproto-proxy header 值（持久化 + 实时更新 DmePds） |
 | `sendGroupInvites` | action | AppContext.tsx | 通过1:1通道发送群聊邀请 |
 | `respondToGroupInvite` | action | AppContext.tsx | 接受/拒绝群聊邀请 |
@@ -357,8 +357,8 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 | `Language` / `LANGUAGES` | type / const | translations.ts | `'zh' \| 'en'`；`LANGUAGES` 为 Settings 语言选项 `[{code:'zh',label:'中文'},{code:'en',label:'English'}]` |
 | `setWebTitle` | func | web-title.ts | 设置浏览器标签标题为 `"<title> - DME"`，仅 Web 生效（`Platform.OS==='web'` 且有 `document`），Native no-op |
 | `useWebTitle` | hook | web-title.ts | 通过 `useFocusEffect` 在页面聚焦/`title` 变化时重设标题（用于会话名异步解析、群设置返回不重挂载、语言切换场景），Native no-op |
-| `generateQrSvgDataUri` | func | invite.ts | 用 `qrcode` 库 `toString(type:'svg')` 生成 QR SVG 并编码为 data URI，供 Web/跨平台预览（绕过 Skia 图形上下文缺失） |
-| `generateQrPngBytes` | func | invite.ts | 生成 QR PNG 字节（**async**）：Web 走 SVG->`<img>`->canvas 光栅化，Native 走 Skia 离屏 Surface |
+| `generateQrSvgDataUri` | func | invite.ts | 用 `qrcode` 库 `toString(type:'svg')` 生成 QR SVG 并编码为 data URI，供 Web/跨平台预览（无 Skia 依赖） |
+| `generateQrPngBytes` | func | invite.ts | 生成 QR PNG 字节（**async**）：Web 走 SVG->`<img>`->canvas 光栅化，Native 经平台隔离文件 `invite-native.ts` 走 Skia 离屏 Surface（web 由 `invite-native.web.ts` 覆盖为返回 null） |
 
 ## 群聊协议
 
@@ -514,7 +514,7 @@ Web 端浏览器标签标题统一为 `"<页面标题> - DME"`，由 `src/utils/
 - **成员离开**: MLS 禁止自身 removeMember，通过 `group_member_left` 通知其他成员，群主收到后执行 removeMember
 - **i18n**: 全部 UI 文案走 `useI18n().t('key')` / `t('key', {params})`，禁止硬编码中英文字符串；字典键命名 `<screen>.<name>`（通用键 `common.*`），新增 key 必须同时登记 `zh` 与 `en`；`en` 缺失时回退 `zh` 再回退 key，占位符用 `{name}`；群聊系统消息与邀请帖正文在**生成时**按当前 `language` 渲染后存入 `plaintext`（历史消息不随语言切换改变）
 - **Web 页面标题**: `document.title` 统一为 `"<标题> - DME"`，仅 Web 生效；静态路由经 `App.tsx` 的 `ROUTE_TITLE_KEYS` 集中映射，会话级动态标题（ChatView/GroupSettings/DmSettings）由屏幕自身 `useWebTitle` 管理，语言切换时通过 `useEffect([t])` 重设
-- **Skia 渲染范围**: 屏幕背景 `<Canvas><Fill/></Canvas>` 用 Skia；按钮用原生 `Button`（Pressable+Text，支持中文）；头像用 `expo-image`；**QR 预览/生成不再用 Skia**——Web 上 Skia `<QRCode>` 与 `Skia.Surface.MakeOffscreen` 需要图形上下文，部分 Web 环境缺失会导致预览空白或崩溃，故预览改走 `generateQrSvgDataUri`（`qrcode` 库 SVG -> data URI -> `expo-image` 渲染），上传帖子的 PNG 字节 `generateQrPngBytes` 在 Web 上走 SVG->`<img>`->canvas 光栅化，Native 才走 Skia
+- **Skia 渲染范围**: 全应用仅剩 **native QR PNG 生成**（`handshake/invite-native.ts` 的 `generateQrPngBytesPlatform`）用 Skia；屏幕背景改纯色 `View`（`ui/ScreenBackground.tsx`），按钮用原生 `Button`（Pressable+Text，支持中文），头像用 `expo-image`；**web 端完全不含 Skia**——`invite-native.ts` 被平台文件 `invite-native.web.ts`（返回 null）覆盖，web 的 QR 预览走 `generateQrSvgDataUri`（`qrcode` 库 SVG -> data URI -> `expo-image` 渲染），上传帖子的 PNG 字节 `generateQrPngBytes` 在 Web 走 SVG->`<img>`->canvas 光栅化。因 web 不再打包 Skia/CanvasKit，`public/_headers` 无需 COOP/COEP
 - **AppView proxy**: PDS 写入通过 `agent.configureProxy()` 设置全局 `atproto-proxy` header，默认值 `did:web:fatesky.hukoubook.com#fatesky_appview`，可在 Settings 页面自定义
 - **头像渲染**: `expo-image` 替代 `react-native` Image，`contentFit="cover"` + `overflow: 'hidden'`，加载失败回退 handle 首字母
 - **DID 解析**: 统一使用 `atproto/resolver.ts` 导出的 `sharedDidResolver` 单例（带 `MemoryCache`），禁止直接 `new DidResolver({})` 或绕过缓存直接 fetch PLC directory
@@ -575,12 +575,12 @@ cd dme-miniapp && npx tsc --noEmit                    # 类型检查
 
 - **Lexicon key**: envelope 用 `"key": "tid"`（AT Protocol 自动生成时间戳 rkey）；backup 用 `"key": "literal"`（rkey 固定 `"self"`，putRecord upsert）
 - **Gateway**: Cloudflare Worker，职责 `/xrpc/dme.file.blob`（blob CDN：流式转发 PDS `com.atproto.sync.getBlob`，15s 上游超时（AbortController，失败返回 504），≤100MB 才写 `caches.default` 7 天缓存且经 `ctx.waitUntil` 后台写入不阻塞响应、缓存失败不影响下载；禁止 `arrayBuffer()` 全量缓冲+`clone()`，大文件会撞 Worker 128MB 内存/CPU 限额表现为请求无响应） + `/xrpc/dme.batch.get`（反代到 `DME_SERVER_URL`，隐藏客户端 IP）。全局 OPTIONS 预检 + CORS（**允许 `dme-server`、`Authorization` header**，预检缓存 24h），以支持浏览器 / Expo web 直连。`wrangler.toml` 的 `DME_SERVER_URL` 变量指向 dme-server。**请求头 `dme-server` 可动态覆盖目标 server 地址**（如 `curl -H "dme-server: https://dme.example.com" ...`），无需重新部署。Gateway 留空 → 客户端直连 server，blob 走 PDS `com.atproto.sync.getBlob`。群聊后续成员走 CF 边缘缓存，发送方 PDS 每分片只被打 1 次。**匿名性**：代码层显式只转发 `Content-Type`，不透传 `CF-Connecting-IP`/`X-Forwarded-For`/`User-Agent` 等；Wrangler 注入中间件 `strip-cf-connecting-ip-header.js` 再次兜底删除 `CF-Connecting-IP`。dme-server 仅见 CF 边缘 IP。
-- **SkiaButton 已废弃**: 所有屏幕改用 `Button.tsx`（Pressable+Text），`SkiaButton.tsx` 保留但无引用
+- **SkiaButton/FontProvider 已删除**: 二者是 Skia 渲染残留，已从代码库移除（无引用）。所有屏幕改用 `Button.tsx`（Pressable+Text）
 - **主页顶部栏**: ChatListScreen 顶部栏仅保留 +Group、+Friend 两个直接按钮 + 用户头像；Scan/Settings/Block List/Logout 收入头像弹出菜单
 - **expo-image**: 新增依赖 `expo-image@~2.0.7`（Expo 52 兼容），替代 `react-native` Image 用于头像渲染
 - **i18n Provider 层级**: `I18nProvider` 必须包在 `AppProvider` 外层（`AppContext` 内部用 `t()` 渲染群系统消息文案）；`AppProvider` 里 `useI18n()` 取 `language`，凡生成文案的 `useCallback` 依赖数组须含 `language`
 - **i18n 字典键数**: `zh` 与 `en` 字典各 202 key，键命名 `<screen>.<name>`，新增时两语言同时登记；`en` 缺失回退 `zh`，再回退 key
-- **QR 渲染去 Skia**: 预览与 PNG 生成在 Web 上绕过 Skia（`Skia.Surface.MakeOffscreen` 需图形上下文，部分 Web 环境缺失致预览空白/崩溃）；`generateQrSvgDataUri` 走 `qrcode` SVG -> data URI -> `expo-image`，`generateQrPngBytes` 在 Web 走 SVG->`<img>`->canvas，Native 才用 Skia。`generateQrPngBytes` 现为 **async**（返回 `Promise<Uint8Array | null>`）
+- **QR 渲染去 Skia**: 预览与 PNG 生成在 Web 上绕过 Skia；`generateQrSvgDataUri` 走 `qrcode` SVG -> data URI -> `expo-image`，`generateQrPngBytes` 在 Web 走 SVG->`<img>`->canvas，Native 走 Skia 离屏 Surface（经平台隔离文件 `invite-native.ts`；web 由 `invite-native.web.ts` 覆盖）。`generateQrPngBytes` 现为 **async**（返回 `Promise<Uint8Array | null>`）
 - **Bluesky 邀请帖多语言**: 邀请帖正文（`generateInvitePostText` / `generateAddFriendPostText`）与 embed 图片 alt（`post.qrAlt`）随发帖时 `language` 渲染，需显式传 `lang` 参数
 - **Web 页面标题**: `document.title` 统一 `"<标题> - DME"`，仅 Web 生效；静态路由由 `App.tsx` 的 `ROUTE_TITLE_KEYS` + `onStateChange` 集中管理，会话级动态标题（ChatView/GroupSettings/DmSettings）加入 `SCREEN_MANAGED_TITLES` 由屏幕自身 `useWebTitle` 管理；RN Navigation 自带标题以 `documentTitle={{ enabled: false }}` 关闭
 - **备份恢复**: 恢复后 MLS 会话+KeyPackage池+群聊元数据+屏蔽列表完整恢复，无需重新握手；消息历史不备份
@@ -599,7 +599,7 @@ cd dme-miniapp && npx tsc --noEmit                    # 类型检查
 - **Web emoji 反应触发**: Web 无 `onLongPress`，每条文本/文件消息气泡旁固定 emoji 按钮（incoming 右下/outgoing 左下）唤起 `EmojiPicker` 浮层
 - **expo-av**: 新增依赖 `expo-av@~15.0.0`（Expo 52 兼容，已 deprecated 但仍可用），用于 Native 端播放提示音；Web 端用 Web Audio API 无需此依赖
 - **expo-document-picker**: 新增依赖 `expo-document-picker@~57.0.1`（Expo 52 兼容），用于文件选择（`getDocumentAsync({type: '*/*'})`），返回 `{uri, name, mimeType, size}`
-- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/canvaskit.wasm/字体/图标，离线可启动）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 注入 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`，Skia CanvasKit WASM 必需）与长缓存 `Cache-Control: public, max-age=31536000, immutable`，并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 dme-client/scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`**（延迟到 CanvasKit 就绪后执行），`LoadSkiaWeb({ locateFile: (file) => `/${file}` })` 用**绝对路径** `/`；禁止改回动态 `import('./App')`（会产生 async chunk，需 `@expo/metro-runtime` 的 `__loadBundleAsync`，而手写 `public/index.html` 不会注入该运行时，导致 `Requiring unknown module` 报错）
+- **Web 部署 (Cloudflare Pages)**: `bun run build:web`（`expo export -p web && workbox generateSW workbox.config.js`，devDependency `workbox-cli`（bin `workbox`））产物 `dist/` 静态托管，含 `dist/sw.js`（预缓存 index.html/JS/字体/图标，离线可启动，**不含 canvaskit.wasm**）+ `dist/manifest.json` + `dist/icons/`；`public/_headers` 只注入长缓存 `Cache-Control: public, max-age=31536000, immutable`（**不再需要 COOP/COEP**——web 已无 Skia/CanvasKit/SharedArrayBuffer 依赖），并按路径拆分缓存：`/sw.js`、`/manifest.json` → `no-cache`，`/`、`/index.html` → `max-age=0, must-revalidate`（均用 `! Cache-Control` 摘除 `/*` 长缓存，**顺序敏感：`/*` 在前**）；SW 静默后台升级（skipWaiting+clientsClaim，无提示）；图标由 `python3 dme-client/scripts/generate-brand-assets.py` 生成到 `public/icons/`（192/512/maskable/180/favicon）；`index.web.js` 用**同步 `require('./App')`** 直接 `registerRootComponent`（不再 `LoadSkiaWeb` 预加载 CanvasKit）；禁止改回动态 `import('./App')`（会产生 async chunk，手写 `public/index.html` 未注入 `__loadBundleAsync` 运行时会报 `Requiring unknown module`）。**`expo export -p web` 打完产物后 Metro worker 可能 hung 住不退出**——以产物落盘为完成判据，`&&` 串联 workbox 时若 expo 挂起则 workbox 永不执行
 - **iOS Safari 兼容**: ts-mls 的 `nobleCryptoProvider` 会探测 `crypto.subtle` 并走 WebCrypto Ed25519/X25519，iOS < 17.4 会抛 `NotSupportedError`，故所有取 CiphersuiteImpl 处改用 `getNobleMlsImpl()`（hash/kdf/signature/hpke/rng 全部纯 JS）；`deriveMessageQueueId` 内部自行取 impl（不再收 impl 参数）；`getMlsImpl` 已删除
 - **CI Release**: `.github/workflows/release.yml` 交叉编译 6 目标（linux amd64/arm64/armv7、darwin amd64/arm64、windows amd64），`CGO_ENABLED=0`，已移除 `docker/setup-qemu-action`（Go 纯 Go 交叉编译无需 QEMU），Build/Verify 步骤显式 `shell: bash`（Windows runner 默认 pwsh 不支持此处语法）；打 `v*` tag 触发 `go build -ldflags="-s -w -X main.version=<tag>"` 并发布 GitHub Release
 - **Web 消息操作菜单**: Web 无 `onLongPress`，但气泡 `ref` 挂 `contextmenu` 事件监听器捕获右键，调用 `measureInWindow` 取坐标后弹出 `MessageActionMenu`；原生走 `onLongPress` 同一路径

@@ -3,10 +3,11 @@
  *
  * Provider stack:
  *   GestureHandlerRootView
- *     -> AppProvider
- *       -> SafeAreaProvider
- *         -> NavigationContainer
- *           -> Stack.Navigator
+ *     -> I18nProvider
+ *       -> AppProvider
+ *         -> SafeAreaProvider
+ *           -> NavigationContainer
+ *             -> Stack.Navigator
  *
  * Screens: Login, Setup, ChatList, ChatView, QrDisplay, QrScan.
  * On mount: tries session restore; routes to Setup (which routes to ChatList
@@ -27,7 +28,6 @@ import { AppProvider, useApp } from './src/state/AppContext';
 import { I18nProvider, useI18n } from './src/i18n/I18nContext';
 import { isEmbedContext } from './src/embed/protocol';
 import { theme } from './src/ui/theme';
-import { FontProvider } from './src/ui/FontProvider';
 import { LogoSpinner } from './src/ui/LogoSpinner';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { SetupScreen } from './src/ui/SetupScreen';
@@ -258,11 +258,9 @@ export default function App(): React.JSX.Element {
     <GestureHandlerRootView style={styles.root}>
       <I18nProvider>
         <AppProvider>
-          <FontProvider>
-            <SafeAreaProvider>
-              <NavigationRoot />
-            </SafeAreaProvider>
-          </FontProvider>
+          <SafeAreaProvider>
+            <NavigationRoot />
+          </SafeAreaProvider>
         </AppProvider>
       </I18nProvider>
     </GestureHandlerRootView>

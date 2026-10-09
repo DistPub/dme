@@ -11,7 +11,6 @@
  */
 
 import { Agent, RichText } from '@atproto/api';
-import { ImageFormat, Skia } from '@shopify/react-native-skia';
 import QRCodeLib from 'qrcode';
 import { Platform } from 'react-native';
 
@@ -19,11 +18,11 @@ import { getRemoteEncryptionKey } from '../atproto/did';
 import { t } from '../i18n/format';
 import type { Language } from '../i18n/translations';
 import type { DmeStorage } from '../storage/db';
+import { QR_MARGIN_MODULES, QR_MODULE_SIZE } from './invite-shared';
+import { generateQrPngBytesPlatform } from './invite-native';
+import type { BobStatus } from './invite-shared';
 
-export type BobStatus = 'not_registered' | 'registered_not_friend' | 'already_friend';
-
-const QR_MODULE_SIZE = 4;
-const QR_MARGIN_MODULES = 4;
+export type { BobStatus } from './invite-shared';
 
 /**
  * 检查 Bob 的 DME 状态。
@@ -56,44 +55,14 @@ export async function checkBobDmeStatus(
 }
 
 export async function generateQrPngBytes(data: string): Promise<Uint8Array | null> {
-  const qr = QRCodeLib.create(data, { errorCorrectionLevel: 'L' });
-  const moduleCount = qr.modules.size;
-  const size = (moduleCount + QR_MARGIN_MODULES * 2) * QR_MODULE_SIZE;
-
   if (Platform.OS === 'web') {
+    const qr = QRCodeLib.create(data, { errorCorrectionLevel: 'L' });
+    const moduleCount = qr.modules.size;
+    const size = (moduleCount + QR_MARGIN_MODULES * 2) * QR_MODULE_SIZE;
     return rasterizeSvgToPng(await renderQrSvg(data, size, moduleCount), size);
   }
 
-  const surface = Skia.Surface.MakeOffscreen(size, size);
-  if (!surface) return null;
-
-  const canvas = surface.getCanvas();
-  canvas.clear(Skia.Color('white'));
-
-  const blackPaint = Skia.Paint();
-  blackPaint.setColor(Skia.Color('black'));
-
-  for (let row = 0; row < moduleCount; row++) {
-    for (let col = 0; col < moduleCount; col++) {
-      if (qr.modules.get(row, col)) {
-        canvas.drawRect(
-          Skia.XYWHRect(
-            (col + QR_MARGIN_MODULES) * QR_MODULE_SIZE,
-            (row + QR_MARGIN_MODULES) * QR_MODULE_SIZE,
-            QR_MODULE_SIZE,
-            QR_MODULE_SIZE,
-          ),
-          blackPaint,
-        );
-      }
-    }
-  }
-
-  const image = surface.makeImageSnapshot();
-  const bytes = image.encodeToBytes(ImageFormat.PNG);
-  surface.dispose();
-
-  return bytes as Uint8Array;
+  return generateQrPngBytesPlatform(data);
 }
 
 function renderQrSvg(data: string, size: number, moduleCount: number): Promise<string> {

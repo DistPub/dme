@@ -7,16 +7,22 @@
  *   - Web:      an `uri`-derived sandboxed iframe preview, matching fatesky's
  *               `embed.js` (`<origin>/embed/<uri without at://>`). The iframe is
  *               locked down (`sandbox="allow-scripts allow-same-origin"` — no
- *               top-navigation, no forms, no popups) and made pointer-transparent
- *               so the whole card is one tap target. `allow-same-origin` is
- *               REQUIRED: without it the iframe document gets an opaque `null`
- *               origin, which makes its in-page same-origin `<script
- *               src="fatesky-ssr.../static/*.js">` requests look cross-origin and
- *               fail CORS (no `Access-Control-Allow-Origin` on those assets). The
- *               iframe src is a different subdomain from DME, so this does NOT
- *               grant the embed script access to the DME page's DOM/permissions.
- *               Tapping reuses `openMessageLink(url)`, i.e. the exact same
- *               platform-aware behavior as a text-message URL.
+ *               top-navigation, no forms, no popups). Its height adapts to the
+ *               content: measured on load when the browser permits it, or
+ *               adopted from a `{height}` postMessage sent by the embed page;
+ *               when neither is available the iframe scrolls natively so the
+ *               full post stays reachable (never clipped). `allow-same-origin`
+ *               is REQUIRED: without it the iframe document gets an opaque
+ *               `null` origin, which makes its in-page same-origin `<script
+ *               src="fatesky-ssr.../static/*.js">` requests look cross-origin
+ *               and fail CORS (no `Access-Control-Allow-Origin` on those
+ *               assets). The iframe src is a different subdomain from DME, so
+ *               this does NOT grant the embed script access to the DME page's
+ *               DOM/permissions. Because the iframe accepts pointer events for
+ *               native scrolling, taps on the embed area go to the embed page —
+ *               tap the caption row ("帖子") to open the link, reusing
+ *               `openMessageLink(url)` (the exact platform-aware behavior of a
+ *               text-message URL).
  *   - Native:   no iframe — a plain link-text card (per product decision),
  *               tapping is a no-op (consistent with the native URL behavior).
  *
@@ -51,6 +57,12 @@ export interface PostCardBubbleProps {
 const BUBBLE_MARGIN = 16;
 const CARD_MAX_WIDTH = 320;
 
+// Embed iframe height: starts at a sane default, then adapts to the content.
+// If the real content height can't be measured (cross-origin), the iframe
+// scrolls natively instead of clipping — never hiding the rest of the post.
+const POST_IFRAME_DEFAULT_HEIGHT = 320;
+const POST_IFRAME_MAX_HEIGHT = 700;
+
 export function PostCardBubble({
   uri,
   url,
@@ -69,6 +81,10 @@ export function PostCardBubble({
   const emojiBtnRef = useRef<View>(null);
   const bubbleRef = useRef<View>(null);
   const [avatarError, setAvatarError] = useState(false);
+  // Live height of the embed iframe. Updated on load (same-origin measure) or
+  // via a height postMessage from the embed page; otherwise the default height
+  // holds and the iframe's native scrollbar takes over.
+  const [iframeHeight, setIframeHeight] = useState(POST_IFRAME_DEFAULT_HEIGHT);
 
   useEffect(() => {
     setAvatarError(false);
@@ -130,6 +146,47 @@ export function PostCardBubble({
     openMessageLink(url);
   }, [url]);
 
+  // The post embed is served cross-origin (fatesky-ssr.hukoubook.com), so the
+  // parent page usually can't read the iframe's contentDocument. We still try
+  // (it works whenever the browser permits it) and size the card to the
+  // content. If we can't measure it, the default height stays and the iframe
+  // scrolls natively — the rest of the post stays reachable either way.
+  const handleIframeLoad = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>): void => {
+    const el = e.currentTarget;
+    try {
+      const doc = el.contentDocument ?? el.contentWindow?.document;
+      const h = doc
+        ? Math.max(doc.body?.scrollHeight ?? 0, doc.documentElement?.scrollHeight ?? 0)
+        : 0;
+      if (h > 0) {
+        setIframeHeight(Math.min(POST_IFRAME_MAX_HEIGHT, h));
+      }
+    } catch {
+      // Cross-origin: contentDocument access throws. Keep the default height;
+      // the iframe's own scrollbar handles the overflow.
+    }
+  }, []);
+
+  // Some embed pages post their rendered height back to the parent frame. If
+  // one arrives, adopt it so the card fits the content exactly (no scrollbar).
+  // This is a bonus path — native scrolling covers everything else.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onResize = (ev: MessageEvent): void => {
+      const data = ev.data as { height?: unknown; type?: string } | null;
+      if (
+        data &&
+        typeof data.height === 'number' &&
+        Number.isFinite(data.height) &&
+        data.height > 0
+      ) {
+        setIframeHeight(Math.min(POST_IFRAME_MAX_HEIGHT, Math.round(data.height)));
+      }
+    };
+    window.addEventListener('message', onResize);
+    return () => window.removeEventListener('message', onResize);
+  }, []);
+
   const effectiveAvatarError = senderAvatarError || avatarError;
 
   const renderAvatar = (): React.JSX.Element | null => {
@@ -156,16 +213,29 @@ export function PostCardBubble({
     const embedUrl = buildPostEmbedUrl(uri);
     if (Platform.OS === 'web' && embedUrl) {
       return (
-        <View style={styles.embedWrap}>
+        <View
+          style={[
+            styles.embedWrap,
+            // Match the message bubble background: blue for outgoing, dark gray
+            // for incoming (visible while the embed loads / if it's transparent).
+            isOutgoing ? styles.outgoing : styles.incoming,
+          ]}
+        >
           {React.createElement('iframe', {
             src: embedUrl,
             sandbox: 'allow-scripts allow-same-origin',
+            onLoad: handleIframeLoad,
             style: {
               width: '100%',
-              height: 240,
+              height: iframeHeight,
               border: 'none',
               display: 'block',
-              pointerEvents: 'none',
+              // `auto` lets the embed scroll natively when its content is taller
+              // than `iframeHeight` (cross-origin content can't be measured),
+              // so the user can always reach the full post instead of it being
+              // clipped. Taps on the iframe area go to the embed page — tap the
+              // caption row below to open the link.
+              pointerEvents: 'auto',
             },
           })}
         </View>
@@ -324,7 +394,6 @@ const styles = StyleSheet.create({
   },
   embedWrap: {
     width: CARD_MAX_WIDTH - 16,
-    height: 240,
     borderRadius: theme.borderRadius.sm,
     overflow: 'hidden',
     backgroundColor: theme.colors.surface,

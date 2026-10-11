@@ -30,7 +30,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 
 import { theme } from './theme';
@@ -85,10 +85,18 @@ export function PostCardBubble({
   // via a height postMessage from the embed page; otherwise the default height
   // holds and the iframe's native scrollbar takes over.
   const [iframeHeight, setIframeHeight] = useState(POST_IFRAME_DEFAULT_HEIGHT);
+  // Whether the embed iframe is still loading its first content. Cleared on
+  // `onLoad`; reset whenever `uri` changes (new post = new iframe request).
+  const [iframeLoading, setIframeLoading] = useState(true);
 
   useEffect(() => {
     setAvatarError(false);
   }, [senderAvatarUrl]);
+
+  // Reset loading state when the embed URL changes (new post card).
+  useEffect(() => {
+    setIframeLoading(true);
+  }, [uri]);
 
   // Web: right-click (contextmenu) opens the action menu. Native: onLongPress.
   useEffect(() => {
@@ -152,6 +160,7 @@ export function PostCardBubble({
   // content. If we can't measure it, the default height stays and the iframe
   // scrolls natively — the rest of the post stays reachable either way.
   const handleIframeLoad = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>): void => {
+    setIframeLoading(false);
     const el = e.currentTarget;
     try {
       const doc = el.contentDocument ?? el.contentWindow?.document;
@@ -216,8 +225,6 @@ export function PostCardBubble({
         <View
           style={[
             styles.embedWrap,
-            // Match the message bubble background: blue for outgoing, dark gray
-            // for incoming (visible while the embed loads / if it's transparent).
             isOutgoing ? styles.outgoing : styles.incoming,
           ]}
         >
@@ -230,14 +237,15 @@ export function PostCardBubble({
               height: iframeHeight,
               border: 'none',
               display: 'block',
-              // `auto` lets the embed scroll natively when its content is taller
-              // than `iframeHeight` (cross-origin content can't be measured),
-              // so the user can always reach the full post instead of it being
-              // clipped. Taps on the iframe area go to the embed page — tap the
-              // caption row below to open the link.
               pointerEvents: 'auto',
             },
           })}
+          {iframeLoading && (
+            <View style={styles.loadingOverlay}>
+              <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+              <Text style={styles.loadingText}>{t('common.loading')}</Text>
+            </View>
+          )}
         </View>
       );
     }
@@ -397,6 +405,21 @@ const styles = StyleSheet.create({
     borderRadius: theme.borderRadius.sm,
     overflow: 'hidden',
     backgroundColor: theme.colors.surface,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+  },
+  loadingText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.small,
   },
   linkTextWrap: {
     maxWidth: CARD_MAX_WIDTH,

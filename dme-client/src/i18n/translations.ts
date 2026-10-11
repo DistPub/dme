@@ -154,6 +154,12 @@ export const zh: Record<string, string> = {
   'chatview.dissolved': '群聊已解散，无法发送消息',
   'chatview.removed': '你已被移出群聊，无法发送消息',
   'chatview.left': '你已离开群聊，无法发送消息',
+  // 按住说话（语音消息，仅 web）
+  'chatview.holdToTalk': '按住 说话',
+  'chatview.recording': '正在录音，松开发送',
+  'chatview.voiceCancelHint': '松开取消',
+  'chatview.tooShort': '说话时间太短',
+  'chatview.recordFailed': '录音失败，请允许麦克风权限',
 
   // qrdisplay
   'qrdisplay.title': '邀请加入隐世',
@@ -417,6 +423,12 @@ export const en: Record<string, string> = {
   'chatview.dissolved': 'Group dissolved — cannot send messages',
   'chatview.removed': 'You were removed — cannot send messages',
   'chatview.left': 'You left — cannot send messages',
+  // Voice messages (web only)
+  'chatview.holdToTalk': 'Hold to talk',
+  'chatview.recording': 'Recording — release to send',
+  'chatview.voiceCancelHint': 'Release to cancel',
+  'chatview.tooShort': 'Too short',
+  'chatview.recordFailed': 'Recording failed — please allow microphone access',
 
   // qrdisplay
   'qrdisplay.title': 'Invite to DME',

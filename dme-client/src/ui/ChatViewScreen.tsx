@@ -40,6 +40,13 @@ import { isEmbedContext } from '../embed/protocol';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { Image } from 'expo-image';
+import {
+  startVoiceRecording,
+  stopVoiceRecording,
+  cancelVoiceRecording,
+  VOICE_FORMAT_EXT,
+  VOICE_MIME_TYPE,
+} from '../utils/voice-recorder';
 
 type ChatViewRouteProp = NativeStackScreenProps<RootStackParamList, 'ChatView'>['route'];
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
@@ -100,6 +107,16 @@ export function ChatViewScreen(): React.JSX.Element {
   const inputRef = useRef<TextInput>(null);
   const sendBtnRef = useRef<View>(null);
   const messagesRef = useRef<StoredMessage[]>([]);
+  // 语音消息（仅 web）：按住说话、松开发送
+  const [recordingUi, setRecordingUi] = useState(false);
+  const [recordCancelUi, setRecordCancelUi] = useState(false);
+  const [voiceToast, setVoiceToast] = useState<string | null>(null);
+  const voiceGestureRef = useRef<{ active: boolean; cancelled: boolean; startY: number; finishing: boolean }>({
+    active: false,
+    cancelled: false,
+    startY: 0,
+    finishing: false,
+  });
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -466,6 +483,95 @@ export function ChatViewScreen(): React.JSX.Element {
     }
   }, [conversationId, sendFileMessage]);
 
+  // ---- 按住说话（语音消息，仅 web） -----------------------------------------
+  const showVoiceToast = useCallback((msg: string): void => {
+    setVoiceToast(msg);
+    setTimeout(() => {
+      setVoiceToast((cur) => (cur === msg ? null : cur));
+    }, 1800);
+  }, []);
+
+  /** 松手后的统一收尾：stop → 太短丢弃 / 走文件消息通道发送（接收端音频播放卡现成）。 */
+  const finishVoiceSend = useCallback(async (): Promise<void> => {
+    if (voiceGestureRef.current.finishing) return;
+    voiceGestureRef.current.finishing = true;
+    try {
+      const rec = await stopVoiceRecording();
+      if (rec.durationMs < 500) {
+        showVoiceToast(t('chatview.tooShort'));
+        return;
+      }
+      const now = new Date();
+      const pad = (n: number): string => String(n).padStart(2, '0');
+      const name =
+        `voice-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+        `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.${VOICE_FORMAT_EXT}`;
+      // 与图片/视频同一条链路：先落缓存副本 + 乐观消息 → 逐块加密上传 → 发清单
+      await sendFileMessage(conversationId, rec.tempFilePath, name, VOICE_MIME_TYPE, rec.size);
+    } catch (err) {
+      const msgText = err instanceof Error ? err.message : String(err ?? '');
+      if (msgText === '录音已取消') return; // 取消流程，静默
+      console.error('Voice send failed:', err);
+      showVoiceToast(t('chatview.recordFailed'));
+    } finally {
+      voiceGestureRef.current.finishing = false;
+      voiceGestureRef.current.active = false;
+      setRecordingUi(false);
+      setRecordCancelUi(false);
+    }
+  }, [conversationId, sendFileMessage, showVoiceToast, t]);
+
+  const onMicPointerDown = useCallback(
+    (e: { clientY?: number; nativeEvent?: { clientY?: number } }): void => {
+      if (dissolved || removed || left) return;
+      const g = voiceGestureRef.current;
+      g.active = true;
+      g.cancelled = false;
+      g.startY = e.clientY ?? e.nativeEvent?.clientY ?? 0;
+      setRecordCancelUi(false);
+      setRecordingUi(true);
+
+      const moveHandler = (ev: PointerEvent): void => {
+        const gg = voiceGestureRef.current;
+        if (!gg.active) return;
+        const cancelZone = gg.startY - ev.clientY > 60;
+        if (cancelZone !== gg.cancelled) {
+          gg.cancelled = cancelZone;
+          setRecordCancelUi(cancelZone);
+        }
+      };
+      const upHandler = (): void => {
+        window.removeEventListener('pointermove', moveHandler);
+        window.removeEventListener('pointerup', upHandler);
+        window.removeEventListener('pointercancel', upHandler);
+        const gg = voiceGestureRef.current;
+        if (!gg.active) return;
+        gg.active = false;
+        if (gg.cancelled) {
+          cancelVoiceRecording();
+          setRecordingUi(false);
+          setRecordCancelUi(false);
+          return;
+        }
+        void finishVoiceSend();
+      };
+      window.addEventListener('pointermove', moveHandler);
+      window.addEventListener('pointerup', upHandler);
+      window.addEventListener('pointercancel', upHandler);
+
+      startVoiceRecording().catch((err: unknown) => {
+        console.error('startVoiceRecording failed:', err);
+        g.active = false;
+        setRecordingUi(false);
+        window.removeEventListener('pointermove', moveHandler);
+        window.removeEventListener('pointerup', upHandler);
+        window.removeEventListener('pointercancel', upHandler);
+        showVoiceToast(t('chatview.recordFailed'));
+      });
+    },
+    [dissolved, removed, left, finishVoiceSend, showVoiceToast, t],
+  );
+
   const canReact = !dissolved && !removed && !left;
 
   const senderIdentityFor = useCallback((item: StoredMessage): {
@@ -756,6 +862,15 @@ export function ChatViewScreen(): React.JSX.Element {
           </View>
         ) : (
           <View style={styles.inputBar}>
+            {Platform.OS === 'web' && (
+              <View
+                onPointerDown={onMicPointerDown}
+                style={[styles.attachBtn, recordingUi && styles.micRecording]}
+                accessibilityLabel={t('chatview.holdToTalk')}
+              >
+                <Text style={styles.attachBtnText}>{recordingUi ? '⏹' : '🎙️'}</Text>
+              </View>
+            )}
             <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
               <Text style={styles.attachBtnText}>📄</Text>
             </TouchableOpacity>
@@ -785,6 +900,19 @@ export function ChatViewScreen(): React.JSX.Element {
                 style={styles.sendBtn}
               />
             </View>
+          </View>
+        )}
+
+        {Platform.OS === 'web' && recordingUi && (
+          <View style={styles.voiceRecHintWrap} pointerEvents="none">
+            <Text style={styles.voiceRecHintText}>
+              {recordCancelUi ? t('chatview.voiceCancelHint') : t('chatview.recording')}
+            </Text>
+          </View>
+        )}
+        {Platform.OS === 'web' && voiceToast && (
+          <View style={styles.voiceToastWrap} pointerEvents="none">
+            <Text style={styles.voiceToastText}>{voiceToast}</Text>
           </View>
         )}
       </KeyboardAvoidingView>
@@ -985,6 +1113,40 @@ const styles = StyleSheet.create({
   },
   attachBtnText: {
     fontSize: 20,
+  },
+  micRecording: {
+    backgroundColor: theme.colors.accent,
+    borderRadius: 20,
+  },
+  voiceRecHintWrap: {
+    position: 'absolute',
+    bottom: 72,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  voiceRecHintText: {
+    color: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    fontSize: theme.typography.caption,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: 12,
+  },
+  voiceToastWrap: {
+    position: 'absolute',
+    bottom: 100,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  voiceToastText: {
+    color: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.78)',
+    fontSize: theme.typography.caption,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: 12,
   },
   dissolvedText: {
     color: theme.colors.textSecondary,

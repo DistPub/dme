@@ -8,7 +8,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "build:web": "expo export -p web && workbox generateSW workbox.config.js"
+    "build:web": "expo export -p web && workbox generateSW workbox.config.js",
+    "build:mp3-worker": "bun run scripts/build-mp3-worker.mjs"
   },
   "dependencies": {
     "@atproto/api": "^0.13.0",
@@ -32,6 +33,7 @@
     "expo-video": "~2.0.6",
     "expo-video-thumbnails": "~9.0.3",
     "jsqr": "^1.4.0",
+    "mp3-mediarecorder": "^4.0.5",
     "qrcode": "^1.5.4",
     "react": "18.3.1",
     "react-native": "0.76.9",

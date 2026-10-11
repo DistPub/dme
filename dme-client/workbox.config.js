@@ -9,6 +9,8 @@ module.exports = {
     '_expo/static/js/**/*.js',
     '_expo/static/css/**/*.css',
     '_expo/static/media/**/*',
+    'vmsg.wasm',
+    'mp3-recorder-worker.js',
   ],
   globIgnores: ['sw.js', 'metadata.json', '_headers'],
   // 运行时请求用绝对路径（如 /fonts/Roboto-Regular.ttf），

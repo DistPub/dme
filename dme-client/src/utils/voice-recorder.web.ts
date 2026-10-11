@@ -34,6 +34,35 @@ export const VOICE_FORMAT_EXT = 'mp3';
 /** 语音 MIME 类型（MP3）。 */
 export const VOICE_MIME_TYPE = 'audio/mpeg';
 
+/** 麦克风权限状态（'unsupported' = 浏览器不支持 Permissions API，需靠实际请求判断）。 */
+export type MicPermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported';
+
+/** 查询麦克风权限状态（不弹窗）。不支持 Permissions API 时返回 'unsupported'。 */
+export async function getMicPermissionState(): Promise<MicPermissionState> {
+  try {
+    if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
+      return 'unsupported';
+    }
+    const status = await navigator.permissions.query(
+      { name: 'microphone' } as unknown as PermissionDescriptor,
+    );
+    return status.state === 'granted' || status.state === 'denied' ? status.state : 'prompt';
+  } catch {
+    return 'prompt';
+  }
+}
+
+/** 仅用于请求授权（不真正录音）：成功返回 true 并立即释放音轨。失败（拒绝/不支持）返回 false。 */
+export async function requestMicPermission(): Promise<boolean> {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach((t) => t.stop());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type Phase = 'idle' | 'recording';
 
 let recorder: Mp3MediaRecorder | null = null;
@@ -49,6 +78,10 @@ let stopReject: ((e: Error) => void) | null = null;
 let discardPending = false;
 /** 60s 到时底层自动停止：结果先暂存，等松手时 stopVoiceRecording 取走。 */
 let autoStopped: VoiceRecording | null = null;
+/** startVoiceRecording 的 getUserMedia 仍在等待（录音器尚未建好）。 */
+let startInFlight = false;
+/** 录音器建好前就收到停止/取消：建好后立即停掉，避免麦克风被永久占用。 */
+let abortPendingStart = false;
 
 function fail(msg: string): Error {
   return new Error(msg);
@@ -74,6 +107,8 @@ export function startVoiceRecording(): Promise<void> {
   if (phase !== 'idle') {
     return Promise.reject(fail('已有录音在进行中'));
   }
+  startInFlight = true;
+  abortPendingStart = false;
   return new Promise<void>((resolve, reject) => {
     navigator.mediaDevices
       .getUserMedia({ audio: true })
@@ -111,6 +146,7 @@ export function startVoiceRecording(): Promise<void> {
           stopResolve = null;
           stopReject = null;
           phase = 'idle';
+          startInFlight = false;
           cleanup();
           if (discard) {
             // 取消流程：结果直接作废
@@ -132,6 +168,7 @@ export function startVoiceRecording(): Promise<void> {
           stopReject = null;
           discardPending = false;
           phase = 'idle';
+          startInFlight = false;
           cleanup();
           if (rejectFn) rejectFn(err);
           else if (resolveFn && autoStopped) resolveFn(autoStopped);
@@ -147,10 +184,24 @@ export function startVoiceRecording(): Promise<void> {
             // 已停止则忽略
           }
         }, MAX_VOICE_DURATION_MS);
+        startInFlight = false;
+        // 录音器建好前用户已松手/取消：立即停掉，释放麦克风（避免 iOS 黄点常亮）
+        if (abortPendingStart) {
+          abortPendingStart = false;
+          discardPending = true;
+          try {
+            recorder.stop();
+          } catch {
+            // ignore
+          }
+          reject(fail('录音已取消'));
+          return;
+        }
         resolve();
       })
       .catch((err: unknown) => {
         phase = 'idle';
+        startInFlight = false;
         cleanup();
         reject(err instanceof Error ? err : fail(String(err)));
       });
@@ -164,6 +215,11 @@ export function stopVoiceRecording(): Promise<VoiceRecording> {
       const rec = autoStopped;
       autoStopped = null;
       return Promise.resolve(rec);
+    }
+    // 录音器还在建（getUserMedia 等待中）：标记取消，建好后立即停掉
+    if (startInFlight) {
+      abortPendingStart = true;
+      return Promise.reject(fail('录音已取消'));
     }
     return Promise.reject(fail('没有进行中的录音'));
   }

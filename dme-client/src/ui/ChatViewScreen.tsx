@@ -44,6 +44,8 @@ import {
   startVoiceRecording,
   stopVoiceRecording,
   cancelVoiceRecording,
+  getMicPermissionState,
+  requestMicPermission,
   VOICE_FORMAT_EXT,
   VOICE_MIME_TYPE,
 } from '../utils/voice-recorder';
@@ -111,12 +113,26 @@ export function ChatViewScreen(): React.JSX.Element {
   const [recordingUi, setRecordingUi] = useState(false);
   const [recordCancelUi, setRecordCancelUi] = useState(false);
   const [voiceToast, setVoiceToast] = useState<string | null>(null);
+  // 麦克风已授权才开启"按住说话"；未授权时点击只弹窗请求权限、不录音
+  const [micGranted, setMicGranted] = useState(false);
   const voiceGestureRef = useRef<{ active: boolean; cancelled: boolean; startY: number; finishing: boolean }>({
     active: false,
     cancelled: false,
     startY: 0,
     finishing: false,
   });
+
+  // 进入会话即查询麦克风授权状态：已授权则直接开启"按住说话"
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    let cancelled = false;
+    void getMicPermissionState().then((state) => {
+      if (!cancelled && state === 'granted') setMicGranted(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -524,6 +540,18 @@ export function ChatViewScreen(): React.JSX.Element {
   const onMicPointerDown = useCallback(
     (e: { clientY?: number; nativeEvent?: { clientY?: number } }): void => {
       if (dissolved || removed || left) return;
+      // 未授权：本次点击只弹窗请求权限，不进入录音流程（避免权限弹窗打断按下/松手时序）
+      if (!micGranted) {
+        void requestMicPermission().then((ok) => {
+          if (ok) {
+            setMicGranted(true);
+            showVoiceToast(t('chatview.micGranted'));
+          } else {
+            showVoiceToast(t('chatview.micDenied'));
+          }
+        });
+        return;
+      }
       const g = voiceGestureRef.current;
       g.active = true;
       g.cancelled = false;
@@ -560,6 +588,8 @@ export function ChatViewScreen(): React.JSX.Element {
       window.addEventListener('pointercancel', upHandler);
 
       startVoiceRecording().catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err ?? '');
+        if (msg === '录音已取消') return; // 录音器建好前松手，已静默释放麦克风
         console.error('startVoiceRecording failed:', err);
         g.active = false;
         setRecordingUi(false);
@@ -569,7 +599,7 @@ export function ChatViewScreen(): React.JSX.Element {
         showVoiceToast(t('chatview.recordFailed'));
       });
     },
-    [dissolved, removed, left, finishVoiceSend, showVoiceToast, t],
+    [dissolved, removed, left, micGranted, finishVoiceSend, showVoiceToast, t],
   );
 
   const canReact = !dissolved && !removed && !left;
@@ -862,6 +892,9 @@ export function ChatViewScreen(): React.JSX.Element {
           </View>
         ) : (
           <View style={styles.inputBar}>
+            <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
+              <Text style={styles.attachBtnText}>📄</Text>
+            </TouchableOpacity>
             {Platform.OS === 'web' && (
               <View
                 onPointerDown={onMicPointerDown}
@@ -871,9 +904,6 @@ export function ChatViewScreen(): React.JSX.Element {
                 <Text style={styles.attachBtnText}>{recordingUi ? '⏹' : '🎙️'}</Text>
               </View>
             )}
-            <TouchableOpacity onPress={handleAttach} style={styles.attachBtn} activeOpacity={0.7}>
-              <Text style={styles.attachBtnText}>📄</Text>
-            </TouchableOpacity>
             <TextInput
               ref={inputRef}
               style={[styles.input, { height: inputHeight, userSelect: 'auto' }]}

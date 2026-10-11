@@ -35,3 +35,13 @@ export function stopVoiceRecording(): Promise<VoiceRecording> {
 export function cancelVoiceRecording(): void {
   // no-op on native
 }
+
+export type MicPermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported';
+
+export function getMicPermissionState(): Promise<MicPermissionState> {
+  return Promise.resolve('unsupported');
+}
+
+export function requestMicPermission(): Promise<boolean> {
+  return Promise.resolve(false);
+}

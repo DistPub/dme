@@ -20,3 +20,6 @@ dme-client/.omo/
 __pycache__/
 *.pyc
 .workbuddy/
+
+# 本地需求文档（保留在本地，不入库）
+/FATESKY_BLOB_STORAGE_REQUIREMENTS.md

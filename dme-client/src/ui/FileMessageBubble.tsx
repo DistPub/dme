@@ -527,6 +527,7 @@ const styles = StyleSheet.create({
   },
   contentCol: {
     flex: 1,
+    minWidth: 0,
   },
   senderName: {
     color: theme.colors.textPrimary,

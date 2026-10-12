@@ -369,6 +369,9 @@ const styles = StyleSheet.create({
   },
   contentCol: {
     flex: 1,
+    // 必须：flex 子项默认 min-width:auto 不会收缩到内容宽度以下，
+    // 帖子卡片的 iframe 会把整行撑出屏幕；置 0 允许收缩。
+    minWidth: 0,
   },
   senderName: {
     color: theme.colors.textPrimary,
@@ -397,6 +400,7 @@ const styles = StyleSheet.create({
   card: {
     maxWidth: CARD_MAX_WIDTH,
     minWidth: 0,
+    flexShrink: 1,
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.sm,
     overflow: 'hidden',
@@ -409,6 +413,7 @@ const styles = StyleSheet.create({
   },
   embedWrap: {
     width: '100%',
+    maxWidth: CARD_MAX_WIDTH - 16,
     borderRadius: theme.borderRadius.sm,
     overflow: 'hidden',
     backgroundColor: theme.colors.surface,

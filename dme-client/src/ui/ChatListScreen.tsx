@@ -439,6 +439,17 @@ const resolveProfiles = useCallback(async (
     [navigation, forwardText, forwardFile, forwardPost, app],
   );
 
+  // 取消转发：清掉当前路由上的 forward* 参数即可退出「选择转发目标」状态。
+  // 不能只依赖 navigation.goBack()——embed 模式下 fatesky 用 DME_SHARE 直接
+  // 在 ChatList（已在栈顶）上 setParams，没有可回退的历史栈，goBack 会静默失败。
+  const handleCancelForward = useCallback((): void => {
+    navigation.setParams({
+      forwardText: undefined,
+      forwardFile: undefined,
+      forwardPost: undefined,
+    } as Partial<NonNullable<RootStackParamList['ChatList']>>);
+  }, [navigation]);
+
   const navigateToQrDisplay = useCallback((): void => {
     navigation.navigate('QrDisplay');
   }, [navigation]);
@@ -642,7 +653,7 @@ const resolveProfiles = useCallback(async (
           <>
             <Button
               label={t('common.cancel')}
-              onPress={() => navigation.goBack()}
+              onPress={handleCancelForward}
               variant="secondary"
               style={styles.iconBtn}
             />

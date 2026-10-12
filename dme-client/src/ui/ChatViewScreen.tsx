@@ -2,7 +2,7 @@
  * ui/ChatViewScreen.tsx - Scrollable chat view with native FlatList.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -40,6 +40,17 @@ import {
   resolveHandleCached,
 } from '../atproto/profile-cache';
 import type { StoredMessage } from '../storage/db';
+
+/**
+ * 聊天列表项：消息或独立的日期分隔条。
+ *
+ * 分隔条必须是独立 cell——inverted 列表在 react-native-web 上的单元格是
+ * flexDirection: column-reverse，会反转单元格内子元素的渲染顺序，分隔条与
+ * 气泡放在同一个 cell 时会被渲染到气泡下方；独立 cell 则 native/web 行为一致。
+ */
+type ChatListItem =
+  | { type: 'msg'; msg: StoredMessage; timeText?: string }
+  | { type: 'dayDivider'; label: string; id: string };
 import type { GroupInviteRequest } from '../protocol/group-message';
 import type { RootStackParamList } from '../types/navigation';
 import { getIsChatActive } from '../embed/bridge';
@@ -112,7 +123,7 @@ export function ChatViewScreen(): React.JSX.Element {
   const [pickerLayout, setPickerLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [actionMenuTarget, setActionMenuTarget] = useState<StoredMessage | null>(null);
   const [actionMenuLayout, setActionMenuLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const listRef = useRef<FlatList<StoredMessage>>(null);
+  const listRef = useRef<FlatList<ChatListItem>>(null);
   const inputRef = useRef<TextInput>(null);
   const sendBtnRef = useRef<View>(null);
   const messagesRef = useRef<StoredMessage[]>([]);
@@ -632,36 +643,52 @@ export function ChatViewScreen(): React.JSX.Element {
     };
   }, [isGroup, session?.did, ownProfile, senderProfiles]);
 
-  const renderItem = useCallback(
-    ({ item, index }: { item: StoredMessage; index: number }): React.JSX.Element => {
-      // 时间展示：对比上一条（视觉上方、更早的）消息决定日期分隔条与气泡外时间戳。
-      // 注意 messages 为「最新在前」（index 0 = 最新），配合 inverted 渲染，
-      // 视觉上方的更早消息在 index + 1。
-      const prevItem = index < messages.length - 1 ? messages[index + 1] : undefined;
+  // 展示列表：日期分隔条作为独立列表项，插在「当天最早消息」之后
+  // （数组中更靠后 = inverted 下视觉更靠上）。messages 为最新在前（index 0 = 最新），
+  // 视觉上方的更早消息在 index + 1。
+  const displayItems = useMemo<ChatListItem[]>(() => {
+    const items: ChatListItem[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i]!;
+      const older = i < messages.length - 1 ? messages[i + 1] : undefined;
       const isTimed =
-        !item.kind || item.kind === 'text' || item.kind === 'file' || item.kind === 'post';
-      const showDivider = isTimed && shouldShowDayDivider(prevItem?.createdAt, item.createdAt);
-      const timeText = isTimed && shouldShowTime(prevItem?.createdAt, item.createdAt)
-        ? formatClockTime(item.createdAt)
+        !msg.kind || msg.kind === 'text' || msg.kind === 'file' || msg.kind === 'post';
+      const timeText = isTimed && shouldShowTime(older?.createdAt, msg.createdAt)
+        ? formatClockTime(msg.createdAt)
         : undefined;
-      const dividerLabel = showDivider ? formatDayDivider(item.createdAt, t) : '';
+      items.push({ type: 'msg', msg, timeText });
+      if (isTimed && shouldShowDayDivider(older?.createdAt, msg.createdAt)) {
+        items.push({
+          type: 'dayDivider',
+          label: formatDayDivider(msg.createdAt, t),
+          id: `day-${msg.id}`,
+        });
+      }
+    }
+    return items;
+  }, [messages, t]);
 
-      if (item.kind === 'group_system') {
+  const renderItem = useCallback(
+    ({ item }: { item: ChatListItem }): React.JSX.Element => {
+      if (item.type === 'dayDivider') {
+        return <ChatDayDivider label={item.label} />;
+      }
+      const message = item.msg;
+      const timeText = item.timeText;
+
+      if (message.kind === 'group_system') {
         return (
-          <React.Fragment>
-            {showDivider && <ChatDayDivider label={dividerLabel} />}
-            <View style={styles.systemMsgWrap}>
-              <Text style={styles.systemMsgText}>{item.plaintext}</Text>
-            </View>
-          </React.Fragment>
+          <View style={styles.systemMsgWrap}>
+            <Text style={styles.systemMsgText}>{message.plaintext}</Text>
+          </View>
         );
       }
 
-      if (item.kind === 'group_invite') {
+      if (message.kind === 'group_invite') {
         let groupName: string | null = null;
         let inviteId = '';
         try {
-          const parsed = JSON.parse(item.plaintext) as GroupInviteRequest;
+          const parsed = JSON.parse(message.plaintext) as GroupInviteRequest;
           groupName = parsed.groupName;
           inviteId = parsed.inviteId;
         } catch {
@@ -672,63 +699,58 @@ export function ChatViewScreen(): React.JSX.Element {
         );
 
         return (
-          <React.Fragment>
-            {showDivider && <ChatDayDivider label={dividerLabel} />}
-            <View style={styles.inviteCard}>
-              <Text style={styles.inviteTitle} numberOfLines={1}>
-                {t('chatview.groupInviteTitle', { group: groupName ?? t('chatview.defaultGroupName') })}
-              </Text>
-              {alreadyResponded ? (
-                <Text style={styles.inviteResponded}>{t('chatview.responded')}</Text>
-              ) : (
-                <View style={styles.inviteButtons}>
-                  <Button
-                    label={t('common.accept')}
-                    onPress={() => respondToGroupInvite(inviteId, true)}
-                    variant="primary"
-                    style={styles.inviteBtn}
-                  />
-                  <Button
-                    label={t('common.decline')}
-                    onPress={() => respondToGroupInvite(inviteId, false)}
-                    variant="secondary"
-                    style={styles.inviteBtn}
-                  />
-                </View>
-              )}
-            </View>
-          </React.Fragment>
+          <View style={styles.inviteCard}>
+            <Text style={styles.inviteTitle} numberOfLines={1}>
+              {t('chatview.groupInviteTitle', { group: groupName ?? t('chatview.defaultGroupName') })}
+            </Text>
+            {alreadyResponded ? (
+              <Text style={styles.inviteResponded}>{t('chatview.responded')}</Text>
+            ) : (
+              <View style={styles.inviteButtons}>
+                <Button
+                  label={t('common.accept')}
+                  onPress={() => respondToGroupInvite(inviteId, true)}
+                  variant="primary"
+                  style={styles.inviteBtn}
+                />
+                <Button
+                  label={t('common.decline')}
+                  onPress={() => respondToGroupInvite(inviteId, false)}
+                  variant="secondary"
+                  style={styles.inviteBtn}
+                />
+              </View>
+            )}
+          </View>
         );
       }
 
-      if (item.kind === 'file' && item.fileMeta) {
-        const fileMeta = item.fileMeta;
+      if (message.kind === 'file' && message.fileMeta) {
+        const fileMeta = message.fileMeta;
         const localPath = fileMeta.localPath;
-        const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
-        const isOutgoing = item.fromDid === session?.did;
+        const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(message);
+        const isOutgoing = message.fromDid === session?.did;
         return (
-          <React.Fragment>
-            {showDivider && <ChatDayDivider label={dividerLabel} />}
-            <FileMessageBubble
+          <FileMessageBubble
             fileMeta={fileMeta}
             isOutgoing={isOutgoing}
             senderDisplayName={senderDisplayName}
             senderHandle={senderHandle}
             senderAvatarUrl={senderAvatarUrl}
-            reactions={item.reactions}
+            reactions={message.reactions}
             currentDid={session?.did}
             onDownload={!isOutgoing && fileMeta.downloadStatus === 'pending' ? () => {
-              void downloadFile(conversationId, item.id).catch((err: unknown) => {
+              void downloadFile(conversationId, message.id).catch((err: unknown) => {
                 console.error('Download file failed:', err);
               });
             } : undefined}
             onRetry={fileMeta.downloadStatus === 'failed' ? () => {
-              void downloadFile(conversationId, item.id).catch((err: unknown) => {
+              void downloadFile(conversationId, message.id).catch((err: unknown) => {
                 console.error('Retry download failed:', err);
               });
             } : undefined}
             onRetryUpload={fileMeta.uploadStatus === 'failed' ? () => {
-              void retryUploadFileMessage(conversationId, item.id).catch((err: unknown) => {
+              void retryUploadFileMessage(conversationId, message.id).catch((err: unknown) => {
                 console.error('Retry upload failed:', err);
               });
             } : undefined}
@@ -749,19 +771,18 @@ export function ChatViewScreen(): React.JSX.Element {
                 console.error('Export file failed:', err);
               });
             } : undefined}
-            onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
-            onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
-            onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
+            onReactionPress={canReact ? (emoji) => { void handleReact(message, emoji); } : undefined}
+            onOpenPicker={canReact ? (layout) => handleOpenPicker(message, layout) : undefined}
+            onShowActionMenu={(layout) => handleShowActionMenu(message, layout)}
             timeText={timeText}
           />
-          </React.Fragment>
         );
       }
 
-      if (item.kind === 'post') {
+      if (message.kind === 'post') {
         let post: { uri: string; url: string; html?: string } | null = null;
         try {
-          const parsed = JSON.parse(item.plaintext) as { uri?: string; url?: string; html?: string };
+          const parsed = JSON.parse(message.plaintext) as { uri?: string; url?: string; html?: string };
           if (parsed.uri && parsed.url) {
             post = { uri: parsed.uri, url: parsed.url, html: parsed.html };
           }
@@ -769,57 +790,51 @@ export function ChatViewScreen(): React.JSX.Element {
           post = null;
         }
         if (post) {
-          const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
-          const isOutgoing = item.fromDid === session?.did;
+          const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(message);
+          const isOutgoing = message.fromDid === session?.did;
           return (
-            <React.Fragment>
-              {showDivider && <ChatDayDivider label={dividerLabel} />}
-              <PostCardBubble
-                uri={post.uri}
-                url={post.url}
-                isOutgoing={isOutgoing}
-                senderDisplayName={senderDisplayName}
-                senderHandle={senderHandle}
-                senderAvatarUrl={senderAvatarUrl}
-                reactions={item.reactions}
-                currentDid={session?.did}
-                onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
-                onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
-                onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
-                timeText={timeText}
-              />
-            </React.Fragment>
+            <PostCardBubble
+              uri={post.uri}
+              url={post.url}
+              isOutgoing={isOutgoing}
+              senderDisplayName={senderDisplayName}
+              senderHandle={senderHandle}
+              senderAvatarUrl={senderAvatarUrl}
+              reactions={message.reactions}
+              currentDid={session?.did}
+              onReactionPress={canReact ? (emoji) => { void handleReact(message, emoji); } : undefined}
+              onOpenPicker={canReact ? (layout) => handleOpenPicker(message, layout) : undefined}
+              onShowActionMenu={(layout) => handleShowActionMenu(message, layout)}
+              timeText={timeText}
+            />
           );
         }
         // Malformed post payload — fall through to the plain-text bubble.
       }
 
-      const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
-      const isOutgoing = item.fromDid === session?.did;
+      const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(message);
+      const isOutgoing = message.fromDid === session?.did;
       return (
-        <React.Fragment>
-          {showDivider && <ChatDayDivider label={dividerLabel} />}
-          <MessageBubble
-            text={item.plaintext}
-            isOutgoing={isOutgoing}
-            reactions={item.reactions}
-            currentDid={session?.did}
-            senderDisplayName={senderDisplayName}
-            senderHandle={senderHandle}
-            senderAvatarUrl={senderAvatarUrl}
-            onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
-            onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
-            onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
-            timeText={timeText}
-          />
-        </React.Fragment>
+        <MessageBubble
+          text={message.plaintext}
+          isOutgoing={isOutgoing}
+          reactions={message.reactions}
+          currentDid={session?.did}
+          senderDisplayName={senderDisplayName}
+          senderHandle={senderHandle}
+          senderAvatarUrl={senderAvatarUrl}
+          onReactionPress={canReact ? (emoji) => { void handleReact(message, emoji); } : undefined}
+          onOpenPicker={canReact ? (layout) => handleOpenPicker(message, layout) : undefined}
+          onShowActionMenu={(layout) => handleShowActionMenu(message, layout)}
+          timeText={timeText}
+        />
       );
     },
-    [messages, session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, retryUploadFileMessage, senderIdentityFor, t],
+    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, retryUploadFileMessage, senderIdentityFor, t],
   );
 
   const keyExtractor = useCallback(
-    (item: StoredMessage): string => item.id,
+    (item: ChatListItem): string => (item.type === 'msg' ? item.msg.id : item.id),
     [],
   );
 
@@ -912,7 +927,7 @@ export function ChatViewScreen(): React.JSX.Element {
           ref={listRef}
           style={styles.list}
           contentContainerStyle={styles.listContent}
-          data={messages}
+          data={displayItems}
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           inverted={true}

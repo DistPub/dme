@@ -155,13 +155,22 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 聊天页此前不显示发送时间。现按以下规则展示（仅 `dme-client`，RN + web 共用；`dme-miniapp` 已冻结，不实现）：
 
 - **日期分隔条**：与上一条消息跨天（含会话首条）时，居中灰色胶囊显示 `今天` / `昨天` / `10月12日` / `2025年10月12日`。
-- **气泡外时间戳**：跨天，或与上一条间隔 ≥ 5 分钟时，在气泡外侧显示 `HH:mm`（Telegram 式：发出贴右、收到贴左）。
-- **系统消息 / 群邀请不显示时间**：`kind: 'group_system'` 与 `kind: 'group_invite'` 在 `ChatViewScreen.renderItem` 中 `isTimed=false`，**这是有意为之，不要补时间**。
+- **气泡外时间戳**：跨天，或与上一条间隔 ≥ 5 分钟时，贴在气泡**最外侧、远离头像**一侧（与 emoji 反应同侧）：**发出贴左、收到贴右**。
+- **系统消息 / 群邀请不显示时间**：`kind: 'group_system'` 与 `kind: 'group_invite'` 为 `isTimed=false`，**这是有意为之，不要补时间**。
 - **不做发送者分组**：群聊同一人连续消息仍逐条显示昵称，时间只在跨天 / 间隔超 5 分钟时出现。
+
+### ⚠️ inverted 列表的两个硬坑（踩过）
+
+1. **`messages` 是「最新在前」**（index 0 = 最新，`getMessagesPaginated` 返回 `.reverse()` 后的降序），配合 `inverted`：**视觉上方的更早消息在 `index + 1`**，不是 `index - 1`。
+2. **日期分隔条必须做成独立列表项，不能和气泡放同一个 cell**。react-native-web 的 `inverted` 单元格是 `flexDirection: column-reverse`（见 `node_modules/react-native-web/.../VirtualizedListCellRenderer.js`），会**反转单元格内子元素的渲染顺序**——分隔条与气泡同 cell（Fragment 兄弟节点）时会被渲染到气泡下方。实现：`ChatViewScreen` 用 `useMemo` 构建 `displayItems`（`ChatListItem` = 消息 | 独立 dayDivider 项），分隔条插在「当天最早消息」之后（数组更靠后 = 视觉更靠上）。
+
+### 宽度
+
+气泡行 = `[同侧控制项…] + 气泡(maxWidth 75%/320)`。新增时间文本后，文件消息同侧可有 emoji+时间+保存三个控制项，容易撑破屏幕。约定：气泡 `minWidth: 0`（允许收缩）、emoji/时间/保存 `flexShrink: 0`（不收缩）、帖子卡片 `embedWrap` 用 `width: '100%'` 随卡片自适应。
 
 ### 关键文件
 
-`dme-client/src/utils/format-chat-time.ts`（纯函数 `formatDayDivider` / `formatClockTime` / `shouldShowDayDivider` / `shouldShowTime`，零依赖）/ `dme-client/src/ui/TimeLabel.tsx`（`ChatDayDivider` 日期胶囊 + `TimeOutside` 气泡外时间戳）/ `MessageBubble` / `FileMessageBubble` / `PostCardBubble`（新增 `timeText` prop，气泡外渲染）/ `ChatViewScreen.renderItem`（对比 `messages[index-1]` 算分隔条与时间，包裹 `ChatDayDivider`；`messages` 已纳入 `useCallback` 依赖）/ `i18n/translations.ts`（新增 `chatview.dayToday|dayYesterday|dayThisYear|dayOtherYear` zh/en）
+`dme-client/src/utils/format-chat-time.ts`（纯函数 `formatDayDivider` / `formatClockTime` / `shouldShowDayDivider` / `shouldShowTime`，零依赖）/ `dme-client/src/ui/TimeLabel.tsx`（`ChatDayDivider` 日期胶囊 + `TimeOutside` 气泡外时间戳）/ `MessageBubble` / `FileMessageBubble` / `PostCardBubble`（`timeText` prop，气泡外渲染）/ `ChatViewScreen`（`displayItems` useMemo 构建含独立分隔条的列表 + `ChatListItem` 类型）/ `i18n/translations.ts`（`chatview.dayToday|dayYesterday|dayThisYear|dayOtherYear` zh/en）
 
 ---
 

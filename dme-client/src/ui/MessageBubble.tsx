@@ -174,7 +174,7 @@ export function MessageBubble({
             </Pressable>
           </View>
         )}
-        {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
+        {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
         <Pressable
           ref={bubbleRef}
           onLongPress={onShowActionMenu ? showActionMenu : undefined}
@@ -187,7 +187,7 @@ export function MessageBubble({
         >
           <Text style={styles.text}>{renderText()}</Text>
         </Pressable>
-        {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
+        {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
         {!isOutgoing && (
           <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
             <Pressable

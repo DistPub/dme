@@ -436,7 +436,7 @@ export function FileMessageBubble({
               </Pressable>
             </View>
           )}
-          {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
+          {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           <Pressable
             ref={bubbleRef}
             onLongPress={onShowActionMenu ? showActionMenu : undefined}
@@ -449,7 +449,7 @@ export function FileMessageBubble({
           >
             {renderFileContent()}
           </Pressable>
-          {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
+          {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           {!isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
               <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>

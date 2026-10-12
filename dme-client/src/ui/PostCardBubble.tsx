@@ -286,7 +286,7 @@ export function PostCardBubble({
               </Pressable>
             </View>
           )}
-          {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
+          {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           <Pressable
             ref={bubbleRef}
             onPress={Platform.OS === 'web' ? handlePress : undefined}
@@ -298,7 +298,7 @@ export function PostCardBubble({
             {renderCard()}
             <Text style={styles.caption} numberOfLines={1}>{t('bubble.postCard')}</Text>
           </Pressable>
-          {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
+          {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           {!isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
               <Pressable

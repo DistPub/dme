@@ -634,8 +634,10 @@ export function ChatViewScreen(): React.JSX.Element {
 
   const renderItem = useCallback(
     ({ item, index }: { item: StoredMessage; index: number }): React.JSX.Element => {
-      // 时间展示：对比上一条消息决定日期分隔条与气泡外时间戳（跨天 + 间隔 > 5 分钟）。
-      const prevItem = index > 0 ? messages[index - 1] : undefined;
+      // 时间展示：对比上一条（视觉上方、更早的）消息决定日期分隔条与气泡外时间戳。
+      // 注意 messages 为「最新在前」（index 0 = 最新），配合 inverted 渲染，
+      // 视觉上方的更早消息在 index + 1。
+      const prevItem = index < messages.length - 1 ? messages[index + 1] : undefined;
       const isTimed =
         !item.kind || item.kind === 'text' || item.kind === 'file' || item.kind === 'post';
       const showDivider = isTimed && shouldShowDayDivider(prevItem?.createdAt, item.createdAt);

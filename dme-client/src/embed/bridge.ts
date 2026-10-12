@@ -40,6 +40,10 @@ let pendingTokenTimer: ReturnType<typeof setTimeout> | null = null;
 let onShareHandler: ShareHandler | null = null;
 const chatActiveHandlers = new Set<ChatActiveChangeHandler>();
 
+// Pending BLOB_GET requests awaiting a BLOB_DATA response from fatesky.
+let blobRequestId = 0;
+const pendingBlobRequests = new Map<number, (value: { value: string; mimeType: string } | null) => void>();
+
 const READY_RETRY_MS = 2500;
 const READY_RETRY_MAX = 3;
 
@@ -155,6 +159,21 @@ function handleMessage(event: MessageEvent): void {
       );
       storageDataReceived = true;
       flushPendingToken();
+    }
+    return;
+  }
+
+  if (data.type === DME_MSG.BLOB_DATA) {
+    const payload = data.payload;
+    const reqId = payload?.requestId;
+    if (typeof reqId === 'number') {
+      const resolver = pendingBlobRequests.get(reqId);
+      if (resolver) {
+        pendingBlobRequests.delete(reqId);
+        const value = typeof payload?.value === 'string' ? payload.value : null;
+        const mimeType = typeof payload?.mimeType === 'string' ? payload.mimeType : '';
+        resolver(value ? { value, mimeType } : null);
+      }
     }
     return;
   }
@@ -305,6 +324,69 @@ export function sendOpenUrl(url: string): void {
 }
 
 /**
+ * Persist a file's bytes to fatesky's first-party storage (embed file cache).
+ * Fire-and-forget — mirrors the KV STORAGE_SET semantics. `value` is the file
+ * bytes as a base64 string; `mimeType` is carried along so the blob URL can be
+ * typed correctly on retrieval.
+ */
+export function sendBlobSet(fileId: string, value: string, mimeType: string): void {
+  if (!isEmbedContext()) return;
+
+  const target = parentOrigin ?? resolveParentTargetOrigin();
+
+  window.parent.postMessage(
+    {
+      protocol: DME_EMBED_PROTOCOL,
+      type: DME_MSG.BLOB_SET,
+      payload: { fileId, value, mimeType },
+    },
+    target,
+  );
+}
+
+/**
+ * Request a file's bytes from fatesky's first-party storage. Resolves with
+ * `{ value, mimeType }` (base64 + mime) or null if not found. The `requestId`
+ * correlates the async response delivered via the inbound BLOB_DATA message.
+ */
+export function requestBlob(fileId: string): Promise<{ value: string; mimeType: string } | null> {
+  if (!isEmbedContext()) return Promise.resolve(null);
+
+  const requestId = ++blobRequestId;
+  const target = parentOrigin ?? resolveParentTargetOrigin();
+
+  return new Promise<{ value: string; mimeType: string } | null>((resolve) => {
+    pendingBlobRequests.set(requestId, resolve);
+    window.parent.postMessage(
+      {
+        protocol: DME_EMBED_PROTOCOL,
+        type: DME_MSG.BLOB_GET,
+        payload: { requestId, fileId },
+      },
+      target,
+    );
+  });
+}
+
+/**
+ * Ask fatesky to delete a file's bytes from its first-party storage.
+ */
+export function sendBlobRemove(fileId: string): void {
+  if (!isEmbedContext()) return;
+
+  const target = parentOrigin ?? resolveParentTargetOrigin();
+
+  window.parent.postMessage(
+    {
+      protocol: DME_EMBED_PROTOCOL,
+      type: DME_MSG.BLOB_REMOVE,
+      payload: { fileId },
+    },
+    target,
+  );
+}
+
+/**
  * Tear down the bridge: remove the message listener and reset all state.
  */
 export function stop(): void {
@@ -323,6 +405,9 @@ export function stop(): void {
   isChatActive = false;
   chatActiveHandlers.clear();
   storageDataReceived = false;
+  // Reject any in-flight blob requests so callers do not hang on teardown.
+  for (const resolver of pendingBlobRequests.values()) resolver(null);
+  pendingBlobRequests.clear();
   if (pendingTokenTimer !== null) {
     clearTimeout(pendingTokenTimer);
     pendingTokenTimer = null;

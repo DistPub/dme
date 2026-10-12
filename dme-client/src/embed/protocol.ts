@@ -28,6 +28,14 @@ export const DME_MSG = {
   NAVIGATE: 'DME_NAVIGATE',
   OPEN_URL: 'DME_OPEN_URL',
   SHARE: 'DME_SHARE',
+  // Binary file-byte delegation (embed storage for the actual media, which the
+  // KV STORAGE_* channel cannot hold — localStorage is ~5MB and base64 would
+  // evict the messages themselves). fatesky persists these in its own
+  // first-party IndexedDB, scoped per-DID.
+  BLOB_SET: 'DME_BLOB_SET', // DME → fatesky: persist a file's bytes {fileId, value(base64), mimeType}
+  BLOB_GET: 'DME_BLOB_GET', // DME → fatesky: request bytes {requestId, fileId}
+  BLOB_DATA: 'DME_BLOB_DATA', // fatesky → DME: response {requestId, value(base64)|null, mimeType}
+  BLOB_REMOVE: 'DME_BLOB_REMOVE', // DME → fatesky: delete a file's bytes {fileId}
 } as const;
 
 /** Payload of the inbound `DME_SHARE` message (fatesky → DME). */

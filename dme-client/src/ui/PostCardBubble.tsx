@@ -34,6 +34,7 @@ import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from '
 import { Image } from 'expo-image';
 
 import { theme } from './theme';
+import { TimeOutside } from './TimeLabel';
 import type { Reaction } from '../storage/db';
 import { openMessageLink } from '../utils/link-open';
 import { useI18n } from '../i18n/I18nContext';
@@ -52,6 +53,8 @@ export interface PostCardBubbleProps {
   onReactionPress?: (emoji: string) => void;
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
   onShowActionMenu?: (layout: { x: number; y: number; width: number; height: number }) => void;
+  /** 气泡外时间戳（如 "14:30"），由聊天页按间隔计算后传入；不传则不显示。 */
+  timeText?: string;
 }
 
 const BUBBLE_MARGIN = 16;
@@ -76,6 +79,7 @@ export function PostCardBubble({
   onReactionPress,
   onOpenPicker,
   onShowActionMenu,
+  timeText,
 }: PostCardBubbleProps): React.JSX.Element {
   const { t } = useI18n();
   const emojiBtnRef = useRef<View>(null);
@@ -282,6 +286,7 @@ export function PostCardBubble({
               </Pressable>
             </View>
           )}
+          {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           <Pressable
             ref={bubbleRef}
             onPress={Platform.OS === 'web' ? handlePress : undefined}
@@ -293,6 +298,7 @@ export function PostCardBubble({
             {renderCard()}
             <Text style={styles.caption} numberOfLines={1}>{t('bubble.postCard')}</Text>
           </Pressable>
+          {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           {!isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
               <Pressable

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Pressable, Platform, type TextStyle } from 'react-native';
 import { Image } from 'expo-image';
 import { theme } from './theme';
+import { TimeOutside } from './TimeLabel';
 import { Button } from './Button';
 import type { FileMeta } from '../protocol/types';
 import type { Reaction } from '../storage/db';
@@ -26,6 +27,8 @@ interface FileMessageBubbleProps {
   onReactionPress?: (emoji: string) => void;
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
   onShowActionMenu?: (layout: { x: number; y: number; width: number; height: number }) => void;
+  /** 气泡外时间戳（如 "14:30"），由聊天页按间隔计算后传入；不传则不显示。 */
+  timeText?: string;
 }
 
 function formatFileSize(
@@ -55,6 +58,7 @@ export function FileMessageBubble({
   onOpenPicker,
   onShowActionMenu,
   onSave,
+  timeText,
 }: FileMessageBubbleProps): React.JSX.Element {
   const { t } = useI18n();
   const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, thumbnailPath, uploadProgress, downloadProgress } = fileMeta;
@@ -432,6 +436,7 @@ export function FileMessageBubble({
               </Pressable>
             </View>
           )}
+          {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           <Pressable
             ref={bubbleRef}
             onLongPress={onShowActionMenu ? showActionMenu : undefined}
@@ -444,6 +449,7 @@ export function FileMessageBubble({
           >
             {renderFileContent()}
           </Pressable>
+          {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
           {!isOutgoing && (
             <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
               <Pressable onPress={onOpenPicker ? openPicker : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>

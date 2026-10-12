@@ -7,6 +7,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 
 import { theme } from './theme';
+import { TimeOutside } from './TimeLabel';
 import type { Reaction } from '../storage/db';
 import { linkify, openMessageLink } from '../utils/link-open';
 import type { TextSegment } from '../utils/link-open';
@@ -23,6 +24,8 @@ export interface MessageBubbleProps {
   onReactionPress?: (emoji: string) => void;
   onOpenPicker?: (layout: { x: number; y: number; width: number; height: number }) => void;
   onShowActionMenu?: (layout: { x: number; y: number; width: number; height: number }) => void;
+  /** 气泡外时间戳（如 "14:30"），由聊天页按间隔计算后传入；不传则不显示。 */
+  timeText?: string;
 }
 
 const BUBBLE_PADDING = 12;
@@ -41,6 +44,7 @@ export function MessageBubble({
   onReactionPress,
   onOpenPicker,
   onShowActionMenu,
+  timeText,
 }: MessageBubbleProps): React.JSX.Element {
   const emojiBtnRef = useRef<View>(null);
   const bubbleRef = useRef<View>(null);
@@ -170,6 +174,7 @@ export function MessageBubble({
             </Pressable>
           </View>
         )}
+        {!isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
         <Pressable
           ref={bubbleRef}
           onLongPress={onShowActionMenu ? showActionMenu : undefined}
@@ -182,6 +187,7 @@ export function MessageBubble({
         >
           <Text style={styles.text}>{renderText()}</Text>
         </Pressable>
+        {isOutgoing && timeText ? <TimeOutside text={timeText} /> : null}
         {!isOutgoing && (
           <View ref={emojiBtnRef} style={styles.emojiBtnWrap}>
             <Pressable

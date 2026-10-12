@@ -162,6 +162,10 @@ export const zh: Record<string, string> = {
   'chatview.recordFailed': '录音失败，请允许麦克风权限',
   'chatview.micGranted': '麦克风已开启，按住说话',
   'chatview.micDenied': '麦克风权限被拒绝，请在系统设置中开启',
+  'chatview.dayToday': '今天',
+  'chatview.dayYesterday': '昨天',
+  'chatview.dayThisYear': '{M}月{D}日',
+  'chatview.dayOtherYear': '{Y}年{M}月{D}日',
 
   // qrdisplay
   'qrdisplay.title': '邀请加入隐世',
@@ -433,6 +437,10 @@ export const en: Record<string, string> = {
   'chatview.recordFailed': 'Recording failed — please allow microphone access',
   'chatview.micGranted': 'Microphone enabled — hold to talk',
   'chatview.micDenied': 'Microphone access denied — enable it in Settings',
+  'chatview.dayToday': 'Today',
+  'chatview.dayYesterday': 'Yesterday',
+  'chatview.dayThisYear': '{M}/{D}',
+  'chatview.dayOtherYear': '{Y}/{M}/{D}',
 
   // qrdisplay
   'qrdisplay.title': 'Invite to DME',

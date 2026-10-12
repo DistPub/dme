@@ -2,6 +2,7 @@
 
 - 输出或提示优先用中文。
 - 开始回答前先说"帅哥是这样的"
+- **dme-miniapp 已停止开发**：不再改动其代码，不再为其补功能/同步改动；客户端功能更新只在 `dme-client`（RN + web）进行。
 
 ---
 
@@ -16,12 +17,14 @@ DME (Decentralized Message Envelope) 是基于 AT Protocol (Bluesky) 的端到�
 ```
 dme/
 ├── dme-client/     Expo + RN 移动/Web App（TS strict, Bun；web 产物不含 Skia）
-├── dme-miniapp/    微信小程序端（Taro 4 + React 18，复刻 dme-client 全部功能）
+├── dme-miniapp/    微信小程序端（Taro 4 + React 18，**已冻结：不再开发更新**）
 ├── dme-server/     Go AppView - Jetstream 消费 + BadgerDB KV + 批量盲查
 ├── dme-gateway/    Cloudflare Worker - 反向代理 + blob CDN 缓存
 ```
 
-## dme-miniapp 概要（微信小程序端）
+## dme-miniapp 概要（微信小程序端 · 🔒 已冻结）
+
+> ⚠️ **本系统已停止开发，不再改动其代码，也不为新功能同步更新。** 以下文档仅作历史参考。新增客户端功能只在 `dme-client`（RN + web）实现。
 
 dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，编译目标 `weapp`。功能对齐 dme-client 14 屏（唯一排除项：web 的 iframe embed 嵌入模式）。
 
@@ -144,6 +147,21 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 ### 关键文件
 
 `dme-client/src/ui/PostCardBubble.tsx`（iframe s​andbox + 指针穿透 + 点击复用 `openMessageLink`）/ `dme-client/src/protocol/types.ts`（`POST_EMBED_ORIGIN` = `https://fatesky-ssr.hukoubook.com` / `buildPostEmbedUrl`）
+
+---
+
+## 聊天页消息发送时间展示（2026-10-12 落地）
+
+聊天页此前不显示发送时间。现按以下规则展示（仅 `dme-client`，RN + web 共用；`dme-miniapp` 已冻结，不实现）：
+
+- **日期分隔条**：与上一条消息跨天（含会话首条）时，居中灰色胶囊显示 `今天` / `昨天` / `10月12日` / `2025年10月12日`。
+- **气泡外时间戳**：跨天，或与上一条间隔 ≥ 5 分钟时，在气泡外侧显示 `HH:mm`（Telegram 式：发出贴右、收到贴左）。
+- **系统消息 / 群邀请不显示时间**：`kind: 'group_system'` 与 `kind: 'group_invite'` 在 `ChatViewScreen.renderItem` 中 `isTimed=false`，**这是有意为之，不要补时间**。
+- **不做发送者分组**：群聊同一人连续消息仍逐条显示昵称，时间只在跨天 / 间隔超 5 分钟时出现。
+
+### 关键文件
+
+`dme-client/src/utils/format-chat-time.ts`（纯函数 `formatDayDivider` / `formatClockTime` / `shouldShowDayDivider` / `shouldShowTime`，零依赖）/ `dme-client/src/ui/TimeLabel.tsx`（`ChatDayDivider` 日期胶囊 + `TimeOutside` 气泡外时间戳）/ `MessageBubble` / `FileMessageBubble` / `PostCardBubble`（新增 `timeText` prop，气泡外渲染）/ `ChatViewScreen.renderItem`（对比 `messages[index-1]` 算分隔条与时间，包裹 `ChatDayDivider`；`messages` 已纳入 `useCallback` 依赖）/ `i18n/translations.ts`（新增 `chatview.dayToday|dayYesterday|dayThisYear|dayOtherYear` zh/en）
 
 ---
 
@@ -581,7 +599,7 @@ cd dme-server && go run main.go --addr :8080 --db ./dme.db --jetstream wss://jet
 cd dme-gateway && cp wrangler.toml.example wrangler.toml && bun install && bun run dev
 cd dme-gateway && bun run deploy                      # wrangler deploy
 
-# dme-miniapp（微信小程序）
+# dme-miniapp（微信小程序）— 已冻结，以下命令仅作历史参考，不再使用
 cd dme-miniapp && npm install && npm run dev:weapp    # 开发（微信开发者工具打开 dist/）
 cd dme-miniapp && npx tsc --noEmit                    # 类型检查
 # 生产构建 + 上传必须走 deploy.mjs（含 ES5 降级 + @hpke 死代码剔除 + polyfill 注入），

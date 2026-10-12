@@ -23,6 +23,13 @@ import { EmojiPicker } from './EmojiPicker';
 import { MessageActionMenu } from './MessageActionMenu';
 import { FileMessageBubble } from './FileMessageBubble';
 import { PostCardBubble } from './PostCardBubble';
+import { ChatDayDivider } from './TimeLabel';
+import {
+  formatClockTime,
+  formatDayDivider,
+  shouldShowDayDivider,
+  shouldShowTime,
+} from '../utils/format-chat-time';
 import { exportFileToDevice } from '../utils/file-export';
 import { useWebTitle } from '../utils/web-title';
 import { useApp } from '../state/AppContext';
@@ -626,12 +633,25 @@ export function ChatViewScreen(): React.JSX.Element {
   }, [isGroup, session?.did, ownProfile, senderProfiles]);
 
   const renderItem = useCallback(
-    ({ item }: { item: StoredMessage }): React.JSX.Element => {
+    ({ item, index }: { item: StoredMessage; index: number }): React.JSX.Element => {
+      // 时间展示：对比上一条消息决定日期分隔条与气泡外时间戳（跨天 + 间隔 > 5 分钟）。
+      const prevItem = index > 0 ? messages[index - 1] : undefined;
+      const isTimed =
+        !item.kind || item.kind === 'text' || item.kind === 'file' || item.kind === 'post';
+      const showDivider = isTimed && shouldShowDayDivider(prevItem?.createdAt, item.createdAt);
+      const timeText = isTimed && shouldShowTime(prevItem?.createdAt, item.createdAt)
+        ? formatClockTime(item.createdAt)
+        : undefined;
+      const dividerLabel = showDivider ? formatDayDivider(item.createdAt, t) : '';
+
       if (item.kind === 'group_system') {
         return (
-          <View style={styles.systemMsgWrap}>
-            <Text style={styles.systemMsgText}>{item.plaintext}</Text>
-          </View>
+          <React.Fragment>
+            {showDivider && <ChatDayDivider label={dividerLabel} />}
+            <View style={styles.systemMsgWrap}>
+              <Text style={styles.systemMsgText}>{item.plaintext}</Text>
+            </View>
+          </React.Fragment>
         );
       }
 
@@ -650,29 +670,32 @@ export function ChatViewScreen(): React.JSX.Element {
         );
 
         return (
-          <View style={styles.inviteCard}>
-            <Text style={styles.inviteTitle} numberOfLines={1}>
-              {t('chatview.groupInviteTitle', { group: groupName ?? t('chatview.defaultGroupName') })}
-            </Text>
-            {alreadyResponded ? (
-              <Text style={styles.inviteResponded}>{t('chatview.responded')}</Text>
-            ) : (
-              <View style={styles.inviteButtons}>
-                <Button
-                  label={t('common.accept')}
-                  onPress={() => respondToGroupInvite(inviteId, true)}
-                  variant="primary"
-                  style={styles.inviteBtn}
-                />
-                <Button
-                  label={t('common.decline')}
-                  onPress={() => respondToGroupInvite(inviteId, false)}
-                  variant="secondary"
-                  style={styles.inviteBtn}
-                />
-              </View>
-            )}
-          </View>
+          <React.Fragment>
+            {showDivider && <ChatDayDivider label={dividerLabel} />}
+            <View style={styles.inviteCard}>
+              <Text style={styles.inviteTitle} numberOfLines={1}>
+                {t('chatview.groupInviteTitle', { group: groupName ?? t('chatview.defaultGroupName') })}
+              </Text>
+              {alreadyResponded ? (
+                <Text style={styles.inviteResponded}>{t('chatview.responded')}</Text>
+              ) : (
+                <View style={styles.inviteButtons}>
+                  <Button
+                    label={t('common.accept')}
+                    onPress={() => respondToGroupInvite(inviteId, true)}
+                    variant="primary"
+                    style={styles.inviteBtn}
+                  />
+                  <Button
+                    label={t('common.decline')}
+                    onPress={() => respondToGroupInvite(inviteId, false)}
+                    variant="secondary"
+                    style={styles.inviteBtn}
+                  />
+                </View>
+              )}
+            </View>
+          </React.Fragment>
         );
       }
 
@@ -682,7 +705,9 @@ export function ChatViewScreen(): React.JSX.Element {
         const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
         const isOutgoing = item.fromDid === session?.did;
         return (
-          <FileMessageBubble
+          <React.Fragment>
+            {showDivider && <ChatDayDivider label={dividerLabel} />}
+            <FileMessageBubble
             fileMeta={fileMeta}
             isOutgoing={isOutgoing}
             senderDisplayName={senderDisplayName}
@@ -725,7 +750,9 @@ export function ChatViewScreen(): React.JSX.Element {
             onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
             onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
             onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
+            timeText={timeText}
           />
+          </React.Fragment>
         );
       }
 
@@ -743,19 +770,23 @@ export function ChatViewScreen(): React.JSX.Element {
           const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
           const isOutgoing = item.fromDid === session?.did;
           return (
-            <PostCardBubble
-              uri={post.uri}
-              url={post.url}
-              isOutgoing={isOutgoing}
-              senderDisplayName={senderDisplayName}
-              senderHandle={senderHandle}
-              senderAvatarUrl={senderAvatarUrl}
-              reactions={item.reactions}
-              currentDid={session?.did}
-              onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
-              onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
-              onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
-            />
+            <React.Fragment>
+              {showDivider && <ChatDayDivider label={dividerLabel} />}
+              <PostCardBubble
+                uri={post.uri}
+                url={post.url}
+                isOutgoing={isOutgoing}
+                senderDisplayName={senderDisplayName}
+                senderHandle={senderHandle}
+                senderAvatarUrl={senderAvatarUrl}
+                reactions={item.reactions}
+                currentDid={session?.did}
+                onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
+                onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
+                onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
+                timeText={timeText}
+              />
+            </React.Fragment>
           );
         }
         // Malformed post payload — fall through to the plain-text bubble.
@@ -764,21 +795,25 @@ export function ChatViewScreen(): React.JSX.Element {
       const { senderDisplayName, senderHandle, senderAvatarUrl } = senderIdentityFor(item);
       const isOutgoing = item.fromDid === session?.did;
       return (
-        <MessageBubble
-          text={item.plaintext}
-          isOutgoing={isOutgoing}
-          reactions={item.reactions}
-          currentDid={session?.did}
-          senderDisplayName={senderDisplayName}
-          senderHandle={senderHandle}
-          senderAvatarUrl={senderAvatarUrl}
-          onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
-          onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
-          onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
-        />
+        <React.Fragment>
+          {showDivider && <ChatDayDivider label={dividerLabel} />}
+          <MessageBubble
+            text={item.plaintext}
+            isOutgoing={isOutgoing}
+            reactions={item.reactions}
+            currentDid={session?.did}
+            senderDisplayName={senderDisplayName}
+            senderHandle={senderHandle}
+            senderAvatarUrl={senderAvatarUrl}
+            onReactionPress={canReact ? (emoji) => { void handleReact(item, emoji); } : undefined}
+            onOpenPicker={canReact ? (layout) => handleOpenPicker(item, layout) : undefined}
+            onShowActionMenu={(layout) => handleShowActionMenu(item, layout)}
+            timeText={timeText}
+          />
+        </React.Fragment>
       );
     },
-    [session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, retryUploadFileMessage, senderIdentityFor, t],
+    [messages, session?.did, receivedGroupInvites, respondToGroupInvite, isGroup, senderProfiles, ownProfile, canReact, handleReact, handleOpenPicker, handleShowActionMenu, conversationId, downloadFile, retryUploadFileMessage, senderIdentityFor, t],
   );
 
   const keyExtractor = useCallback(

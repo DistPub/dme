@@ -739,7 +739,7 @@ export function ChatViewScreen(): React.JSX.Element {
             senderAvatarUrl={senderAvatarUrl}
             reactions={message.reactions}
             currentDid={session?.did}
-            onDownload={!isOutgoing && fileMeta.downloadStatus === 'pending' ? () => {
+            onDownload={fileMeta.blobCids?.length ? () => {
               void downloadFile(conversationId, message.id).catch((err: unknown) => {
                 console.error('Download file failed:', err);
               });

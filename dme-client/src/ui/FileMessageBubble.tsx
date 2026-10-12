@@ -62,8 +62,8 @@ export function FileMessageBubble({
 }: FileMessageBubbleProps): React.JSX.Element {
   const { t } = useI18n();
   const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, thumbnailPath, uploadProgress, downloadProgress } = fileMeta;
-  const resolvedUri = useFileUri(localPath);
-  const thumbUri = useFileUri(thumbnailPath);
+  const { uri: resolvedUri, missing: localBytesMissing } = useFileUri(localPath);
+  const { uri: thumbUri } = useFileUri(thumbnailPath);
   const isImage = mimeType.startsWith('image/');
   const isVideo = mimeType.startsWith('video/');
   const isAudio = mimeType.startsWith('audio/');
@@ -71,6 +71,23 @@ export function FileMessageBubble({
   const bubbleRef = useRef<View>(null);
   const [avatarError, setAvatarError] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
+  // Self-heal: a message marked 'ready' but whose local bytes are gone
+  // (web IndexedDB file cache evicted) would otherwise be stuck showing a
+  // file card / "downloading" forever. Re-fetch from blobCids to recover.
+  const recoveringRef = useRef(false);
+  useEffect(() => {
+    if (recoveringRef.current) return;
+    if (
+      localBytesMissing &&
+      downloadStatus === 'ready' &&
+      (fileMeta.blobCids?.length ?? 0) > 0 &&
+      onDownload
+    ) {
+      recoveringRef.current = true;
+      onDownload();
+    }
+  }, [localBytesMissing, downloadStatus, fileMeta.blobCids, onDownload]);
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
   const nativeSoundRef = useRef<any>(null);
 

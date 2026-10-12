@@ -19,7 +19,7 @@ export function ImageViewerScreen(): React.JSX.Element {
   const navigation = useNavigation<Navigation>();
   const route = useRoute<ImageViewerRouteProp>();
   const { uri, fileName: _fileName } = route.params;
-  const resolvedUri = useFileUri(uri);
+  const { uri: resolvedUri } = useFileUri(uri);
 
   return (
     <View style={styles.container}>

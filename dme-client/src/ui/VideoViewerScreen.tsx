@@ -106,7 +106,7 @@ export function VideoViewerScreen(): React.JSX.Element {
   const route = useRoute<VideoViewerRouteProp>();
   const { uri, fileName } = route.params;
   const { t } = useI18n();
-  const resolvedUri = useFileUri(uri);
+  const { uri: resolvedUri } = useFileUri(uri);
   const [hasError, setHasError] = useState(false);
   const [decoding, setDecoding] = useState<'checking' | 'ok' | 'unsupported'>(
     Platform.OS === 'web' ? 'checking' : 'ok',

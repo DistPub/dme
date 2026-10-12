@@ -106,12 +106,26 @@ export async function resolveFileUri(uri: string): Promise<string | null> {
   return uri;
 }
 
-export function useFileUri(uri: string | undefined): string | undefined {
+export interface FileUriState {
+  /** Resolved, renderable URI (blob: URL on web). undefined while loading or if the local bytes are unavailable. */
+  uri: string | undefined;
+  /**
+   * True only AFTER a real resolve attempt returned nothing — i.e. the local
+   * cached bytes are gone (e.g. the web IndexedDB file cache was evicted).
+   * Used by callers to self-heal by re-downloading from blobCids.
+   * False while still loading and for native file:// paths (never "missing").
+   */
+  missing: boolean;
+}
+
+export function useFileUri(uri: string | undefined): FileUriState {
   const [resolved, setResolved] = useState<string | undefined>(undefined);
+  const [missing, setMissing] = useState(false);
   const objectUrlRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
+    setMissing(false);
 
     async function resolve() {
       if (!uri) {
@@ -122,6 +136,7 @@ export function useFileUri(uri: string | undefined): string | undefined {
         }
         if (active) {
           setResolved(undefined);
+          setMissing(false);
         }
         return;
       }
@@ -139,7 +154,11 @@ export function useFileUri(uri: string | undefined): string | undefined {
       if (prev?.startsWith('blob:') && prev !== objectUrlRef.current) {
         URL.revokeObjectURL(prev);
       }
-      setResolved(objectUrlRef.current);
+      if (active) {
+        setResolved(objectUrlRef.current);
+        // A genuine miss (indexeddb:// with no record) yields undefined here.
+        setMissing(objectUrlRef.current === undefined);
+      }
     }
 
     resolve();
@@ -159,5 +178,5 @@ export function useFileUri(uri: string | undefined): string | undefined {
     };
   }, []);
 
-  return resolved;
+  return { uri: resolved, missing };
 }

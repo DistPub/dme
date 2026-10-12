@@ -159,7 +159,7 @@ export interface FileUriState {
   missing: boolean;
 }
 
-export function useFileUri(uri: string | undefined): FileUriState {
+export function useFileUri(uri: string | undefined, refreshKey?: unknown): FileUriState {
   const [resolved, setResolved] = useState<string | undefined>(undefined);
   const [missing, setMissing] = useState(false);
   const objectUrlRef = useRef<string | undefined>(undefined);
@@ -207,7 +207,7 @@ export function useFileUri(uri: string | undefined): FileUriState {
     return () => {
       active = false;
     };
-  }, [uri]);
+  }, [uri, refreshKey]);
 
   useEffect(() => {
     return () => {

@@ -62,8 +62,19 @@ export function FileMessageBubble({
 }: FileMessageBubbleProps): React.JSX.Element {
   const { t } = useI18n();
   const { fileName, fileSize, mimeType, downloadStatus, uploadStatus, localPath, thumbnailPath, uploadProgress, downloadProgress } = fileMeta;
-  const { uri: resolvedUri, missing: localBytesMissing } = useFileUri(localPath);
-  const { uri: thumbUri } = useFileUri(thumbnailPath);
+  // When a download finishes the cache is (re)populated, but localPath (uri)
+  // is unchanged so useFileUri won't re-resolve on its own. Bump a refresh key
+  // on the ready transition so the blob URL / missing flag recompute.
+  const [uriRefresh, setUriRefresh] = useState(0);
+  const prevStatusRef = useRef<FileDownloadStatus>(downloadStatus);
+  useEffect(() => {
+    if (prevStatusRef.current !== 'ready' && downloadStatus === 'ready') {
+      setUriRefresh((n) => n + 1);
+    }
+    prevStatusRef.current = downloadStatus;
+  }, [downloadStatus]);
+  const { uri: resolvedUri, missing: localBytesMissing } = useFileUri(localPath, uriRefresh);
+  const { uri: thumbUri } = useFileUri(thumbnailPath, uriRefresh);
   const isImage = mimeType.startsWith('image/');
   const isVideo = mimeType.startsWith('video/');
   const isAudio = mimeType.startsWith('audio/');

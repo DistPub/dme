@@ -556,6 +556,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.sm,
     maxWidth: 320,
+    minWidth: 0,
     userSelect: 'none',
   },
   outgoing: {
@@ -645,6 +646,7 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing.xs,
   },
   emojiBtnWrap: {
+    flexShrink: 0,
     padding: 2,
     marginHorizontal: theme.spacing.xs,
   },

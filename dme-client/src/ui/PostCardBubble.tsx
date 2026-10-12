@@ -396,6 +396,7 @@ const styles = StyleSheet.create({
   },
   card: {
     maxWidth: CARD_MAX_WIDTH,
+    minWidth: 0,
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.sm,
     overflow: 'hidden',
@@ -407,7 +408,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.incomingBubble,
   },
   embedWrap: {
-    width: CARD_MAX_WIDTH - 16,
+    width: '100%',
     borderRadius: theme.borderRadius.sm,
     overflow: 'hidden',
     backgroundColor: theme.colors.surface,
@@ -441,6 +442,7 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.xs,
   },
   emojiBtnWrap: {
+    flexShrink: 0,
     padding: 2,
     marginLeft: 4,
     marginRight: 4,

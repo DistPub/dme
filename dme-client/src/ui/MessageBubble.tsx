@@ -294,6 +294,7 @@ const styles = StyleSheet.create({
   },
   bubble: {
     maxWidth: `${BUBBLE_MAX_WIDTH_RATIO * 100}%`,
+    minWidth: 0,
     paddingVertical: BUBBLE_PADDING,
     paddingHorizontal: BUBBLE_PADDING,
     borderRadius: theme.borderRadius.md,
@@ -319,6 +320,7 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   emojiBtnWrap: {
+    flexShrink: 0,
     padding: 2,
     marginLeft: 4,
     marginRight: 4,

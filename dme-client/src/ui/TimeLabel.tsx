@@ -41,6 +41,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: theme.colors.textSecondary,
     marginHorizontal: 4,
+    flexShrink: 0,
     includeFontPadding: false,
   },
 });

@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { theme } from './theme';
 import { TimeOutside } from './TimeLabel';
 import { Button } from './Button';
-import type { FileMeta } from '../protocol/types';
+import type { FileMeta, FileDownloadStatus } from '../protocol/types';
 import type { Reaction } from '../storage/db';
 import { useFileUri } from '../utils/file-cache';
 import { useI18n } from '../i18n/I18nContext';
@@ -72,22 +72,26 @@ export function FileMessageBubble({
   const [avatarError, setAvatarError] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
-  // Self-heal: a message marked 'ready' but whose local bytes are gone
-  // (web IndexedDB file cache evicted) would otherwise be stuck showing a
-  // file card / "downloading" forever. Re-fetch from blobCids to recover.
+  // When a 'ready' message's local bytes are gone (web IndexedDB file cache
+  // evicted), fall back to the received-message handling instead of silently
+  // breaking: small images (<=5MB) still auto-download to show a preview,
+  // everything else (incl. voice) is treated as 'pending' so the user gets a
+  // download button and decides. We only auto-trigger the fetch for the
+  // small-image case; the rest rely on the user tapping the button.
+  const isMissingReady = localBytesMissing && downloadStatus === 'ready';
+  const canAutoPreview = isMissingReady && isImage && fileSize <= 5 * 1024 * 1024;
+  const effectiveDownloadStatus: FileDownloadStatus = isMissingReady
+    ? (canAutoPreview ? 'downloading' : 'pending')
+    : downloadStatus;
+
   const recoveringRef = useRef(false);
   useEffect(() => {
     if (recoveringRef.current) return;
-    if (
-      localBytesMissing &&
-      downloadStatus === 'ready' &&
-      (fileMeta.blobCids?.length ?? 0) > 0 &&
-      onDownload
-    ) {
+    if (canAutoPreview && (fileMeta.blobCids?.length ?? 0) > 0 && onDownload) {
       recoveringRef.current = true;
       onDownload();
     }
-  }, [localBytesMissing, downloadStatus, fileMeta.blobCids, onDownload]);
+  }, [canAutoPreview, fileMeta.blobCids, onDownload]);
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
   const nativeSoundRef = useRef<any>(null);
 
@@ -270,11 +274,11 @@ export function FileMessageBubble({
     }
 
     if (isAudio) {
-      const resolvingUri = downloadStatus === 'ready' && !resolvedUri;
-      const showSpinner = downloadStatus === 'downloading' || resolvingUri;
-      const showRetry = downloadStatus === 'failed';
-      const showDownload = downloadStatus === 'pending';
-      const canPlay = downloadStatus === 'ready' && !!resolvedUri;
+      const resolvingUri = effectiveDownloadStatus === 'ready' && !resolvedUri;
+      const showSpinner = effectiveDownloadStatus === 'downloading' || resolvingUri;
+      const showRetry = effectiveDownloadStatus === 'failed';
+      const showDownload = effectiveDownloadStatus === 'pending';
+      const canPlay = effectiveDownloadStatus === 'ready' && !!resolvedUri;
       const playDisabled = !canPlay;
       return (
         <View style={styles.audioCard}>
@@ -297,7 +301,7 @@ export function FileMessageBubble({
             <>
               <ActivityIndicator size="small" color={theme.colors.textSecondary} />
               <Text style={styles.statusText}>
-                {downloadStatus === 'downloading' && downloadProgress && downloadProgress > 0
+                {effectiveDownloadStatus === 'downloading' && downloadProgress && downloadProgress > 0
                   ? t('bubble.downloading', { pct: downloadProgress })
                   : t('bubble.downloadingShort')}
               </Text>
@@ -313,7 +317,7 @@ export function FileMessageBubble({
       );
     }
 
-    if (downloadStatus === 'ready' && resolvedUri && isImage) {
+    if (effectiveDownloadStatus === 'ready' && resolvedUri && isImage) {
       return (
         <Pressable
           onPress={onImagePress}
@@ -331,7 +335,7 @@ export function FileMessageBubble({
       );
     }
 
-    if (downloadStatus === 'ready' && isVideo && onVideoPress) {
+    if (effectiveDownloadStatus === 'ready' && isVideo && onVideoPress) {
       if (thumbUri) {
         return (
           <Pressable
@@ -369,7 +373,7 @@ export function FileMessageBubble({
       );
     }
 
-    if (downloadStatus === 'downloading') {
+    if (effectiveDownloadStatus === 'downloading') {
       let statusText = t('bubble.downloadingShort');
       if (downloadProgress && downloadProgress > 0) {
         statusText = t('bubble.downloading', { pct: downloadProgress });
@@ -382,7 +386,7 @@ export function FileMessageBubble({
       );
     }
 
-    if (downloadStatus === 'failed') {
+    if (effectiveDownloadStatus === 'failed') {
       return (
         <View style={styles.fileCard}>
           <Text style={styles.fileIcon}>📎</Text>
@@ -397,7 +401,7 @@ export function FileMessageBubble({
       );
     }
 
-    if (downloadStatus === 'pending') {
+    if (effectiveDownloadStatus === 'pending') {
       return (
         <View style={styles.fileCard}>
           <Text style={styles.fileIcon}>{isVideo ? '▶' : isAudio ? '🔊' : '📎'}</Text>
@@ -439,7 +443,7 @@ export function FileMessageBubble({
           </>
         )}
         <View style={[styles.bubbleRow, isOutgoing ? styles.bubbleRowOutgoing : styles.bubbleRowIncoming]}>
-          {isOutgoing && downloadStatus === 'ready' && onSave && (
+          {isOutgoing && effectiveDownloadStatus === 'ready' && onSave && (
             <View style={styles.emojiBtnWrap}>
               <Pressable onPress={onSave} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Text style={styles.emojiBtnText}>💾</Text>
@@ -474,7 +478,7 @@ export function FileMessageBubble({
               </Pressable>
             </View>
           )}
-          {!isOutgoing && downloadStatus === 'ready' && onSave && (
+          {!isOutgoing && effectiveDownloadStatus === 'ready' && onSave && (
             <View style={styles.emojiBtnWrap}>
               <Pressable onPress={onSave} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Text style={styles.emojiBtnText}>💾</Text>
@@ -573,7 +577,7 @@ const styles = StyleSheet.create({
   container: {
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.sm,
-    maxWidth: 320,
+    maxWidth: '75%',
     minWidth: 0,
     userSelect: 'none',
   },
@@ -586,10 +590,12 @@ const styles = StyleSheet.create({
   imagePreview: {
     width: 200,
     height: 150,
+    maxWidth: '100%',
     borderRadius: theme.borderRadius.sm,
   },
   videoPreviewWrap: {
     position: 'relative',
+    maxWidth: '100%',
   },
   videoPlayOverlay: {
     ...StyleSheet.absoluteFillObject,

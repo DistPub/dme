@@ -11,6 +11,12 @@ import type { RootStackParamList } from '../types/navigation';
 import { useI18n } from '../i18n/I18nContext';
 import { LANGUAGES } from '../i18n/translations';
 
+const ROTATION_OPTIONS: { ms: number; labelKey: 'settings.rotation24h' | 'settings.rotation7d' | 'settings.rotation30d' }[] = [
+  { ms: 24 * 60 * 60 * 1000, labelKey: 'settings.rotation24h' },
+  { ms: 7 * 24 * 60 * 60 * 1000, labelKey: 'settings.rotation7d' },
+  { ms: 30 * 24 * 60 * 60 * 1000, labelKey: 'settings.rotation30d' },
+];
+
 interface Props {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 }
@@ -80,6 +86,10 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     await app.setGatewayUrl(DEFAULT_DME_GATEWAY_URL);
     setGatewaySaved(true);
     setTimeout(() => setGatewaySaved(false), 2000);
+  };
+
+  const handleRotation = async (ms: number): Promise<void> => {
+    await app.setKeyRotationIntervalMs(ms);
   };
 
   const handleBackup = async (): Promise<void> => {
@@ -241,6 +251,26 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           />
         </View>
 
+        <Text style={styles.title}>{t('settings.rotationInterval')}</Text>
+        <Text style={styles.hint}>{t('settings.rotationIntervalHint')}</Text>
+        <View style={styles.rowButtons}>
+          {ROTATION_OPTIONS.map((opt) => (
+            <Button
+              key={opt.ms}
+              label={t(opt.labelKey)}
+              onPress={() => { void handleRotation(opt.ms); }}
+              variant={app.keyRotationIntervalMs === opt.ms ? 'primary' : 'secondary'}
+              style={styles.thirdButton}
+            />
+          ))}
+        </View>
+
+        {app.backupRequired ? (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>{t('settings.backupRequiredBanner')}</Text>
+          </View>
+        ) : null}
+
         <Text style={styles.title}>{t('settings.identityBackup')}</Text>
         <Text style={styles.hint}>{t('settings.backupHint')}</Text>
         <TextInput
@@ -364,6 +394,21 @@ const styles = StyleSheet.create({
   halfButton: {
     flex: 1,
     height: 48,
+  },
+  thirdButton: {
+    flex: 1,
+    height: 48,
+  },
+  banner: {
+    borderWidth: 1,
+    borderColor: theme.colors.error,
+    borderRadius: 8,
+    padding: theme.spacing.md,
+  },
+  bannerText: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    lineHeight: 18,
   },
   switchRow: {
     flexDirection: 'row',

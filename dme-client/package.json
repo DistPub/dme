@@ -29,6 +29,7 @@
     "expo-file-system": "~18.0.0",
     "expo-image": "~2.0.7",
     "expo-image-picker": "~16.0.0",
+    "expo-secure-store": "~14.0.1",
     "expo-splash-screen": "~0.29.24",
     "expo-video": "~2.0.6",
     "expo-video-thumbnails": "~9.0.3",

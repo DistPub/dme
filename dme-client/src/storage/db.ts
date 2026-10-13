@@ -563,6 +563,79 @@ export class DmeStorage {
   }
 
   // -----------------------------------------------------------------------
+  // 密钥轮换（key-rotation-plan.md 1.1 / 1.3 / 1.4 / 1.6）
+  // -----------------------------------------------------------------------
+
+  private readonly KEY_ROTATION_INTERVAL_KEY = 'keyRotationIntervalMs';
+
+  /** 轮换周期（毫秒），默认 7 天。无关闭项（安全不设退出）。 */
+  async getKeyRotationIntervalMs(): Promise<number> {
+    const raw = await storage.getItem(this.prefix + this.KEY_ROTATION_INTERVAL_KEY);
+    const parsed = raw !== null ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : 7 * 24 * 60 * 60 * 1000;
+  }
+
+  async setKeyRotationIntervalMs(ms: number): Promise<void> {
+    await storage.setItem(this.prefix + this.KEY_ROTATION_INTERVAL_KEY, String(ms));
+  }
+
+  /** 每会话最近一次轮换时间戳（0 = 从未轮换）。 */
+  async getLastRotationAt(groupId: string): Promise<number> {
+    const raw = await storage.getItem(this.prefix + `rotationAt:${groupId}`);
+    const parsed = raw !== null ? Number(raw) : NaN;
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  async setLastRotationAt(groupId: string, ts: number): Promise<void> {
+    await storage.setItem(this.prefix + `rotationAt:${groupId}`, String(ts));
+  }
+
+  /**
+   * 会话异常标记（持久化）：
+   * - 'sibling-rotated'：同账号另一台设备已轮换，本机无法应用其 commit，
+   *   唯一恢复路径是恢复最新备份（1.6）；
+   * - 'desynced'：普通成员的 commit 应用失败/解密脱钩，需重新握手（1.4）。
+   */
+  async getSessionIssue(groupId: string): Promise<'sibling-rotated' | 'desynced' | null> {
+    const raw = await storage.getItem(this.prefix + `sessionIssue:${groupId}`);
+    if (raw === 'sibling-rotated' || raw === 'desynced') return raw;
+    return null;
+  }
+
+  async setSessionIssue(
+    groupId: string,
+    issue: 'sibling-rotated' | 'desynced' | null,
+  ): Promise<void> {
+    const key = this.prefix + `sessionIssue:${groupId}`;
+    if (issue === null) {
+      await storage.removeItem(key);
+    } else {
+      await storage.setItem(key, issue);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // 备份联动（1.5）：轮换后未自动刷新备份时的强提示标记
+  // -----------------------------------------------------------------------
+
+  private readonly BACKUP_REQUIRED_KEY = 'backupRequired';
+
+  async isBackupRequired(): Promise<boolean> {
+    return (await storage.getItem(this.prefix + this.BACKUP_REQUIRED_KEY)) === '1';
+  }
+
+  async setBackupRequired(required: boolean): Promise<void> {
+    const key = this.prefix + this.BACKUP_REQUIRED_KEY;
+    if (required) {
+      await storage.setItem(key, '1');
+    } else {
+      await storage.removeItem(key);
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // 清除全部数据（切换账号 / 注销）
   // -----------------------------------------------------------------------
 

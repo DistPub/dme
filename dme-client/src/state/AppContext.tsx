@@ -14,6 +14,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { AppState as RNAppState } from 'react-native';
 import { storage as globalStorage } from '../storage/backend';
 import { sha256 } from '@noble/hashes/sha256';
 import type { KeyPackage, PrivateKeyPackage } from 'ts-mls';
@@ -32,6 +33,8 @@ import { generateIdentityKeys } from '../crypto/identity';
 import type { IdentityKeys } from '../crypto/identity';
 import { MlsSession } from '../crypto/mls-session';
 import { deliverCommitViaGroupSpace } from './commit-delivery';
+import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
+import { maybeRotateGroups, reportSiblingRotation, type RotationDeps } from '../crypto/rotation';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -254,6 +257,8 @@ interface AppState {
   keyPackagePool: KeyPackagePoolEntry[];
   chatListVersion: number;
   pollBatchSize: number;
+  keyRotationIntervalMs: number;
+  backupRequired: boolean;
   appViewProxy: string;
   serverUrl: string;
   gatewayUrl: string;
@@ -302,6 +307,7 @@ interface AppActions {
   acceptInviteQr: (qrString: string) => Promise<void>;
   refreshKeyPackagePool: () => Promise<void>;
   setPollBatchSize: (size: number) => Promise<void>;
+  setKeyRotationIntervalMs: (ms: number) => Promise<void>;
   setAppViewProxy: (proxy: string) => Promise<void>;
   setServerUrl: (url: string) => Promise<void>;
   setGatewayUrl: (url: string) => Promise<void>;
@@ -345,6 +351,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [keyPackagePool, setKeyPackagePool] = useState<KeyPackagePoolEntry[]>([]);
   const [chatListVersion, setChatListVersion] = useState(0);
   const [pollBatchSize, setPollBatchSizeState] = useState(3);
+  const [keyRotationIntervalMs, setKeyRotationIntervalMsState] = useState(7 * 24 * 60 * 60 * 1000);
+  const [backupRequired, setBackupRequiredState] = useState(false);
   const [appViewProxy, setAppViewProxyState] = useState<string>(DEFAULT_APPVIEW_PROXY);
   const [serverUrl, setServerUrlState] = useState<string>(DME_SERVER_URL);
   const [gatewayUrl, setGatewayUrlState] = useState<string>(DEFAULT_DME_GATEWAY_URL);
@@ -397,6 +405,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
 
     const batchSize = await newStorage.getPollBatchSize();
+    const rotationIntervalValue = await newStorage.getKeyRotationIntervalMs();
+    const backupRequiredValue = await newStorage.isBackupRequired();
     const newPoller = new DmePoller(newPds, newStorage, batchSize);
 
     newPoller.start(
@@ -444,6 +454,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setPendingWelcomes(welcomes);
     setKeyPackagePool(pool);
     setPollBatchSizeState(batchSize);
+    setKeyRotationIntervalMsState(rotationIntervalValue);
+    setBackupRequiredState(backupRequiredValue);
     setAppViewProxyState(appViewProxyValue);
     setServerUrlState(serverUrlValue);
     setGatewayUrlState(gatewayUrlValue);
@@ -510,6 +522,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     poller.setBatchSize(size);
     setPollBatchSizeState(size);
   }, [storage, poller]);
+
+  const setKeyRotationIntervalMs = useCallback(async (ms: number): Promise<void> => {
+    if (!storage) return;
+    await storage.setKeyRotationIntervalMs(ms);
+    setKeyRotationIntervalMsState(ms);
+    // 周期变更后立即重查一次（缩短周期可提前触发）
+    runRotationCheckRef.current?.();
+  }, [storage]);
 
   const setAppViewProxy = useCallback(async (proxy: string): Promise<void> => {
     if (!storage || !pds) return;
@@ -581,6 +601,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
 
       const batchSize = await correctStorage.getPollBatchSize();
+      const rotationIntervalValue = await correctStorage.getKeyRotationIntervalMs();
+      const backupRequiredValue = await correctStorage.isBackupRequired();
       const newPoller = new DmePoller(newPds, correctStorage, batchSize);
 
       newPoller.start(
@@ -631,6 +653,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingWelcomes(welcomes);
       setKeyPackagePool(pool);
       setPollBatchSizeState(batchSize);
+      setKeyRotationIntervalMsState(rotationIntervalValue);
+      setBackupRequiredState(backupRequiredValue);
       setAppViewProxyState(appViewProxyValue);
       setServerUrlState(serverUrlValue);
       setGatewayUrlState(gatewayUrlValue);
@@ -674,6 +698,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (storage) {
         await storage.clear();
       }
+      // 1.2：登出清除密码缓存（Keychain 条目 + 内存），换账号不残留
+      await clearBackupPassword();
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
@@ -690,6 +716,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setReceivedGroupInvites([]);
       setGroupInfos([]);
       setPollBatchSizeState(3);
+      setKeyRotationIntervalMsState(7 * 24 * 60 * 60 * 1000);
+      setBackupRequiredState(false);
       setAppViewProxyState(DEFAULT_APPVIEW_PROXY);
       setServerUrlState(DME_SERVER_URL);
       setGatewayUrlState(DEFAULT_DME_GATEWAY_URL);
@@ -804,6 +832,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     const encryptedData = encryptBackup(data, password);
     await pds.putIdentityBackup(encryptedData);
+
+    // 1.2：备份成功即记住密码（native Keychain / web 会话内存），供轮换后
+    // 静默刷新备份（1.5）；并清除「必须备份」强提示标记
+    await saveBackupPassword(password);
+    await storage.setBackupRequired(false);
+    setBackupRequiredState(false);
   }, [identityKeys, pds, storage]);
 
   const restoreIdentityFromBackup = useCallback(async (password: string): Promise<boolean> => {
@@ -849,6 +883,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setGroups(Object.keys(data.mlsSessions));
     setChatListVersion((v) => v + 1);
 
+    // 1.2：恢复时也输过密码，同样记住（用户拍板）
+    await saveBackupPassword(password);
+    await storage.setBackupRequired(false);
+    setBackupRequiredState(false);
+
     return true;
   }, [pds, storage, poller]);
 
@@ -857,6 +896,70 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const data = await pds.getIdentityBackup();
     return data !== null;
   }, [pds]);
+
+  // -----------------------------------------------------------------------
+  // 定期密钥轮换（key-rotation-plan.md 1.3 / 1.5）
+  // -----------------------------------------------------------------------
+
+  const runRotationCheck = useCallback((): void => {
+    if (!session || !storage || !pds || !poller) return;
+    const deps: RotationDeps = {
+      listGroupIds: () => storage.listGroups(),
+      getSession: (groupId) => poller.getSession(groupId),
+      reloadSession: async (groupId, serialized) => {
+        const impl = await getNobleMlsImpl();
+        const restored = await MlsSession.deserialize(serialized, impl);
+        poller.addSession(groupId, restored);
+      },
+      putMlsSession: (groupId, serialized) => storage.putMlsSession(groupId, serialized),
+      createEnvelope: (envelope) => pds.createEnvelope(envelope),
+      pollOnce: () => poller.pollOnce(),
+      getIntervalMs: () => storage.getKeyRotationIntervalMs(),
+      getLastRotationAt: (groupId) => storage.getLastRotationAt(groupId),
+      setLastRotationAt: (groupId, ts) => storage.setLastRotationAt(groupId, ts),
+      onRotated: async (groupId) => {
+        // 1.5 备份联动：有缓存密码 → 静默刷新备份；无 → 置强提示标记。
+        // 备份刷新失败仅 log（不影响轮换结果，下个周期重试时再触发）
+        try {
+          const cachedPassword = await getBackupPassword();
+          if (cachedPassword) {
+            await backupIdentity(cachedPassword);
+            console.log('[dme:rotation] backup refreshed after rotation of', groupId);
+          } else {
+            await storage.setBackupRequired(true);
+            setBackupRequiredState(true);
+          }
+        } catch (err) {
+          console.warn('[dme:rotation] post-rotation backup refresh failed:', err);
+        }
+      },
+      onAborted: (groupId, reason) => {
+        console.warn('[dme:rotation] rotation aborted', groupId, reason);
+        void storage.setSessionIssue(groupId, 'sibling-rotated');
+      },
+    };
+    maybeRotateGroups(deps);
+  }, [session, storage, pds, poller, backupIdentity]);
+
+  // runRotationCheck 依赖在它之后定义的 backupIdentity 之前就绪即可；
+  // setKeyRotationIntervalMs 经 ref 调用，避免声明顺序循环
+  const runRotationCheckRef = useRef<(() => void) | null>(null);
+  runRotationCheckRef.current = runRotationCheck;
+
+  useEffect(() => {
+    if (!poller) return;
+    // 启动后延迟首检（让首轮 poll 先跑），此后定时 + 回前台触发
+    const initial = setTimeout(() => runRotationCheck(), 60_000);
+    const periodic = setInterval(() => runRotationCheck(), 30 * 60 * 1000);
+    const appStateSub = RNAppState.addEventListener('change', (state) => {
+      if (state === 'active') runRotationCheck();
+    });
+    return () => {
+      clearTimeout(initial);
+      clearInterval(periodic);
+      appStateSub.remove();
+    };
+  }, [runRotationCheck, poller]);
 
   // -------------------------------------------------------------------------
   // Invite / Accept
@@ -1339,9 +1442,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   // 同账号兄弟设备产生了本机无法应用的 commit（密钥轮换/多端推进）：
                   // 本机旧状态推不出新 epoch（新熵不在任何寄给本叶的密文里），无法自行追赶，
                   // 唯一恢复路径是恢复最新备份（key-rotation-plan.md 1.6 / 1.4）
+                  reportSiblingRotation(commit.groupId);
+                  await msgStorage.setSessionIssue(commit.groupId, 'sibling-rotated');
                   console.warn('[dme:rotation] sibling device advanced session', commit.groupId, '- backup restore required');
                 } else {
                   // 普通成员的 commit 应用失败：会话已脱钩，需要重新握手（1.4 desync 兜底）
+                  await msgStorage.setSessionIssue(commit.groupId, 'desynced');
                   console.warn('[dme:desync] commit from', msg.senderDid, 'failed to apply on session', commit.groupId);
                 }
               }
@@ -2862,6 +2968,8 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       keyPackagePool,
       chatListVersion,
       pollBatchSize,
+      keyRotationIntervalMs,
+      backupRequired,
       appViewProxy,
       serverUrl,
       gatewayUrl,
@@ -2897,6 +3005,7 @@ blockList,
       acceptInviteQr,
       refreshKeyPackagePool,
       setPollBatchSize,
+      setKeyRotationIntervalMs,
       setAppViewProxy,
       setServerUrl,
       setGatewayUrl,

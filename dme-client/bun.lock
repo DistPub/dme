@@ -22,6 +22,7 @@
         "expo-file-system": "~18.0.0",
         "expo-image": "~2.0.7",
         "expo-image-picker": "~16.0.0",
+        "expo-secure-store": "~14.0.1",
         "expo-splash-screen": "~0.29.24",
         "expo-video": "~2.0.6",
         "expo-video-thumbnails": "~9.0.3",
@@ -951,6 +952,8 @@
     "expo-modules-autolinking": ["expo-modules-autolinking@2.0.8", "https://registry.npmmirror.com/expo-modules-autolinking/-/expo-modules-autolinking-2.0.8.tgz", { "dependencies": { "@expo/spawn-async": "^1.7.2", "chalk": "^4.1.0", "commander": "^7.2.0", "fast-glob": "^3.2.5", "find-up": "^5.0.0", "fs-extra": "^9.1.0", "require-from-string": "^2.0.2", "resolve-from": "^5.0.0" }, "bin": { "expo-modules-autolinking": "bin/expo-modules-autolinking.js" } }, "sha512-DezgnEYFQYic8hKGhkbztBA3QUmSftjaNDIKNAtS2iGJmzCcNIkatjN2slFDSWjSTNo8gOvPQyMKfyHWFvLpOQ=="],
 
     "expo-modules-core": ["expo-modules-core@2.2.3", "https://registry.npmmirror.com/expo-modules-core/-/expo-modules-core-2.2.3.tgz", { "dependencies": { "invariant": "^2.2.4" } }, "sha512-01QqZzpP/wWlxnNly4G06MsOBUTbMDj02DQigZoXfDh80vd/rk3/uVXqnZgOdLSggTs6DnvOgAUy0H2q30XdUg=="],
+
+    "expo-secure-store": ["expo-secure-store@14.0.1", "https://registry.npmmirror.com/expo-secure-store/-/expo-secure-store-14.0.1.tgz", { "peerDependencies": { "expo": "*" } }, "sha512-QUS+j4+UG4jRQalgnpmTvvrFnMVLqPiUZRzYPnG3+JrZ5kwVW2w6YS3WWerPoR7C6g3y/a2htRxRSylsDs+TaQ=="],
 
     "expo-splash-screen": ["expo-splash-screen@0.29.24", "https://registry.npmmirror.com/expo-splash-screen/-/expo-splash-screen-0.29.24.tgz", { "dependencies": { "@expo/prebuild-config": "~8.2.0" }, "peerDependencies": { "expo": "*" } }, "sha512-k2rdjbb3Qeg4g104Sdz6+qXXYba8QgiuZRSxHX8IpsSYiiTU48BmCCGy12sN+O1B+sD1/+WPL4duCa1Fy6+Y4g=="],
 

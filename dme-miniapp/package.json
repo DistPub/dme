@@ -39,7 +39,7 @@
     "qrcode-generator": "^1.4.4",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "ts-mls": "1.6.2",
+    "ts-mls": "^1.6.4",
     "weapp-qrcode-canvas-2d": "^1.0.8"
   },
   "devDependencies": {

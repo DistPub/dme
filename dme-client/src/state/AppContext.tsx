@@ -31,6 +31,7 @@ import type { PendingWelcome, KeyPackagePoolEntry, StoredMessage } from '../stor
 import { generateIdentityKeys } from '../crypto/identity';
 import type { IdentityKeys } from '../crypto/identity';
 import { MlsSession } from '../crypto/mls-session';
+import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -1334,6 +1335,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                 await msgStorage.putMlsSession(commit.groupId, groupSession.serialize());
               } catch (err) {
                 console.error('handleIncomingMessage: failed to process group commit:', err);
+                if (msg.senderDid === userDid) {
+                  // 同账号兄弟设备产生了本机无法应用的 commit（密钥轮换/多端推进）：
+                  // 本机旧状态推不出新 epoch（新熵不在任何寄给本叶的密文里），无法自行追赶，
+                  // 唯一恢复路径是恢复最新备份（key-rotation-plan.md 1.6 / 1.4）
+                  console.warn('[dme:rotation] sibling device advanced session', commit.groupId, '- backup restore required');
+                } else {
+                  // 普通成员的 commit 应用失败：会话已脱钩，需要重新握手（1.4 desync 兜底）
+                  console.warn('[dme:desync] commit from', msg.senderDid, 'failed to apply on session', commit.groupId);
+                }
               }
             }
           }
@@ -2331,6 +2341,9 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       await pds.createEnvelope(envelope);
     }
 
+    // 注：建群阶段的 commit 投递保留成对 1v1 通道——committer 恒为 creator，
+    // 而 creator 与每个受邀者的 1v1 会话由邀请流程（即 1v1 握手）结构性保证存在。
+    // 其余 commit 场景（踢人/拉人/轮换）已改走群 queueId 空间（commit-delivery.ts）。
     for (const { commitMessage, memberDids } of commits) {
       const commitMsg = {
         type: 'group_commit' as const,
@@ -2457,14 +2470,13 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       groupName: groupInfo.groupName,
     };
 
-    for (const member of groupInfo.members) {
-      if (member.did === session.did) continue;
-      const mlsSession = poller.getSession(member.did);
-      if (!mlsSession) continue;
-
+    // Phase 1.0：解散通知改走群 queueId 空间（无 MLS commit、epoch 不变，
+    // 当前 epoch 全员可达，不再依赖成对 1v1 会话）
+    const groupSession = poller.getSession(groupId);
+    if (groupSession) {
       const plaintextBytes = new TextEncoder().encode(JSON.stringify(dissolveMsg));
-      const encResult = await mlsSession.encrypt(plaintextBytes);
-      await storage.putMlsSession(member.did, mlsSession.serialize());
+      const encResult = await groupSession.encrypt(plaintextBytes);
+      await storage.putMlsSession(groupId, groupSession.serialize());
 
       const envelope: DmeEnvelope = {
         $type: 'dme.queue.envelope',
@@ -2502,6 +2514,10 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     const leafIndex = mlsSession.getMemberDids().indexOf(memberDid);
     if (leafIndex < 0) throw new Error('removeMemberFromGroup: member not in group');
 
+    // Phase 1.0：先快照「提交前状态」——commit 包装信封必须用旧 epoch 加密，
+    // 投进群自己的 queueId 空间（不再依赖成对 1v1 会话，见 commit-delivery.ts）
+    const preCommitState = mlsSession.serialize();
+
     const { commitMessage } = await mlsSession.removeMember(leafIndex);
     await storage.putMlsSession(groupId, mlsSession.serialize());
 
@@ -2527,30 +2543,12 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       await pds.createEnvelope(envelope);
     }
 
-    const commitMsg = {
-      type: 'group_commit' as const,
+    await deliverCommitViaGroupSpace({
+      preCommitStateSerialized: preCommitState,
       groupId,
-      commitPayload: bytesToBase64url(commitMessage),
-    };
-
-    for (const member of groupInfo.members) {
-      if (member.did === session.did || member.did === memberDid) continue;
-      const memberSession = poller.getSession(member.did);
-      if (!memberSession) continue;
-
-      const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
-      const encResult = await memberSession.encrypt(plaintextBytes);
-      await storage.putMlsSession(member.did, memberSession.serialize());
-
-      const envelope: DmeEnvelope = {
-        $type: 'dme.queue.envelope',
-        queueId: encResult.queueId,
-        payload: bytesToBase64url(encResult.ciphertext),
-        createdAt: new Date().toISOString(),
-        messageType: 'application',
-      };
-      await pds.createEnvelope(envelope);
-    }
+      commitMessage,
+      createEnvelope: (envelope) => pds.createEnvelope(envelope),
+    });
 
     const updatedMembers = groupInfo.members.filter((m) => m.did !== memberDid);
     const updatedInfo: GroupInfo = { ...groupInfo, members: updatedMembers };
@@ -2578,7 +2576,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     }
 
     const newMembers: GroupMember[] = [];
-    const commitsWithTargets: { commitMessage: Uint8Array; targetDids: string[] }[] = [];
+    const commitsWithTargets: { commitMessage: Uint8Array; preCommitState: string; targetDids: string[] }[] = [];
     const existingDids = new Set(groupInfo.members.map((m) => m.did));
 
     for (const invite of accepted) {
@@ -2588,6 +2586,8 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         ownEncryptionPrivateKey: identityKeys.encryption.privateKey,
       });
 
+      // Phase 1.0：每个 commit 产生前快照，投递改走群 queueId 空间（见 commit-delivery.ts）
+      const preCommitState = mlsSession.serialize();
       const { welcome, commitMessage } = await mlsSession.addMember(keyPackage);
 
       const welcomeMsg = createGroupWelcome({
@@ -2615,6 +2615,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
 
       commitsWithTargets.push({
         commitMessage,
+        preCommitState,
         targetDids: [...existingDids].filter((d) => d !== session.did),
       });
 
@@ -2624,30 +2625,13 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
 
     await storage.putMlsSession(groupId, mlsSession.serialize());
 
-    for (const { commitMessage, targetDids } of commitsWithTargets) {
-      const commitMsg = {
-        type: 'group_commit' as const,
+    for (const { commitMessage, preCommitState } of commitsWithTargets) {
+      await deliverCommitViaGroupSpace({
+        preCommitStateSerialized: preCommitState,
         groupId,
-        commitPayload: bytesToBase64url(commitMessage),
-      };
-
-      for (const targetDid of targetDids) {
-        const memberSession = poller.getSession(targetDid);
-        if (!memberSession) continue;
-
-        const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
-        const encResult = await memberSession.encrypt(plaintextBytes);
-        await storage.putMlsSession(targetDid, memberSession.serialize());
-
-        const envelope: DmeEnvelope = {
-          $type: 'dme.queue.envelope',
-          queueId: encResult.queueId,
-          payload: bytesToBase64url(encResult.ciphertext),
-          createdAt: new Date().toISOString(),
-          messageType: 'application',
-        };
-        await pds.createEnvelope(envelope);
-      }
+        commitMessage,
+        createEnvelope: (envelope) => pds.createEnvelope(envelope),
+      });
     }
 
     const updatedInfo: GroupInfo = { ...groupInfo, members: [...groupInfo.members, ...newMembers] };

@@ -144,7 +144,6 @@ export class DmePoller {
         console.log('DmePoller: group', groupId, 'ownLeafIndex', ownLeafIndex, 'allGens', allGens);
 
         for (let i = 0; i < memberDids.length; i++) {
-          if (i === ownLeafIndex) continue;
           const senderDid = memberDids[i];
           if (!senderDid) continue;
 
@@ -235,6 +234,19 @@ export class DmePoller {
           const session = this.sessions.get(ctx.groupId);
           if (!session) {
             console.log('DmePoller: no session for group', ctx.groupId);
+            this.inFlightQueueIds.delete(env.queueId);
+            continue;
+          }
+
+          // 多端支持：扫描包含自己的叶子（去掉了 own-leaf skip 后，自己的设备也会拉到本机发出、已推进过 gen 的信封）。
+          // 若本机对该叶子已消费到比信封 gen 更靠后，说明这条是本机自己发的、发送时已推进过 gen ——
+          // 不要再解密（会触发 "gen in the past"），直接标记为已处理跳过。
+          const ownLeaf = session.getSenderLeafIndex();
+          if (
+            ctx.senderLeafIndex === ownLeaf &&
+            ctx.generation < session.getExpectedGeneration(ownLeaf)
+          ) {
+            await this.storage.markQueueIdProcessed(env.queueId);
             this.inFlightQueueIds.delete(env.queueId);
             continue;
           }

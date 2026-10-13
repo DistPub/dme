@@ -81,6 +81,7 @@ dme-client/
 | 表情选择器 | `src/ui/EmojiPicker.tsx`（浮层锚定按钮） |
 | 语音消息（web，按住说话） | `src/utils/voice-recorder.web.ts`（`start/stop/cancelVoiceRecording` + `MAX_VOICE_DURATION_MS`/`VOICE_MIME_TYPE`/`VOICE_FORMAT_EXT`，封装 mp3-mediarecorder + getUserMedia + Worker，API 对齐小程序 `src/platform/recorder.ts`）；原生 stub `src/utils/voice-recorder.ts`；按钮在 `ChatViewScreen` 文件按钮旁，`Platform.OS==='web'` 时渲染，按住开始/滑上取消/松开发送，走 `sendFileMessage` 以 `audio/mpeg` blob 发送 |
 | 消息操作菜单 | `src/ui/MessageActionMenu.tsx`（长按/右键浮层：复制/转发/删除；文件消息通过 `showCopy=false` 隐藏复制项） |
+| 多端消息同步（同账号备份恢复登录，发消息跨设备同步） | `src/poll/poller.ts`（去掉 `i === ownLeafIndex` 的 skip + gen 守卫，接收端扫描自己叶子）+ `src/state/AppContext.tsx`（`handleIncomingMessage` 按 `senderDid === userDid` 渲染 outgoing） |
 
 ## 导航流程
 
@@ -117,6 +118,7 @@ Web 支持 `?goto=QrDisplay|QrScan|ChatList|Settings` 和 `?auto=1`、`?token=` 
 - **命名导出**: 统一 `export function/class`，无 default export（除 App.tsx）
 - **轮询**: 每 5-15s 随机间隔，批量预计算 `batchSize`（默认 3，1-20 可配置）个未来 queueId，按 generation 排序处理；`pollOnce` 用 `polling` 布尔标志防重入，`inFlightQueueIds`（Set）跳过本轮已投递 queueId，且 `markQueueIdProcessed` 在 `onMessage`/`onWelcome` 之前调用（先标记后处理，避免回调 await 期间被下一轮重复处理）
 - **消息去重**: `DmeStorage.hasMessage(conversationId, messageId)` 判断会话是否已存指定 messageId；`handleIncomingMessage` 的 text/file 分支（含群聊 default 分支）入口做幂等检查，已存在则跳过存储，防止重复存储与误播提示音
+- **多端消息同步**: 同账号通过备份恢复登录的两台设备共享同一 MLS 叶子/identity 快照（同一 DID），故另一台设备能按其游标扫描并解密本机叶子发出的消息。发送端仍用 `mlsSession.encrypt`（发送时本地推进 gen），poller 已去掉 `i === ownLeafIndex` 的 skip 让接收端扫描自己叶子；处理循环对“自己叶子且 `gen < 已消费 gen`”的信封直接 markQueueIdProcessed 跳过（避免本机轮询重解密已推进 gen 的信封报 `Desired gen in the past`）。`handleIncomingMessage` 按 `senderDid === userDid` 把同账号发出的消息渲染为 outgoing。跨端若两台在同一 gen 各发一条，写同一 queueId 被 dme-server 覆盖、有一条静默丢失（accepted race，用户拍板“输了无所谓”）；单端收发不受影响
 - **输入框多行自适应**: `ChatViewScreen` 输入框 `multiline`，`onContentSizeChange` 动态调高度（clamp 44–240px）；`FlatList + 输入栏` 外层包 `KeyboardAvoidingView`（iOS `behavior='padding'`）；Web/PWA 端 `public/index.html` 把 `html/body/#root` 设为 `100dvh`，让键盘弹起时根容器随可视窗口缩放，避免整页被顶上去；Web 端 header 额外用 `position: fixed` 置顶，`container` 用 `paddingTop: 56` 预留空间，确保标题栏始终可见；Enter 发送仅在**非触屏**设备（`navigator.maxTouchPoints === 0`）的 web 端生效（`onKeyPress` 且 `!shiftKey`），触屏设备回车换行；发送后 `keepInputFocused()` 保持焦点（web 用 `requestAnimationFrame` 补一次），发送按钮外层 `View` 挂 `mousedown` preventDefault 防 web 失焦（`Button` 支持 `onPressIn`）
 - **消息类型**: `StoredMessage.kind` 区分 `text`/`group_invite`/`group_system`/`file`/`post`；`conversationId` 指定存储到哪个会话；`group_invite_request` 在 `ChatListScreen` 最近消息预览渲染为 `@handle邀请你加入群聊：{groupName}`，在 `ChatViewScreen` 渲染为居中紧凑卡片 `群聊邀请：{groupName}` + Accept/Decline 按钮，顶部邀请队列显示 `From @handle`
 - **表情反应**: `ReactionMessage`（`type: 'reaction'`，add/remove）通过 MLS session 加密发送，挂在 `StoredMessage.reactions`（`Reaction[]`），接收端 `handleIncomingMessage` 的 `reaction` 分支直接更新目标消息，不存为文本；UI 在 `MessageBubble`/`FileMessageBubble` 按 emoji 合并并显示计数

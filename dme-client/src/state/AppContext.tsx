@@ -1470,7 +1470,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             toDid: userDid,
             plaintext: msg.plaintext,
             createdAt: msg.envelope.createdAt,
-            sent: false,
+            sent: msg.senderDid === userDid,
             kind: 'text',
             conversationId: msg.groupId,
           });
@@ -1516,7 +1516,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
          },
         kind: 'file',
         createdAt: msg.envelope.createdAt,
-        sent: false,
+        sent: msg.senderDid === userDid,
         conversationId: msg.groupId,
       });
 
@@ -1541,7 +1541,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         toDid: userDid,
         plaintext: msg.plaintext,
         createdAt: msg.envelope.createdAt,
-        sent: false,
+        sent: msg.senderDid === userDid,
         kind: 'post',
         conversationId: msg.groupId,
       });
@@ -1554,17 +1554,17 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         console.log('handleIncomingMessage: duplicate text message, skipping', msg.envelope.queueId);
         return;
       }
-      await msgStorage.putMessage({
-        id: msg.envelope.queueId,
-        fromDid: msg.senderDid,
-        toDid: userDid,
-        plaintext: msg.plaintext,
-        createdAt: msg.envelope.createdAt,
-        sent: false,
-        kind: 'text',
-        conversationId: msg.groupId,
-      });
-      const shouldPlayText = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
+          await msgStorage.putMessage({
+            id: msg.envelope.queueId,
+            fromDid: msg.senderDid,
+            toDid: userDid,
+            plaintext: msg.plaintext,
+            createdAt: msg.envelope.createdAt,
+            sent: msg.senderDid === userDid,
+            kind: 'text',
+            conversationId: msg.groupId,
+          });
+          const shouldPlayText = soundEnabled && (activeConversationRef.current === null || activeConversationRef.current === msg.groupId);
       if (shouldPlayText) {
         void playMessageSound();
       }

@@ -616,6 +616,15 @@ export class DmeStorage {
     }
   }
 
+  /** 清除全部会话异常标记（备份恢复后状态整体重建，旧标记作废）。 */
+  async clearAllSessionIssues(): Promise<void> {
+    const keys = await storage.getAllKeys();
+    const issueKeys = keys.filter((k) => k.startsWith(this.prefix + 'sessionIssue:'));
+    if (issueKeys.length > 0) {
+      await Promise.all(issueKeys.map((key) => storage.removeItem(key)));
+    }
+  }
+
   // -----------------------------------------------------------------------
   // 备份联动（1.5）：轮换后未自动刷新备份时的强提示标记
   // -----------------------------------------------------------------------

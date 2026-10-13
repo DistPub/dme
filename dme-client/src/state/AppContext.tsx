@@ -887,6 +887,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await saveBackupPassword(password);
     await storage.setBackupRequired(false);
     setBackupRequiredState(false);
+    // 恢复后状态整体重建（会话来自备份），旧的脱钩/兄弟轮换标记作废
+    await storage.clearAllSessionIssues();
 
     return true;
   }, [pds, storage, poller]);

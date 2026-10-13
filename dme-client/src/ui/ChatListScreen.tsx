@@ -138,6 +138,27 @@ export function ChatListScreen(): React.JSX.Element {
   const [avatarError, setAvatarError] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [userHandle, setUserHandle] = useState('');
+  const [sessionIssues, setSessionIssues] = useState<{ groupId: string; issue: 'sibling-rotated' | 'desynced' }[]>([]);
+
+  // 会话异常标记（sibling-rotated / desynced）：有新标记或状态重建后刷新
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!app.storage) return;
+      try {
+        const groupIds = await app.storage.listGroups();
+        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced' }[] = [];
+        for (const gid of groupIds) {
+          const issue = await app.storage.getSessionIssue(gid);
+          if (issue) issues.push({ groupId: gid, issue });
+        }
+        if (!cancelled) setSessionIssues(issues);
+      } catch (err) {
+        console.error('ChatListScreen: load session issues failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [app.storage, app.chatListVersion]);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
   const [backupPwd, setBackupPwd] = useState('');
   const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
@@ -720,6 +741,25 @@ const resolveProfiles = useCallback(async (
         renderItem={renderItem}
         ListHeaderComponent={
           <>
+            {app.backupRequired && (
+              <TouchableOpacity
+                style={styles.issueBanner}
+                onPress={() => navigation.navigate('Settings')}
+              >
+                <Text style={styles.issueBannerText}>{t('chatlist.backupRequiredBanner')}</Text>
+              </TouchableOpacity>
+            )}
+            {sessionIssues.length > 0 && (
+              <View style={styles.issueBanner}>
+                {sessionIssues.map(({ groupId, issue }) => (
+                  <Text key={groupId} style={styles.issueBannerText}>
+                    {issue === 'sibling-rotated'
+                      ? t('chatlist.siblingRotatedBanner')
+                      : t('chatlist.desyncedBanner')}
+                  </Text>
+                ))}
+              </View>
+            )}
             {app.receivedGroupInvites.filter((i) => i.status === 'pending').length > 0 && (
               <View style={styles.inviteSection}>
                 <Text style={styles.sectionTitle}>{t('chatlist.groupInvitations')}</Text>
@@ -1176,6 +1216,20 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.md,
+  },
+  issueBanner: {
+    marginBottom: theme.spacing.md,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.error,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing.md,
+    gap: theme.spacing.xs,
+  },
+  issueBannerText: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    lineHeight: 18,
   },
   sectionTitle: {
     color: theme.colors.textSecondary,

@@ -2,7 +2,7 @@
 
 - 输出或提示优先用中文。
 - 开始回答前先说"帅哥是这样的"
-- **dme-miniapp 已停止开发**：不再改动其代码，不再为其补功能/同步改动；客户端功能更新只在 `dme-client`（RN + web）进行。
+- **dme-miniapp 冻结规则（2026-10-14 安全例外）：**默认仍冻结；仅安全修复（ts-mls 升级、密钥轮换 rotation/commit-delivery/password-cache、相关 UI 与安全配套）由用户授权随 `dme-client` 同步移植，其他新功能一律不做。
 
 ---
 
@@ -17,14 +17,14 @@ DME (Decentralized Message Envelope) 是基于 AT Protocol (Bluesky) 的端到�
 ```
 dme/
 ├── dme-client/     Expo + RN 移动/Web App（TS strict, Bun；web 产物不含 Skia）
-├── dme-miniapp/    微信小程序端（Taro 4 + React 18，**已冻结：不再开发更新**）
+├── dme-miniapp/    微信小程序端（Taro 4 + React 18，**默认冻结：仅安全修复例外**）
 ├── dme-server/     Go AppView - Jetstream 消费 + BadgerDB KV + 批量盲查
 ├── dme-gateway/    Cloudflare Worker - 反向代理 + blob CDN 缓存
 ```
 
-## dme-miniapp 概要（微信小程序端 · 🔒 已冻结）
+## dme-miniapp 概要（微信小程序端 · 🔒 默认冻结，安全例外随 dme-client 同步）
 
-> ⚠️ **本系统已停止开发，不再改动其代码，也不为新功能同步更新。** 以下文档仅作历史参考。新增客户端功能只在 `dme-client`（RN + web）实现。
+> ⚠️ **本系统默认冻结：不再加新功能。**2026-10-14 起安全修复（ts-mls 1.6.4 升级、密钥轮换 rotation/commit-delivery/password-cache 及其 UI/i18n）由用户授权随 `dme-client` 同步移植；其余改动仍须先经用户确认。
 
 dme-client 的微信小程序移植版，**Taro 4.2 + React 18 + TypeScript**，编译目标 `weapp`。功能对齐 dme-client 14 屏（唯一排除项：web 的 iframe embed 嵌入模式）。
 

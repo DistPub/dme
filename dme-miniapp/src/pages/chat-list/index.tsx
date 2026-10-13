@@ -95,6 +95,7 @@ export default function ChatListPage(): React.JSX.Element {
     groups,
     groupInfos,
     chatListVersion,
+    backupRequired,
     blockList,
     receivedGroupInvites,
     pendingInvites,
@@ -136,6 +137,27 @@ export default function ChatListPage(): React.JSX.Element {
   const [myHandle, setMyHandle] = useState('');
 
   const [inviterHandles, setInviterHandles] = useState<Record<string, string>>({});
+  const [sessionIssues, setSessionIssues] = useState<{ groupId: string; issue: 'sibling-rotated' | 'desynced' }[]>([]);
+
+  // 会话异常标记（sibling-rotated / desynced）：有新标记或状态重建后刷新
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!storage) return;
+      try {
+        const groupIds = await storage.listGroups();
+        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced' }[] = [];
+        for (const gid of groupIds) {
+          const issue = await storage.getSessionIssue(gid);
+          if (issue) issues.push({ groupId: gid, issue });
+        }
+        if (!cancelled) setSessionIssues(issues);
+      } catch (err) {
+        console.error('chat-list: 加载会话异常标记失败', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [storage, chatListVersion]);
   const [welcomeHandles, setWelcomeHandles] = useState<Record<string, string>>({});
 
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
@@ -627,6 +649,27 @@ export default function ChatListPage(): React.JSX.Element {
 
       {/* ---------------- 列表 ---------------- */}
       <ScrollView className="chatlist__list" scrollY>
+        {/* ⓪ 备份/会话异常横幅 */}
+        {backupRequired ? (
+          <View
+            className="chatlist__issueBanner"
+            onClick={() => void Taro.navigateTo({ url: '/pages/settings/index' })}
+          >
+            <Text className="chatlist__issueBannerText">{t('chatlist.backupRequiredBanner')}</Text>
+          </View>
+        ) : null}
+        {sessionIssues.length > 0 ? (
+          <View className="chatlist__issueBanner">
+            {sessionIssues.map(({ groupId, issue }) => (
+              <Text key={groupId} className="chatlist__issueBannerText">
+                {issue === 'sibling-rotated'
+                  ? t('chatlist.siblingRotatedBanner')
+                  : t('chatlist.desyncedBanner')}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+
         {/* ① 收到的群邀请 */}
         {pendingReceivedInvites.length > 0 ? (
           <View className="chatlist__section">

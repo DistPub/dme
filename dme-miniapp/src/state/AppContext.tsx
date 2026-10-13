@@ -40,6 +40,9 @@ import type { PendingWelcome, KeyPackagePoolEntry, StoredMessage, Reaction } fro
 import { generateIdentityKeys } from '../crypto/identity';
 import type { IdentityKeys } from '../crypto/identity';
 import { MlsSession } from '../crypto/mls-session';
+import { deliverCommitViaGroupSpace } from './commit-delivery';
+import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
+import { maybeRotateGroups, reportSiblingRotation, type RotationDeps } from '../crypto/rotation';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -162,6 +165,8 @@ interface AppState {
   keyPackagePool: KeyPackagePoolEntry[];
   chatListVersion: number;
   pollBatchSize: number;
+  keyRotationIntervalMs: number;
+  backupRequired: boolean;
   appViewProxy: string;
   serverUrl: string;
   gatewayUrl: string;
@@ -244,6 +249,7 @@ interface AppActions {
   acceptInviteQr: (qrString: string) => Promise<void>;
   refreshKeyPackagePool: () => Promise<void>;
   setPollBatchSize: (size: number) => Promise<void>;
+  setKeyRotationIntervalMs: (ms: number) => Promise<void>;
   setAppViewProxy: (proxy: string) => Promise<void>;
   setServerUrl: (url: string) => Promise<void>;
   setGatewayUrl: (url: string) => Promise<void>;
@@ -320,6 +326,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [keyPackagePool, setKeyPackagePool] = useState<KeyPackagePoolEntry[]>([]);
   const [chatListVersion, setChatListVersion] = useState(0);
   const [pollBatchSize, setPollBatchSizeState] = useState(3);
+  const [keyRotationIntervalMs, setKeyRotationIntervalMsState] = useState(7 * 24 * 60 * 60 * 1000);
+  const [backupRequired, setBackupRequiredState] = useState(false);
   const [appViewProxy, setAppViewProxyState] = useState<string>(DEFAULT_APPVIEW_PROXY);
   const [serverUrl, setServerUrlState] = useState<string>(DME_SERVER_URL);
   const [gatewayUrl, setGatewayUrlState] = useState<string>(DEFAULT_DME_GATEWAY_URL);
@@ -423,6 +431,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [storage, poller],
   );
 
+  const setKeyRotationIntervalMs = useCallback(
+    async (ms: number): Promise<void> => {
+      if (!storage) return;
+      await storage.setKeyRotationIntervalMs(ms);
+      setKeyRotationIntervalMsState(ms);
+      // 周期变更后立即重查一次（缩短周期可提前触发）
+      runRotationCheckRef.current?.();
+    },
+    [storage],
+  );
+
   const setAppViewProxy = useCallback(
     async (proxy: string): Promise<void> => {
       if (!storage || !pds) return;
@@ -474,6 +493,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
 
       const batchSize = await correctStorage.getPollBatchSize();
+      const rotationIntervalValue = await correctStorage.getKeyRotationIntervalMs();
+      const backupRequiredValue = await correctStorage.isBackupRequired();
       const newPoller = new DmePoller(newPds, correctStorage, batchSize);
 
       newPoller.start(
@@ -527,6 +548,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingWelcomes(welcomes);
       setKeyPackagePool(pool);
       setPollBatchSizeState(batchSize);
+      setKeyRotationIntervalMsState(rotationIntervalValue);
+      setBackupRequiredState(backupRequiredValue);
       setAppViewProxyState(appViewProxyValue);
       setServerUrlState(serverUrlValue);
       setGatewayUrlState(gatewayUrlValue);
@@ -615,6 +638,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (storage) {
         await storage.clear();
       }
+      // 1.2：登出清除密码缓存（内存），换账号不残留
+      await clearBackupPassword();
     } catch (err) {
       console.error('登出失败:', err);
     } finally {
@@ -633,6 +658,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setKeyPackagePool([]);
       setGroupInfos([]);
       setPollBatchSizeState(3);
+      setKeyRotationIntervalMsState(7 * 24 * 60 * 60 * 1000);
+      setBackupRequiredState(false);
       setAppViewProxyState(DEFAULT_APPVIEW_PROXY);
       setServerUrlState(DME_SERVER_URL);
       setGatewayUrlState(DEFAULT_DME_GATEWAY_URL);
@@ -838,6 +865,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       const encryptedData = encryptBackup(data, password);
       await activePds.putIdentityBackup(encryptedData);
+
+      // 1.2：备份成功即记住密码（小程序仅会话内存），供轮换后静默刷新备份（1.5）；
+      // 并清除「必须备份」强提示标记
+      await saveBackupPassword(password);
+      await activeStorage.setBackupRequired(false);
+      setBackupRequiredState(false);
     },
     [identityKeys, pds, storage],
   );
@@ -885,6 +918,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroups(Object.keys(data.mlsSessions));
       setChatListVersion((v) => v + 1);
 
+      // 1.2：恢复时也输过密码，同样记住（用户拍板）；
+      // 恢复后状态整体重建，旧的脱钩/兄弟轮换标记作废
+      await saveBackupPassword(password);
+      await activeStorage.setBackupRequired(false);
+      setBackupRequiredState(false);
+      await activeStorage.clearAllSessionIssues();
+
       return true;
     },
     [pds, storage, poller, putIdentityKeys],
@@ -896,6 +936,68 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const data = await activePds.getIdentityBackup();
     return data !== null;
   }, [pds]);
+
+  // -------------------------------------------------------------------------
+  // 定期密钥轮换（key-rotation-plan.md 1.3 / 1.5，Phase 2 移植）
+  // -------------------------------------------------------------------------
+
+  const runRotationCheck = useCallback((): void => {
+    const activeStorage = storageRef.current ?? storage;
+    const activePds = pdsRef.current ?? pds;
+    const activePoller = pollerRef.current ?? poller;
+    if (!session || !activeStorage || !activePds || !activePoller) return;
+    const deps: RotationDeps = {
+      listGroupIds: () => activeStorage.listGroups(),
+      getSession: (groupId) => activePoller.getSession(groupId),
+      reloadSession: async (groupId, serialized) => {
+        const impl = await getNobleMlsImpl();
+        const restored = await MlsSession.deserialize(serialized, impl);
+        activePoller.addSession(groupId, restored);
+      },
+      putMlsSession: (groupId, serialized) => activeStorage.putMlsSession(groupId, serialized),
+      createEnvelope: (envelope) => activePds.createEnvelope(envelope),
+      pollOnce: () => activePoller.pollOnce(),
+      getIntervalMs: () => activeStorage.getKeyRotationIntervalMs(),
+      getLastRotationAt: (groupId) => activeStorage.getLastRotationAt(groupId),
+      setLastRotationAt: (groupId, ts) => activeStorage.setLastRotationAt(groupId, ts),
+      onRotated: async (groupId) => {
+        // 1.5 备份联动：有缓存密码 → 静默刷新备份；无 → 置强提示标记。
+        // 备份刷新失败仅 log（不影响轮换结果，下个周期重试时再触发）
+        try {
+          const cachedPassword = await getBackupPassword();
+          if (cachedPassword) {
+            await backupIdentity(cachedPassword);
+            console.log('[dme:rotation] 轮换后已静默刷新备份', groupId);
+          } else {
+            await activeStorage.setBackupRequired(true);
+            setBackupRequiredState(true);
+          }
+        } catch (err) {
+          console.warn('[dme:rotation] 轮换后备份刷新失败:', err);
+        }
+      },
+      onAborted: (groupId, reason) => {
+        console.warn('[dme:rotation] 轮换中止', groupId, reason);
+        void activeStorage.setSessionIssue(groupId, 'sibling-rotated');
+      },
+    };
+    maybeRotateGroups(deps);
+  }, [session, storage, pds, poller, backupIdentity]);
+
+  const runRotationCheckRef = useRef<(() => void) | null>(null);
+  runRotationCheckRef.current = runRotationCheck;
+
+  useEffect(() => {
+    if (!poller) return;
+    // 小程序无全局 AppState：启动后延迟首检 + 定时检查；
+    // 页面层可在 useDidShow 里调用 runRotationCheck 补充前台触发
+    const initial = setTimeout(() => runRotationCheck(), 60_000);
+    const periodic = setInterval(() => runRotationCheck(), 30 * 60 * 1000);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(periodic);
+    };
+  }, [runRotationCheck, poller]);
 
   // -------------------------------------------------------------------------
   // 邀请 / 接受（1:1 握手）
@@ -1245,6 +1347,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   await msgStorage.putMlsSession(commit.groupId, groupSession.serialize());
                 } catch (err) {
                   console.error('handleIncomingMessage: 处理 group commit 失败', err);
+                  if (msg.senderDid === userDid) {
+                    // 同账号兄弟设备产生了本机无法应用的 commit（密钥轮换/多端推进）：
+                    // 唯一恢复路径是恢复最新备份（key-rotation-plan.md 1.6 / 1.4）
+                    reportSiblingRotation(commit.groupId);
+                    await msgStorage.setSessionIssue(commit.groupId, 'sibling-rotated');
+                    console.warn('[dme:rotation] 兄弟设备已推进会话', commit.groupId, '需恢复备份');
+                  } else {
+                    // 普通成员的 commit 应用失败：会话已脱钩，需重新握手（1.4 desync 兑底）
+                    await msgStorage.setSessionIssue(commit.groupId, 'desynced');
+                    console.warn('[dme:desync]', msg.senderDid, '的 commit 应用失败', commit.groupId);
+                  }
                 }
               }
             }
@@ -1315,31 +1428,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                 try {
                   const leafIndex = groupSession.getMemberDids().indexOf(left.memberDid);
                   if (leafIndex >= 0) {
+                    // Phase 1.0：先快照提交前状态，commit 投群 queueId 空间
+                    const preCommitState = groupSession.serialize();
                     const { commitMessage } = await groupSession.removeMember(leafIndex);
                     await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
 
-                    const commitMsg = {
-                      type: 'group_commit' as const,
+                    await deliverCommitViaGroupSpace({
+                      preCommitStateSerialized: preCommitState,
                       groupId: left.groupId,
-                      commitPayload: bytesToBase64url(commitMessage),
-                    };
-                    for (const member of existing.members) {
-                      if (member.did === userDid || member.did === left.memberDid) continue;
-                      const memberSession = poller.getSession(member.did);
-                      if (!memberSession) continue;
-
-                      const encResult = await memberSession.encrypt(
-                        new TextEncoder().encode(JSON.stringify(commitMsg)),
-                      );
-                      await msgStorage.putMlsSession(member.did, memberSession.serialize());
-                      await pds.createEnvelope({
-                        $type: 'dme.queue.envelope',
-                        queueId: encResult.queueId,
-                        payload: bytesToBase64url(encResult.ciphertext),
-                        createdAt: new Date().toISOString(),
-                        messageType: 'application',
-                      });
-                    }
+                      commitMessage,
+                      createEnvelope: (envelope) => pds.createEnvelope(envelope),
+                    });
                   }
                 } catch (err) {
                   console.error('handleIncomingMessage: 移除退群成员失败', err);
@@ -2288,6 +2387,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await sendEncryptedTo(invite.inviteeDid, metadataMsg);
       }
 
+      // 注：建群阶段的 commit 投递保留成对 1v1 通道——committer 恒为 creator，
+      // 而 creator 与每个受邀者的 1v1 会话由邀请流程结构性保证存在。
+      // 其余 commit 场景（踢人/拉人/轮换/退群移除）已改走群 queueId 空间。
       // commit 广播
       for (const { commitMessage, memberDids } of commits) {
         const commitMsg = {
@@ -2400,7 +2502,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (accepted.length === 0) throw new Error('addAcceptedMembersToGroup: 没有已接受的成员');
 
       const newMembers: GroupMember[] = [];
-      const commitsWithTargets: { commitMessage: Uint8Array; targetDids: string[] }[] = [];
+      const commitsWithTargets: { commitMessage: Uint8Array; preCommitState: string; targetDids: string[] }[] = [];
       const existingDids = new Set(groupInfo.members.map((m) => m.did));
 
       for (const invite of accepted) {
@@ -2410,6 +2512,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           ownEncryptionPrivateKey: identityKeys.encryption.privateKey,
         });
 
+        // Phase 1.0：每个 commit 产生前快照，投递改走群 queueId 空间（见 commit-delivery.ts）
+        const preCommitState = mlsSession.serialize();
         const { welcome, commitMessage } = await mlsSession.addMember(keyPackage);
 
         const welcomeMsg = createGroupWelcome({
@@ -2426,6 +2530,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         commitsWithTargets.push({
           commitMessage,
+          preCommitState,
           targetDids: [...existingDids].filter((d) => d !== session.did),
         });
 
@@ -2439,15 +2544,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       await storage.putMlsSession(groupId, mlsSession.serialize());
 
-      for (const { commitMessage, targetDids } of commitsWithTargets) {
-        const commitMsg = {
-          type: 'group_commit' as const,
+      for (const { commitMessage, preCommitState } of commitsWithTargets) {
+        await deliverCommitViaGroupSpace({
+          preCommitStateSerialized: preCommitState,
           groupId,
-          commitPayload: bytesToBase64url(commitMessage),
-        };
-        for (const targetDid of targetDids) {
-          await sendEncryptedTo(targetDid, commitMsg);
-        }
+          commitMessage,
+          createEnvelope: (envelope) => pds.createEnvelope(envelope),
+        });
       }
 
       const updatedInfo: GroupInfo = {
@@ -2482,9 +2585,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         groupName: groupInfo.groupName,
       };
 
-      for (const member of groupInfo.members) {
-        if (member.did === session.did) continue;
-        await sendEncryptedTo(member.did, dissolveMsg);
+      // Phase 1.0：解散通知改走群 queueId 空间（无 MLS commit、epoch 不变，
+      // 当前 epoch 全员可达，不再依赖成对 1v1 会话）
+      const groupSession = poller.getSession(groupId);
+      if (groupSession) {
+        const encResult = await groupSession.encrypt(
+          new TextEncoder().encode(JSON.stringify(dissolveMsg)),
+        );
+        await storage.putMlsSession(groupId, groupSession.serialize());
+        await pds.createEnvelope({
+          $type: 'dme.queue.envelope',
+          queueId: encResult.queueId,
+          payload: bytesToBase64url(encResult.ciphertext),
+          createdAt: new Date().toISOString(),
+          messageType: 'application',
+        });
       }
 
       const dissolvedInfo: GroupInfo = { ...groupInfo, dissolved: true };
@@ -2513,6 +2628,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const leafIndex = mlsSession.getMemberDids().indexOf(memberDid);
       if (leafIndex < 0) throw new Error('removeMemberFromGroup: 该成员不在群里');
 
+      // Phase 1.0：先快照「提交前状态」，commit 投群 queueId 空间（见 commit-delivery.ts）
+      const preCommitState = mlsSession.serialize();
       const { commitMessage } = await mlsSession.removeMember(leafIndex);
       await storage.putMlsSession(groupId, mlsSession.serialize());
 
@@ -2523,15 +2640,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       };
       await sendEncryptedTo(memberDid, removedMsg);
 
-      const commitMsg = {
-        type: 'group_commit' as const,
+      await deliverCommitViaGroupSpace({
+        preCommitStateSerialized: preCommitState,
         groupId,
-        commitPayload: bytesToBase64url(commitMessage),
-      };
-      for (const member of groupInfo.members) {
-        if (member.did === session.did || member.did === memberDid) continue;
-        await sendEncryptedTo(member.did, commitMsg);
-      }
+        commitMessage,
+        createEnvelope: (envelope) => pds.createEnvelope(envelope),
+      });
 
       const updatedInfo: GroupInfo = {
         ...groupInfo,
@@ -2648,6 +2762,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       keyPackagePool,
       chatListVersion,
       pollBatchSize,
+      keyRotationIntervalMs,
+      backupRequired,
       appViewProxy,
       serverUrl,
       gatewayUrl,
@@ -2684,6 +2800,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       acceptInviteQr,
       refreshKeyPackagePool,
       setPollBatchSize,
+      setKeyRotationIntervalMs,
       setAppViewProxy,
       setServerUrl,
       setGatewayUrl,
@@ -2718,6 +2835,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       keyPackagePool,
       chatListVersion,
       pollBatchSize,
+      keyRotationIntervalMs,
+      backupRequired,
       appViewProxy,
       serverUrl,
       gatewayUrl,
@@ -2754,6 +2873,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       acceptInviteQr,
       refreshKeyPackagePool,
       setPollBatchSize,
+      setKeyRotationIntervalMs,
       setAppViewProxy,
       setServerUrl,
       setGatewayUrl,

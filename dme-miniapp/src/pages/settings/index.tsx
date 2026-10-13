@@ -34,6 +34,15 @@ import { useWebTitle } from '../../utils/web-title';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../../config';
 import './index.scss';
 
+const ROTATION_OPTIONS: {
+  ms: number;
+  labelKey: 'settings.rotation24h' | 'settings.rotation7d' | 'settings.rotation30d';
+}[] = [
+  { ms: 24 * 60 * 60 * 1000, labelKey: 'settings.rotation24h' },
+  { ms: 7 * 24 * 60 * 60 * 1000, labelKey: 'settings.rotation7d' },
+  { ms: 30 * 24 * 60 * 60 * 1000, labelKey: 'settings.rotation30d' },
+];
+
 export default function SettingsPage(): React.JSX.Element {
   const { t, language, setLanguage } = useI18n();
   const {
@@ -42,7 +51,10 @@ export default function SettingsPage(): React.JSX.Element {
     serverUrl,
     gatewayUrl,
     soundEnabled,
+    keyRotationIntervalMs,
+    backupRequired,
     setPollBatchSize,
+    setKeyRotationIntervalMs,
     setAppViewProxy,
     setServerUrl,
     setGatewayUrl,
@@ -277,6 +289,27 @@ export default function SettingsPage(): React.JSX.Element {
             onChange={(e) => void setSoundEnabled(e.detail.value)}
           />
         </View>
+
+        {/* 6.5 密钥轮换周期（三档，无关闭项） */}
+        <Text className="settings__title">{t('settings.rotationInterval')}</Text>
+        <Text className="settings__hint">{t('settings.rotationIntervalHint')}</Text>
+        <View className="settings__rowButtons">
+          {ROTATION_OPTIONS.map((opt) => (
+            <Button
+              key={opt.ms}
+              className={`settings__halfBtn ${keyRotationIntervalMs === opt.ms ? 'settings__halfBtn--on' : ''}`}
+              onClick={() => void setKeyRotationIntervalMs(opt.ms)}
+            >
+              {t(opt.labelKey)}
+            </Button>
+          ))}
+        </View>
+
+        {backupRequired ? (
+          <View className="settings__banner">
+            <Text className="settings__bannerText">{t('settings.backupRequiredBanner')}</Text>
+          </View>
+        ) : null}
 
         {/* 7. 身份备份 */}
         <Text className="settings__title">{t('settings.identityBackup')}</Text>

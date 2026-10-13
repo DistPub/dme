@@ -1,5 +1,11 @@
 # 密钥安全升级计划：ts-mls 1.6.4 + 定期密钥轮换
 
+> **进度（2026-10-14 实施完毕，待用户手动测试）：**
+> - ✅ Phase 0：双端 ts-mls 1.6.4（client: bun.lock；miniapp: 精确锁）+ tsc/构建/verify-artifact 全过 + 踢人效力代码级确认。已上传体验版 0.0.1。发布协调（同批发版/渗透期冻结群管理/补踢）待用户执行。
+> - ✅ Phase 1（dme-client）：1.0 投递修复（commit-delivery.ts，群 commit 改走群 queueId 空间）+ rotation.ts（单飞锁/抖动/pre-poll/失败回滚）+ password-cache（native Keychain via expo-secure-store ~14.0.1 / web 会话内存）+ 备份联动（轮换后静默刷备份或 backupRequired 强提示）+ 检测分流（sibling-rotated / desynced，持久化 sessionIssue）+ 设置页三档选择器 + ChatList 横幅 + i18n。
+> - ✅ Phase 2（miniapp）：同名模块移植（password-cache 仅会话内存——小程序无系统安全区）、设置页/横幅/i18n、AGENTS.md 解冻标注（仅安全例外）。
+> - 实现与计划的偏差：①"确定性错峰按 leafIndex"未实现——触发时刻随设备回前台自然错开，仅用 0–2min 随机抖动（原 ±10% 周期会把轮换拖到到期后数小时）；②兄弟设备检测复用 commit wrapper 本身（group_commit 应用失败且 sender==自己），未单独发 rotation-notice 信封（wrapper 即 notice，少一种信封类型）；③轮换触发：client 启动 60s 后/回前台(AppState)/每 30min，miniapp 启动 60s 后/每 30min（页面可经 runRotationCheck 在 useDidShow 补充触发）。
+
 > 2026-10-13 立项。背景分析见当日讨论（摘要见下）。
 > 范围：dme-client（RN + web）+ dme-miniapp。**miniapp 冻结规则本次因安全修复由用户授权解除**，实施时需同步更新 AGENTS.md 的冻结标注。
 > **测试约定：不做自动化 QA，功能测试由用户手动进行**；开发侧只需保证 tsc 通过、构建通过，并在计划中列出「用户手动测试要点」供参照。

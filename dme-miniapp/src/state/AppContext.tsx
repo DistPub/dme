@@ -42,7 +42,7 @@ import type { IdentityKeys } from '../crypto/identity';
 import { MlsSession } from '../crypto/mls-session';
 import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
-import { maybeRotateGroups, reportSiblingRotation, type RotationDeps } from '../crypto/rotation';
+import { maybeRotateGroups, type RotationDeps } from '../crypto/rotation';
 import type { RotationClaimStore } from '../crypto/rotation-claim';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
@@ -904,6 +904,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         groupInfos: await activeStorage.listGroupInfos(),
         blockList: await activeStorage.getBlockList(),
         rotationAt,
+        commitSeq: await activeStorage.getCommitSeq(),
       };
 
       const encryptedData = encryptBackup(data, password);
@@ -981,6 +982,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await activeStorage.putIdentityKeys(data.identity);
       putIdentityKeys(data.identity);
 
+      // 恢复账号级 commit 高水位（宣言 v2 比对基准；旧备份无此字段 → 0）
+      await activeStorage.setCommitSeq(data.commitSeq ?? 0);
+
       for (const [groupId, serialized] of Object.entries(data.mlsSessions)) {
         await activeStorage.putMlsSession(groupId, serialized);
         // 同时写回轮换时间戳——否则多端同时恢复后 lastRotationAt 全部归零，
@@ -1042,7 +1046,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const activeStorage = storageRef.current ?? storage;
     const activePds = pdsRef.current ?? pds;
     const activePoller = pollerRef.current ?? poller;
-    if (!session || !activeStorage || !activePds || !activePoller) return;
+    const activeKeys = identityKeysRef.current ?? identityKeys;
+    if (!session || !activeStorage || !activePds || !activePoller || !activeKeys) return;
     const deps: RotationDeps = {
       listGroupIds: () => activeStorage.listGroups(),
       getSession: (groupId) => activePoller.getSession(groupId),
@@ -1053,7 +1058,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       putMlsSession: (groupId, serialized) => activeStorage.putMlsSession(groupId, serialized),
       createEnvelope: (envelope) => activePds.createEnvelope(envelope),
-      pollOnce: () => activePoller.pollOnce(),
       getIntervalMs: () => activeStorage.getKeyRotationIntervalMs(),
       getLastRotationAt: (groupId) => activeStorage.getLastRotationAt(groupId),
       setLastRotationAt: (groupId, ts) => activeStorage.setLastRotationAt(groupId, ts),
@@ -1065,6 +1069,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
         del: (rkey) => activePds.deleteRotationClaim(rkey),
       } as RotationClaimStore,
+      // 宣言 v2：账号级单调 commit 高水位（本地计数随备份走）
+      getCommitSeq: () => activeStorage.getCommitSeq(),
+      setCommitSeq: (seq) => activeStorage.setCommitSeq(seq),
+      getIdentitySigningPublicKey: async () => activeKeys.signing.publicKey,
       onRotated: async (groupId) => {
         // 1.5 备份联动（统一走 triggerBackupAfterAdvance）：有缓存密码 →
         // 静默刷新备份；无 → 置强提示标记。
@@ -1072,11 +1080,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       onAborted: (groupId, reason) => {
         console.warn('[dme:rotation] 轮换中止', groupId, reason);
+        // sibling-rotated 与 stale（宣言 v2 检测到的备份分叉/对端已认领）
+        // 恢复路径一致：本机落后，宣言失败即提示恢复最新备份（约定9）
         void activeStorage.setSessionIssue(groupId, 'sibling-rotated');
       },
     };
     maybeRotateGroups(deps);
-  }, [session, storage, pds, poller, triggerBackupAfterAdvance]);
+  }, [session, storage, pds, poller, identityKeys, triggerBackupAfterAdvance]);
 
   const runRotationCheckRef = useRef<(() => void) | null>(null);
   runRotationCheckRef.current = runRotationCheck;
@@ -1486,7 +1496,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   if (msg.senderDid === userDid) {
                     // 同账号兄弟设备产生了本机无法应用的 commit（密钥轮换/多端推进）：
                     // 唯一恢复路径是恢复最新备份（key-rotation-plan.md 1.6 / 1.4）
-                    reportSiblingRotation(commit.groupId);
                     await msgStorage.setSessionIssue(commit.groupId, 'sibling-rotated');
                     console.warn('[dme:rotation] 兄弟设备已推进会话', commit.groupId, '需恢复备份');
                   } else {

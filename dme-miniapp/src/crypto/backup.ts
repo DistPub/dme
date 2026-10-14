@@ -50,6 +50,11 @@ export interface FullBackupData {
    * 旧备份无此字段 → 视为 0（从未轮换，恢复后立即到期，向后兼容）。
    */
   rotationAt?: Record<string, number>;
+  /**
+   * 账号级 commit 高水位（宣言 v2）：本端已完成的 commit 计数。恢复时写回，
+   * commit 前与 PDS 宣言比对检测备份分叉。旧备份无此字段 → 视为 0。
+   */
+  commitSeq?: number;
 }
 
 /** JSON 序列化时的中间结构（Uint8Array 转 base64url）。 */
@@ -63,6 +68,7 @@ interface SerializedBackup {
   groupInfos: GroupInfo[];
   blockList: string[];
   rotationAt?: Record<string, number>;
+  commitSeq?: number;
 }
 
 /**
@@ -86,6 +92,7 @@ function serializeFullBackupData(data: FullBackupData): string {
     groupInfos: data.groupInfos,
     blockList: data.blockList,
     rotationAt: data.rotationAt,
+    commitSeq: data.commitSeq,
   };
   return JSON.stringify(serialized);
 }
@@ -112,6 +119,7 @@ function deserializeFullBackupData(json: string): FullBackupData {
     groupInfos: obj.groupInfos,
     blockList: obj.blockList ?? [],
     rotationAt: obj.rotationAt,
+    commitSeq: obj.commitSeq,
   };
 }
 

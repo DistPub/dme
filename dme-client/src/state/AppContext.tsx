@@ -24,6 +24,7 @@ import { DmePds } from '../atproto/pds';
 import { declareKeys, getRemoteEncryptionKey, resolvePdsUrl } from '../atproto/did';
 import { resolveHandleCached } from '../atproto/profile-cache';
 import { acceptInvite, processWelcome } from '../handshake/handshake';
+import { decodeAndDecryptQr } from '../handshake/qr-decode';
 import { encodeQrPayload } from '../handshake/qr-encode';
 import { DmePoller } from '../poll/poller';
 import type { IncomingMessage, IncomingWelcome } from '../poll/poller';
@@ -34,9 +35,9 @@ import type { IdentityKeys } from '../crypto/identity';
 import { MlsSession } from '../crypto/mls-session';
 import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
-import { maybeRotateGroups, reportSiblingRotation, type RotationDeps } from '../crypto/rotation';
+import { maybeRotateGroups, type RotationDeps } from '../crypto/rotation';
 import type { RotationClaimStore } from '../crypto/rotation-claim';
-import { deriveRotationClaimParams, peekCommitSeq } from '../crypto/rotation-claim';
+import { acquireRotationClaim, deriveRotationClaimParams, peekCommitSeq, releaseRotationClaim } from '../crypto/rotation-claim';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -911,6 +912,53 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
   }, [storage, backupIdentity]);
 
+  /**
+   * 宣言存储（rotation-claim.ts v2）：槽位由身份签名公钥稳定派生，
+   * 账号级恒定，全端共享这一份读写入口。
+   */
+  const claimStore = useMemo<RotationClaimStore | null>(() => {
+    if (!pds) return null;
+    return {
+      get: (rkey) => pds.getRotationClaim(rkey),
+      put: (rkey, payload) => pds.putRotationClaim(rkey, payload),
+      del: (rkey) => pds.deleteRotationClaim(rkey),
+    };
+  }, [pds]);
+
+  /**
+   * 宣言门禁（约定7/8/9）：本账号任何 commit 型备份点动作（轮换/建群/
+   * 踢人/拉人/退群清理）的前置检查。账号级单调 commit 高水位仲裁：
+   * 返回应写入的高水位 seq，调用方在 commit 投递成功后 setCommitSeq；
+   * 返回 null = 拒绝执行——taken/stale（其他端已推进/备份分叉）已置
+   * sibling-rotated 提示恢复最新备份；PDS 不可用 fail-closed（不置标记、
+   * 不动作，下个时机重试，绝不无仲裁 commit）。
+   */
+  const acquireClaimForCommit = useCallback(async (groupId: string, epoch: number): Promise<number | null> => {
+    if (!storage || !pds || !identityKeys || !claimStore) return null;
+    const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
+    try {
+      const { verdict, seq } = await acquireRotationClaim(
+        params,
+        { groupId, epoch, localSeq: await storage.getCommitSeq() },
+        claimStore,
+      );
+      if (verdict === 'acquired') return seq;
+      console.warn(`[dme:claim] claim ${verdict}: commit blocked, backup restore required`, groupId);
+      await storage.setSessionIssue(groupId, 'sibling-rotated');
+      return null;
+    } catch (err) {
+      console.warn('[dme:claim] claim check failed, fail-closed (no commit)', groupId, err);
+      return null;
+    }
+  }, [storage, pds, identityKeys, claimStore]);
+
+  /** 释放宣言：commit/投递失败回滚时调用，避免虚高水位（尽力而为）。 */
+  const releaseClaim = useCallback(async (): Promise<void> => {
+    if (!pds || !identityKeys || !claimStore) return;
+    const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
+    await releaseRotationClaim(params, claimStore);
+  }, [pds, identityKeys, claimStore]);
+
   const restoreIdentityFromBackup = useCallback(async (password: string): Promise<boolean> => {
     if (!pds) throw new Error('restoreIdentityFromBackup: pds not initialized');
     if (!storage) throw new Error('restoreIdentityFromBackup: storage not initialized');
@@ -1015,18 +1063,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       putMlsSession: (groupId, serialized) => storage.putMlsSession(groupId, serialized),
       createEnvelope: (envelope) => pds.createEnvelope(envelope),
-      pollOnce: () => poller.pollOnce(),
       getIntervalMs: () => storage.getKeyRotationIntervalMs(),
       getLastRotationAt: (groupId) => storage.getLastRotationAt(groupId),
       setLastRotationAt: (groupId, ts) => storage.setLastRotationAt(groupId, ts),
       // 缺口②：带异常标记的会话（desynced / sibling-rotated）不参与轮换——
       // 状态已废，轮换无收益，且会在克隆端之间制造 sibling-rotated 横幅风暴
       getSessionIssue: (groupId) => storage.getSessionIssue(groupId),
-      claimStore: {
-        get: (rkey) => pds.getRotationClaim(rkey),
-        put: (rkey, payload) => pds.putRotationClaim(rkey, payload),
-        del: (rkey) => pds.deleteRotationClaim(rkey),
-      } as RotationClaimStore,
+      claimStore: claimStore as RotationClaimStore,
       getCommitSeq: () => storage.getCommitSeq(),
       setCommitSeq: (seq) => storage.setCommitSeq(seq),
       getIdentitySigningPublicKey: async () => identityKeys.signing.publicKey,
@@ -1037,12 +1080,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       onAborted: (groupId, reason) => {
         console.warn('[dme:rotation] rotation aborted', groupId, reason);
-        // sibling-rotated 与 stale（宣言 v2 检测到的备份分叉）恢复路径一致：
-        // 本机落后，需要恢复最新备份。复用同一标记与会话列表横幅。
+        // sibling-rotated 与 stale（宣言 v2 检测到的备份分叉/对端已认领）
+        // 恢复路径一致：本机落后，宣言失败即提示恢复最新备份（约定9），
+        // 复用同一标记与会话列表横幅。
         void storage.setSessionIssue(groupId, 'sibling-rotated');
-        if (reason === 'stale') {
-          reportSiblingRotation(groupId);
-        }
       },
     };
     maybeRotateGroups(deps);
@@ -1150,11 +1191,27 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw new Error('acceptInviteQr: not fully initialized');
     }
 
-    const result = await acceptInvite(session.did, identityKeys, qrString);
+    // 宣言门禁（约定7）：建立 1v1 会话（备份点）前必须先宣言——同账号
+    // 多端同时扫同一码会各自生成不同叶密钥、同 groupId 状态分叉；
+    // taken/stale 已置 sibling-rotated 提示恢复备份，fail-closed 放弃本次添加
+    const { aliceDid } = await decodeAndDecryptQr(qrString, identityKeys.encryption.privateKey);
+    const claimSeq = await acquireClaimForCommit(aliceDid, 0);
+    if (claimSeq === null) {
+      throw new Error('acceptInviteQr: claim denied (backup restore required or PDS unavailable)');
+    }
+
+    let result: Awaited<ReturnType<typeof acceptInvite>>;
+    try {
+      result = await acceptInvite(session.did, identityKeys, qrString);
+    } catch (err) {
+      await releaseClaim();
+      throw err;
+    }
 
     // Store MLS session
     await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
     poller.addSession(result.groupId, result.mlsSession);
+    await storage.setCommitSeq(claimSeq);
 
     // 缺口①：握手推进了会话状态，立即联动备份——保证兄弟端之后恢复
     // 备份时拿到的是新会话，而不是被倒灌回旧状态
@@ -1172,7 +1229,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     setGroups((prev) => [...prev, result.groupId]);
     setChatListVersion((v) => v + 1);
-  }, [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance]);
+  }, [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim]);
 
   // -------------------------------------------------------------------------
   // Process received Welcome (called from poller callback)
@@ -1686,11 +1743,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   void (async () => {
                     try {
                       const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
-                      const remote = await peekCommitSeq(params, {
-                        get: (rkey) => pds.getRotationClaim(rkey),
-                        put: (rkey, payload) => pds.putRotationClaim(rkey, payload),
-                        del: (rkey) => pds.deleteRotationClaim(rkey),
-                      });
+                      const remote = await peekCommitSeq(params, claimStore!);
                       if (remote !== null) {
                         const local = await msgStorage.getCommitSeq();
                         if (remote > local) await msgStorage.setCommitSeq(remote);
@@ -1706,7 +1759,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   // 同账号兄弟设备产生了本机无法应用的 commit（密钥轮换/多端推进）：
                   // 本机旧状态推不出新 epoch（新熵不在任何寄给本叶的密文里），无法自行追赶，
                   // 唯一恢复路径是恢复最新备份（key-rotation-plan.md 1.6 / 1.4）
-                  reportSiblingRotation(commit.groupId);
                   await msgStorage.setSessionIssue(commit.groupId, 'sibling-rotated');
                   console.warn('[dme:rotation] sibling device advanced session', commit.groupId, '- backup restore required');
                 } else {
@@ -1836,35 +1888,47 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               try {
                 const leafIndex = groupSession.getMemberDids().indexOf(left.memberDid);
                 if (leafIndex >= 0) {
-                  const { commitMessage } = await groupSession.removeMember(leafIndex);
-                  await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
-                  // 备份点：群主执行退群清理 commit，群会话状态推进，
-                  // 立即联动备份（其他端恢复后才有含此次移除的新状态）
-                  await triggerBackupAfterAdvance(`removeLeavingMember ${left.groupId}`);
+                  // 宣言门禁（约定7）：群主执行退群清理 commit 前必须先宣言；
+                  // taken/stale 已置 sibling-rotated 提示恢复备份，fail-closed 静默放弃
+                  const claimSeq = await acquireClaimForCommit(left.groupId, groupSession.getEpoch());
+                  if (claimSeq === null) break;
+                  try {
+                    const { commitMessage } = await groupSession.removeMember(leafIndex);
+                    await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
+                    await msgStorage.setCommitSeq(claimSeq);
+                    // 备份点：群主执行退群清理 commit，群会话状态推进，
+                    // 立即联动备份（其他端恢复后才有含此次移除的新状态）
+                    await triggerBackupAfterAdvance(`removeLeavingMember ${left.groupId}`);
 
-                  const commitMsg = {
-                    type: 'group_commit' as const,
-                    groupId: left.groupId,
-                    commitPayload: bytesToBase64url(commitMessage),
-                  };
-
-                  for (const member of existing.members) {
-                    if (member.did === userDid || member.did === left.memberDid) continue;
-                    const memberSession = poller.getSession(member.did);
-                    if (!memberSession) continue;
-
-                    const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
-                    const encResult = await memberSession.encrypt(plaintextBytes);
-                    await msgStorage.putMlsSession(member.did, memberSession.serialize());
-
-                    const envelope: DmeEnvelope = {
-                      $type: 'dme.queue.envelope',
-                      queueId: encResult.queueId,
-                      payload: bytesToBase64url(encResult.ciphertext),
-                      createdAt: new Date().toISOString(),
-                      messageType: 'application',
+                    const commitMsg = {
+                      type: 'group_commit' as const,
+                      groupId: left.groupId,
+                      commitPayload: bytesToBase64url(commitMessage),
                     };
-                    await pds.createEnvelope(envelope);
+
+                    for (const member of existing.members) {
+                      if (member.did === userDid || member.did === left.memberDid) continue;
+                      const memberSession = poller.getSession(member.did);
+                      if (!memberSession) continue;
+
+                      const plaintextBytes = new TextEncoder().encode(JSON.stringify(commitMsg));
+                      const encResult = await memberSession.encrypt(plaintextBytes);
+                      await msgStorage.putMlsSession(member.did, memberSession.serialize());
+
+                      const envelope: DmeEnvelope = {
+                        $type: 'dme.queue.envelope',
+                        queueId: encResult.queueId,
+                        payload: bytesToBase64url(encResult.ciphertext),
+                        createdAt: new Date().toISOString(),
+                        messageType: 'application',
+                      };
+                      await pds.createEnvelope(envelope);
+                    }
+                  } catch (err) {
+                    // commit/投递失败：释放宣言避免虚高水位；本周期放弃，
+                    // 信封重放时下次处理自然重试
+                    await releaseClaim();
+                    throw err;
                   }
                 }
               } catch (err) {
@@ -2023,7 +2087,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     }
 
     setChatListVersion((v) => v + 1);
-  }, [identityKeys, poller, pds, soundEnabled, downloadFile, language, triggerBackupAfterAdvance]);
+  }, [identityKeys, poller, pds, soundEnabled, downloadFile, language, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim]);
 
   handleIncomingMessageRef.current = handleIncomingMessage;
 
@@ -2620,6 +2684,13 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       }
       if (!poolEntry) throw new Error('respondToGroupInvite: key package pool exhausted');
 
+      // 宣言门禁（约定7）：点接受（占用 KP、产生备份点状态）前必须先宣言。
+      // 同账号多端同时点接受会向群主发两个不同 KP 的 accept_response，
+      // 后者覆盖前者、先点的一端永远等不到 welcome；taken/stale 已置标记
+      // 提示恢复备份，fail-closed 保持 pending 稍后重试
+      const claimSeq = await acquireClaimForCommit(invite.groupId, 0);
+      if (claimSeq === null) return;
+
       const { encryptKeyPackagePairForInvite } = await import('../handshake/group-invite');
       const poolPublicPackage = deserializeWithUint8Array<KeyPackage>(poolEntry.publicPackageSerialized);
       const encryptedKeyPackage = await encryptKeyPackagePairForInvite(
@@ -2636,18 +2707,25 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       const mlsSession = poller.getSession(invite.inviterDid);
       if (!mlsSession) throw new Error('respondToGroupInvite: no MLS session for inviter');
 
-      const plaintextBytes = new TextEncoder().encode(JSON.stringify(response));
-      const encResult = await mlsSession.encrypt(plaintextBytes);
-      await storage.putMlsSession(invite.inviterDid, mlsSession.serialize());
+      let encResult: { queueId: string; ciphertext: Uint8Array };
+      try {
+        const plaintextBytes = new TextEncoder().encode(JSON.stringify(response));
+        encResult = await mlsSession.encrypt(plaintextBytes);
+        await storage.putMlsSession(invite.inviterDid, mlsSession.serialize());
 
-      const envelope: DmeEnvelope = {
-        $type: 'dme.queue.envelope',
-        queueId: encResult.queueId,
-        payload: bytesToBase64url(encResult.ciphertext),
-        createdAt: new Date().toISOString(),
-        messageType: 'application',
-      };
-      await pds.createEnvelope(envelope);
+        const envelope: DmeEnvelope = {
+          $type: 'dme.queue.envelope',
+          queueId: encResult.queueId,
+          payload: bytesToBase64url(encResult.ciphertext),
+          createdAt: new Date().toISOString(),
+          messageType: 'application',
+        };
+        await pds.createEnvelope(envelope);
+      } catch (err) {
+        await releaseClaim();
+        throw err;
+      }
+      await storage.setCommitSeq(claimSeq);
 
       const updatedInvite: PendingInvite = {
         ...invite,
@@ -2684,7 +2762,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       prev.map((i) => i.inviteId === inviteId ? { ...i, status: accepted ? 'accepted' : 'rejected' } : i),
     );
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, receivedGroupInvites, refreshKeyPackagePool]);
+  }, [session, storage, identityKeys, pds, poller, receivedGroupInvites, refreshKeyPackagePool, acquireClaimForCommit, releaseClaim]);
 
   const createGroupFromPendingInvites = useCallback(async (groupId: string): Promise<void> => {
     if (!session || !storage || !identityKeys || !pds || !poller) {
@@ -2710,13 +2788,26 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       acceptedMembers.push({ did: invite.inviteeDid, keyPackage });
     }
 
-    const { mlsSession: newSession, welcomes, commits } = await createGroupWithMembers({
-      groupId,
-      ownerDid: session.did,
-      ownerIdentityKeys: identityKeys,
-      acceptedMembers,
-    });
+    // 宣言门禁（约定7）：建群（首串 commit）前必须先宣言；新群 epoch 从 0 起。
+    // taken/stale 已置标记提示恢复备份，fail-closed 静默放弃本次操作
+    const claimSeq = await acquireClaimForCommit(groupId, 0);
+    if (claimSeq === null) return;
 
+    let created: Awaited<ReturnType<typeof createGroupWithMembers>>;
+    try {
+      created = await createGroupWithMembers({
+        groupId,
+        ownerDid: session.did,
+        ownerIdentityKeys: identityKeys,
+        acceptedMembers,
+      });
+    } catch (err) {
+      await releaseClaim();
+      throw err;
+    }
+    const { mlsSession: newSession, welcomes, commits } = created;
+
+    try {
     await storage.putMlsSession(groupId, newSession.serialize());
     poller.addSession(groupId, newSession);
 
@@ -2823,6 +2914,17 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         await pds.createEnvelope(envelope);
       }
     }
+    } catch (err) {
+      // welcome/commit 投递失败：移除新群会话并释放宣言——绝不让
+      // 「本地已换代而对端未收到」的状态落盘（否则全员脱钩），上层可重试
+      console.warn('createGroupFromPendingInvites: delivery failed, cleaning up', err);
+      poller.removeSession(groupId);
+      await storage.deleteMlsSession(groupId);
+      await releaseClaim();
+      throw err;
+    }
+
+    await storage.setCommitSeq(claimSeq);
 
     // 备份点：新建群会话（覆盖同 groupId 的旧会话）+ owner KP + 全部
     // welcome/commit 投递完成，立即联动备份（群主其他端恢复后才有新群）
@@ -2830,7 +2932,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
 
     setGroups((prev) => [...prev, groupId]);
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, pendingInvites, language, triggerBackupAfterAdvance]);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites, language, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim]);
 
   const cancelGroupInvite = useCallback(async (inviteId: string): Promise<void> => {
     if (!storage) throw new Error('cancelGroupInvite: storage not initialized');
@@ -2976,38 +3078,58 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     // 投进群自己的 queueId 空间（不再依赖成对 1v1 会话，见 commit-delivery.ts）
     const preCommitState = mlsSession.serialize();
 
-    const { commitMessage } = await mlsSession.removeMember(leafIndex);
-    await storage.putMlsSession(groupId, mlsSession.serialize());
+    // 宣言门禁（约定7）：踢人 commit 前必须先宣言；taken/stale 已置标记
+    // 提示恢复备份，fail-closed 静默放弃本次操作
+    const claimSeq = await acquireClaimForCommit(groupId, mlsSession.getEpoch());
+    if (claimSeq === null) return;
 
-    const removedMsg: GroupMemberRemoved = {
-      type: 'group_member_removed',
-      groupId,
-      groupName: groupInfo.groupName,
-      memberDid,
-    };
+    let commitMessage: Uint8Array;
+    try {
+      ({ commitMessage } = await mlsSession.removeMember(leafIndex));
+      await storage.putMlsSession(groupId, mlsSession.serialize());
 
-    const removedSession = poller.getSession(memberDid);
-    if (removedSession) {
-      const plaintextBytes = new TextEncoder().encode(JSON.stringify(removedMsg));
-      const encResult = await removedSession.encrypt(plaintextBytes);
-      await storage.putMlsSession(memberDid, removedSession.serialize());
-
-      const envelope: DmeEnvelope = {
-        $type: 'dme.queue.envelope',
-        queueId: encResult.queueId,
-        payload: bytesToBase64url(encResult.ciphertext),
-        createdAt: new Date().toISOString(),
-        messageType: 'application',
+      const removedMsg: GroupMemberRemoved = {
+        type: 'group_member_removed',
+        groupId,
+        groupName: groupInfo.groupName,
+        memberDid,
       };
-      await pds.createEnvelope(envelope);
+
+      const removedSession = poller.getSession(memberDid);
+      if (removedSession) {
+        const plaintextBytes = new TextEncoder().encode(JSON.stringify(removedMsg));
+        const encResult = await removedSession.encrypt(plaintextBytes);
+        await storage.putMlsSession(memberDid, removedSession.serialize());
+
+        const envelope: DmeEnvelope = {
+          $type: 'dme.queue.envelope',
+          queueId: encResult.queueId,
+          payload: bytesToBase64url(encResult.ciphertext),
+          createdAt: new Date().toISOString(),
+          messageType: 'application',
+        };
+        await pds.createEnvelope(envelope);
+      }
+
+      await deliverCommitViaGroupSpace({
+        preCommitStateSerialized: preCommitState,
+        groupId,
+        commitMessage,
+        createEnvelope: (envelope) => pds.createEnvelope(envelope),
+      });
+    } catch (err) {
+      // commit/投递失败：从提交前快照回滚内存态与存储态、释放宣言
+      // （避免虚高水位），绝不让「本地已换代而 commit 未投出」落盘
+      console.warn('removeMemberFromGroup: commit failed, rolling back', err);
+      const impl = await getNobleMlsImpl();
+      const rolledBack = await MlsSession.deserialize(preCommitState, impl);
+      poller.addSession(groupId, rolledBack);
+      await storage.putMlsSession(groupId, preCommitState);
+      await releaseClaim();
+      throw err;
     }
 
-    await deliverCommitViaGroupSpace({
-      preCommitStateSerialized: preCommitState,
-      groupId,
-      commitMessage,
-      createEnvelope: (envelope) => pds.createEnvelope(envelope),
-    });
+    await storage.setCommitSeq(claimSeq);
 
     // 备份点：踢人 commit 投递成功，群会话状态推进，立即联动备份
     await triggerBackupAfterAdvance(`removeMember ${groupId}`);
@@ -3017,7 +3139,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     await storage.putGroupInfo(updatedInfo);
     setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? updatedInfo : g));
     setChatListVersion((v) => v + 1);
-  }, [session, storage, pds, poller, triggerBackupAfterAdvance]);
+  }, [session, storage, pds, poller, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim]);
 
   const addAcceptedMembersToGroup = useCallback(async (groupId: string): Promise<void> => {
     if (!session || !storage || !identityKeys || !pds || !poller) {
@@ -3037,10 +3159,17 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       throw new Error('addAcceptedMembersToGroup: no accepted members');
     }
 
+    // 宣言门禁（约定7）：拉人 commit 前必须先宣言；taken/stale 已置标记
+    // 提示恢复备份，fail-closed 静默放弃本次操作
+    const stateBeforeAdds = mlsSession.serialize();
+    const claimSeq = await acquireClaimForCommit(groupId, mlsSession.getEpoch());
+    if (claimSeq === null) return;
+
     const newMembers: GroupMember[] = [];
     const commitsWithTargets: { commitMessage: Uint8Array; preCommitState: string; targetDids: string[] }[] = [];
     const existingDids = new Set(groupInfo.members.map((m) => m.did));
 
+    try {
     for (const invite of accepted) {
       if (!invite.keyPackageSerialized) continue;
       const keyPackage = await deserializeAcceptedKeyPackage({
@@ -3095,6 +3224,19 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         createEnvelope: (envelope) => pds.createEnvelope(envelope),
       });
     }
+    } catch (err) {
+      // addMember/投递失败：从动作前快照回滚内存态与存储态、释放宣言，
+      // 绝不让「本地已换代而 commit 未投出」落盘
+      console.warn('addAcceptedMembersToGroup: commit failed, rolling back', err);
+      const impl = await getNobleMlsImpl();
+      const rolledBack = await MlsSession.deserialize(stateBeforeAdds, impl);
+      poller.addSession(groupId, rolledBack);
+      await storage.putMlsSession(groupId, stateBeforeAdds);
+      await releaseClaim();
+      throw err;
+    }
+
+    await storage.setCommitSeq(claimSeq);
 
     // 备份点：拉人 commit 全部投递成功，群会话状态推进，立即联动备份
     await triggerBackupAfterAdvance(`addAcceptedMembers ${groupId}`);
@@ -3109,7 +3251,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? updatedInfo : g));
     setPendingInvites((prev) => prev.filter((i) => i.groupId !== groupId));
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, pendingInvites, triggerBackupAfterAdvance]);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim]);
 
   const leaveGroup = useCallback(async (groupId: string): Promise<void> => {
     if (!session || !storage || !pds || !poller) {

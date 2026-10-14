@@ -446,9 +446,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     // Restore MLS sessions
     const groupIds = await newStorage.listGroups();
     const impl = await getNobleMlsImpl();
+    // 僵尸群清理：listGroups 是 messages ∪ mlsSession 键的并集——历史上
+    // group_welcome 重放在本机无会话时也会插入 group.joined 消息（已修），
+    // 产生「有消息、无会话」的僵尸群条目（预览谎报已加入，进群打不开
+    // 任何消息）。会话列表只显示真正持有 MLS 会话（= 在群中）的条目。
+    const sessionGroupIds: string[] = [];
     for (const gid of groupIds) {
       const serialized = await newStorage.getMlsSession(gid);
       if (serialized) {
+        sessionGroupIds.push(gid);
         try {
           const mlsSession = await MlsSession.deserialize(serialized, impl);
           newPoller.addSession(gid, mlsSession);
@@ -475,7 +481,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setIdentityKeys(idKeys);
     setPds(newPds);
     setPoller(newPoller);
-    setGroups(groupIds);
+    setGroups(sessionGroupIds);
     setPendingWelcomes(welcomes);
     setKeyPackagePool(pool);
     setPollBatchSizeState(batchSize);
@@ -486,7 +492,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setGatewayUrlState(gatewayUrlValue);
     setPendingInvites(sentInvites);
     setReceivedGroupInvites(recvInvites);
-    setGroupInfos(storedGroupInfos);
+    setGroupInfos(storedGroupInfos.filter((g) => sessionGroupIds.includes(g.groupId)));
     setBlockList(await newStorage.getBlockList());
     setSoundEnabledState(await newStorage.getSoundEnabled());
 
@@ -642,9 +648,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // Restore MLS sessions
       const groupIds = await correctStorage.listGroups();
       const impl = await getNobleMlsImpl();
+      // 僵尸群清理（同启动加载）：只显示真正持有 MLS 会话的条目
+      const sessionGroupIds: string[] = [];
       for (const gid of groupIds) {
         const serialized = await correctStorage.getMlsSession(gid);
         if (serialized) {
+          sessionGroupIds.push(gid);
           try {
             const mlsSession = await MlsSession.deserialize(serialized, impl);
             newPoller.addSession(gid, mlsSession);
@@ -674,7 +683,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setIdentityKeys(keys);
       setPds(newPds);
       setPoller(newPoller);
-      setGroups(groupIds);
+      setGroups(sessionGroupIds);
       setPendingWelcomes(welcomes);
       setKeyPackagePool(pool);
       setPollBatchSizeState(batchSize);
@@ -685,7 +694,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGatewayUrlState(gatewayUrlValue);
       setPendingInvites(sentInvites);
       setReceivedGroupInvites(recvInvites);
-      setGroupInfos(storedGroupInfos);
+      setGroupInfos(storedGroupInfos.filter((g) => sessionGroupIds.includes(g.groupId)));
       setBlockList(await correctStorage.getBlockList());
       setSoundEnabledState(await correctStorage.getSoundEnabled());
       setLoginStep('idle');
@@ -1472,6 +1481,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
                 await msgStorage.putMlsSession(welcome.groupId, newSession.serialize());
                 poller.addSession(welcome.groupId, newSession);
+                // 刚经 Welcome 真正入群：立刻收敛该群残留的 pending 邀请。
+                // 重放的邀请信封可能在入群之后才到达（信封按代际游标重放），
+                // 若不在这里收敛，邀请卡片会活到下次重启才被 reconcile 清掉
+                for (const inv of await msgStorage.getPendingInvites()) {
+                  if (inv.status === 'pending' && inv.groupId === welcome.groupId) {
+                    await msgStorage.updatePendingInviteStatus(inv.inviteId, 'accepted');
+                  }
+                }
+                setReceivedGroupInvites((prev) =>
+                  prev.map((i) =>
+                    i.status === 'pending' && i.groupId === welcome.groupId
+                      ? { ...i, status: 'accepted' }
+                      : i,
+                  ),
+                );
                 // Keep invite in storage (status stays 'accepted'): the group_invite message
                 // persists in the 1:1 conversation, so receivedGroupInvites must survive
                 // restart to keep the card showing "Responded" instead of Accept/Decline.
@@ -1479,6 +1503,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             } catch (err) {
               console.error('handleIncomingMessage: failed to join group via welcome:', err);
             }
+          }
+
+          // 重放防线：本机既没有该群会话、也无法经 KeyPackage 加入（KP pair
+          // 只在点「接受」时随邀请记录生成，而邀请记录不进备份）——这是一条
+          // 恢复/新端场景下重放的陈旧 welcome。绝不能插入「你已加入群聊」
+          // 消息与群元数据：否则产生打不开任何消息的僵尸群条目，且预览
+          // 谎报已加入（实测：私密标签页全新恢复后出现 666 群假条目）。
+          if (!(await msgStorage.getMlsSession(welcome.groupId))) {
+            console.log(
+              'handleIncomingMessage: ignoring stale group_welcome replay (no local session)',
+              welcome.groupId,
+            );
+            break;
           }
 
           await msgStorage.putMessage({

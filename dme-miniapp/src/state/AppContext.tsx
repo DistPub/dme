@@ -534,9 +534,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // 恢复 MLS 会话
       const groupIds = await correctStorage.listGroups();
       const impl = await getNobleMlsImpl();
+      // 僵尸群清理（与 dme-client 同步）：listGroups 是 messages ∪ mlsSession
+      // 键的并集——group_welcome 重放在本机无会话时也会插入 group.joined
+      // 消息（已修），产生「有消息、无会话」的僵尸群条目。只显示真正
+      // 持有 MLS 会话（= 在群中）的条目。
+      const sessionGroupIds: string[] = [];
       for (const gid of groupIds) {
         const serialized = await correctStorage.getMlsSession(gid);
         if (serialized) {
+          sessionGroupIds.push(gid);
           try {
             const mlsSession = await MlsSession.deserialize(serialized, impl);
             newPoller.addSession(gid, mlsSession);
@@ -569,7 +575,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       pdsRef.current = newPds;
       setPoller(newPoller);
       pollerRef.current = newPoller;
-      setGroups(groupIds);
+      setGroups(sessionGroupIds);
       setPendingWelcomes(welcomes);
       setKeyPackagePool(pool);
       setPollBatchSizeState(batchSize);
@@ -578,7 +584,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setAppViewProxyState(appViewProxyValue);
       setServerUrlState(serverUrlValue);
       setGatewayUrlState(gatewayUrlValue);
-      setGroupInfos(storedGroupInfos);
+      setGroupInfos(storedGroupInfos.filter((g) => sessionGroupIds.includes(g.groupId)));
       setPendingInvites(mySentInvites);
       setReceivedGroupInvites(myReceivedInvites);
       setBlockList(await correctStorage.getBlockList());
@@ -1376,12 +1382,40 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   const newSession = await MlsSession.joinViaWelcome(m.welcome, pair, impl);
                   await msgStorage.putMlsSession(welcome.groupId, newSession.serialize());
                   poller.addSession(welcome.groupId, newSession);
+                  // 刚经 Welcome 真正入群：立刻收敛该群残留的 pending 邀请。
+                  // 重放的邀请信封可能在入群之后才到达（信封按代际游标重放），
+                  // 若不在这里收敛，邀请卡片会活到下次重启才被 reconcile 清掉
+                  for (const inv of await msgStorage.getPendingInvites()) {
+                    if (inv.status === 'pending' && inv.groupId === welcome.groupId) {
+                      await msgStorage.updatePendingInviteStatus(inv.inviteId, 'accepted');
+                    }
+                  }
+                  setReceivedGroupInvites((prev) =>
+                    prev.map((i) =>
+                      i.status === 'pending' && i.groupId === welcome.groupId
+                        ? { ...i, status: 'accepted' }
+                        : i,
+                    ),
+                  );
                   // 保留 invite（status 仍为 accepted）：group_invite 消息会留在 1:1 会话里，
                   // receivedGroupInvites 必须跨重启存活，卡片才能一直显示"已响应"。
                 }
               } catch (err) {
                 console.error('handleIncomingMessage: 通过 welcome 入群失败', err);
               }
+            }
+
+            // 重放防线（与 dme-client 同步）：本机既没有该群会话、也无法经
+            // KeyPackage 加入（KP pair 只在点「接受」时随邀请记录生成，而邀请
+            // 记录不进备份）——这是一条恢复/新端场景下重放的陈旧 welcome。
+            // 绝不能插入「你已加入群聊」消息与群元数据：否则产生打不开任何
+            // 消息的僵尸群条目，且预览谎报已加入（实测：全新恢复后出现假条目）。
+            if (!(await msgStorage.getMlsSession(welcome.groupId))) {
+              console.log(
+                'handleIncomingMessage: 忽略重放的陈旧 group_welcome（本机无该群会话）',
+                welcome.groupId,
+              );
+              break;
             }
 
             await msgStorage.putMessage({

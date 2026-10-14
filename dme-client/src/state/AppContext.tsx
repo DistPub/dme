@@ -37,7 +37,7 @@ import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
 import { maybeRotateGroups, type RotationDeps } from '../crypto/rotation';
 import type { RotationClaimStore } from '../crypto/rotation-claim';
-import { acquireRotationClaim, deriveRotationClaimParams, peekCommitSeq, releaseRotationClaim } from '../crypto/rotation-claim';
+import { acquireBackupLock, acquireRotationClaim, deriveRotationClaimParams, peekCommitSeq, releaseBackupLock, releaseRotationClaim } from '../crypto/rotation-claim';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -315,6 +315,7 @@ interface AppActions {
   setupIdentity: () => Promise<void>;
   declareKeys: (plcToken: string) => Promise<void>;
   backupIdentity: (password: string) => Promise<void>;
+  backupIdentityGuarded: (password: string) => Promise<void>;
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
@@ -958,6 +959,33 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
     await releaseRotationClaim(params, claimStore);
   }, [pds, identityKeys, claimStore]);
+
+  /**
+   * 手动备份（用户点「备份」/退出登录前备份）：约定「任何备份点都必须先
+   * 遵守宣言」——手动备份没有前置 commit 动作，但它把本机当前状态写进
+   * 云端，本机落后时会用旧状态覆盖新备份（备份分叉的另一入口）。
+   * 先经宣言仲裁：busy（另一端正在操作）/ stale（本机长期落后）一律拒绝
+   * 并提示；通过则持锁备份（挡窗）+ 完成后恢复占用前的记录（备份不推进
+   * 账号状态，兄弟端 commit 的高水位必须原样保留）。
+   * PDS 不可用 fail-closed：无法仲裁时宁可不备份。
+   */
+  const backupIdentityGuarded = useCallback(async (password: string): Promise<void> => {
+    if (!storage) throw new Error('backupIdentityGuarded: storage not initialized');
+    if (!pds) throw new Error('backupIdentityGuarded: pds not initialized');
+    if (!identityKeys) throw new Error('backupIdentityGuarded: identity keys not available');
+    if (!claimStore) throw new Error('backupIdentityGuarded: claim store not available');
+    const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
+    const outcome = await acquireBackupLock(params, await storage.getCommitSeq(), claimStore);
+    if (outcome.verdict !== 'acquired') {
+      throw new Error(outcome.verdict === 'busy' ? 'BACKUP_CLAIM_BUSY' : 'BACKUP_CLAIM_STALE');
+    }
+    const { handle } = outcome;
+    try {
+      await backupIdentity(password);
+    } finally {
+      await releaseBackupLock(handle, claimStore);
+    }
+  }, [storage, pds, identityKeys, claimStore, backupIdentity]);
 
   const restoreIdentityFromBackup = useCallback(async (password: string): Promise<boolean> => {
     if (!pds) throw new Error('restoreIdentityFromBackup: pds not initialized');
@@ -3490,6 +3518,7 @@ blockList,
       setupIdentity,
       declareKeys: declareKeysAction,
       backupIdentity,
+      backupIdentityGuarded,
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,
@@ -3538,7 +3567,7 @@ blockList,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
       embedMismatch, embedTokenApplied, loginStep, loginFormSnapshot,
       login, cancel2FA, logout, restoreSession, setupIdentity, declareKeysAction,
-      backupIdentity, restoreIdentityFromBackup, hasIdentityBackup,
+      backupIdentity, backupIdentityGuarded, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, sendFileMessage, retryUploadFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, trackInvitePendingWelcome, deletePendingWelcome, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy, setServerUrl, setGatewayUrl,
       sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,

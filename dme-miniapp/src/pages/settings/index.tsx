@@ -63,6 +63,7 @@ export default function SettingsPage(): React.JSX.Element {
     setGatewayUrl,
     setSoundEnabled,
     backupIdentity,
+    backupIdentityGuarded,
     restoreIdentityFromBackup,
   } = useApp();
 
@@ -166,7 +167,7 @@ export default function SettingsPage(): React.JSX.Element {
       //    点按钮后整个页面冻结数秒（真机感知为卡死，2026-09-29）。
       //    showLoading 是原生组件，JS 冻结期间依然显示；mask 拦截连点。
       await Taro.showLoading({ title: t('settings.backingUp'), mask: true });
-      await backupIdentity(password);
+      await backupIdentityGuarded(password);
       setPassword('');
       setConfirmPassword('');
       Taro.hideLoading();
@@ -176,14 +177,18 @@ export default function SettingsPage(): React.JSX.Element {
       setError(
         msg === 'BACKUP_BLOCKED_STALE'
           ? t('settings.backupStaleBlocked')
-          : `${t('settings.backupFailed')}: ${msg}`,
+          : msg === 'BACKUP_CLAIM_STALE'
+            ? t('settings.backupClaimStale')
+            : msg === 'BACKUP_CLAIM_BUSY'
+              ? t('settings.backupClaimBusy')
+              : `${t('settings.backupFailed')}: ${msg}`,
       );
       console.error('备份失败:', err);
     } finally {
       Taro.hideLoading();
       setBusy(false);
     }
-  }, [password, confirmPassword, backupIdentity, t]);
+  }, [password, confirmPassword, backupIdentityGuarded, t]);
 
   // ---- 从备份恢复（对应 web handleRestore；showLoading 理由同 handleBackup） --
   const handleRestore = useCallback(async (): Promise<void> => {

@@ -196,6 +196,11 @@ export async function acquireRotationClaim(
       } else if (fresh) {
         // 对端正在/刚完成 commit：静默跳过，其 wrapper 经 poll 走 sibling 路径
         return { verdict: 'taken', seq: existing.seq };
+      } else if (existing.epoch === 0) {
+        // 过期备份锁（epoch 恒为 0，不推进任何会话）→ 崩溃残留：抢占并
+        // 沿用其序号。备份锁释放失败/进程崩溃只剩这一种残留形态
+        console.warn('[dme:claim] preempting crashed backup lock, seq', existing.seq);
+        nextSeq = existing.seq;
       } else {
         // 宣言已过期且 seq 仍高于本地 → 对端早已完成、本端长期未同步
         //（wrapper 可能已超 7 天 TTL 丢失）→ 备份分叉，提示恢复备份
@@ -240,5 +245,110 @@ export async function releaseRotationClaim(
     await store.del(params.rkey);
   } catch {
     // 删除失败无碍：崩溃残留由「同会话 epoch 未超前」判别 + TTL 兜底
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 手动备份锁（约定：任何备份点都必须先遵守宣言）
+//
+// 手动备份没有前置 commit 动作，但它把「本机当前状态」写进云端备份——
+// 若本机已落后（PDS 高水位更高），手动备份会用旧状态覆盖新备份，制造
+// 备份分叉。因此手动备份同样必须先过宣言仲裁：
+//   - 高水位高于本地且新鲜（另一端正在/刚完成 commit）→ busy，稍后再试；
+//   - 高水位高于本地且已过期（另一端早已推进、本端长期未同步）→ stale，
+//     必须先恢复最新备份，绝不允许上传可能过期的状态；
+//   - 通过 → 持锁备份：锁会挡住备份窗口内兄弟端的 commit（否则兄弟端
+//     提交+自动备份落在前面，本端更旧的快照后上传仍会覆盖）。
+//
+// 备份本身不推进账号状态，所以与 commit 宣言不同：
+//   - 锁的 epoch 固定为 0（不引用任何会话，崩溃残留判别见
+//     acquireRotationClaim 的 epoch===0 分支）；
+//   - 释放时不是删除记录，而是恢复占用前的记录内容——兄弟端 commit
+//     留下的高水位必须原样保留，绝不能被备份锁抹掉。
+// ---------------------------------------------------------------------------
+
+/** 备份锁句柄：占用前的高水位记录内容 + 本锁 nonce，供释放时恢复。 */
+export interface BackupLockHandle {
+  readonly params: RotationClaimParams;
+  readonly nonce: string;
+  /** 占用前 PDS 上的记录密文（高水位宣言或旧备份锁），null 表示原本为空。 */
+  readonly previousPayload: string | null;
+}
+
+export type BackupLockVerdict = 'acquired' | 'busy' | 'stale';
+
+export type BackupLockOutcome =
+  | { readonly verdict: 'acquired'; readonly handle: BackupLockHandle }
+  | { readonly verdict: 'busy' | 'stale'; readonly seq: number };
+
+/**
+ * 占用手动备份锁。PDS 不可用/读取失败时抛出（fail-closed）——无法仲裁
+ * 时宁可不备份，也不上传可能已过期的状态。
+ */
+export async function acquireBackupLock(
+  params: RotationClaimParams,
+  localSeq: number,
+  store: RotationClaimStore,
+): Promise<BackupLockOutcome> {
+  const previousPayload = await store.get(params.rkey);
+  const existing = previousPayload === null ? null : decryptClaim(params.encKey, previousPayload);
+
+  if (existing && existing.seq > localSeq) {
+    const age = Date.now() - Date.parse(existing.createdAt);
+    const fresh = Number.isFinite(age) && age < ROTATION_CLAIM_TTL_MS;
+    if (fresh) {
+      // 另一端正在 commit（或其高水位刚落盘）：本端状态可能马上过时，
+      // 稍后再试（对方完成并同步后高水位会与本地追平）
+      return { verdict: 'busy', seq: existing.seq };
+    }
+    // 过期且高水位仍高于本地：另一端早已推进、本端长期未同步（wrapper
+    // 可能已超 7 天 TTL 丢失）。即使是崩溃残留，对备份来说结论也一样——
+    // 本机状态可疑，必须先恢复最新备份（fail-closed，可恢复）。
+    return { verdict: 'stale', seq: existing.seq };
+  }
+
+  // seq <= localSeq（一致或残留旧锁）→ 允许备份，持锁挡窗
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+  await store.put(
+    params.rkey,
+    encryptClaim(params.encKey, {
+      seq: localSeq + 1, // 仅作为互斥信号；释放时恢复原记录，不保留
+      groupId: 'backup',
+      epoch: 0,
+      nonce,
+      createdAt: new Date().toISOString(),
+    }),
+  );
+
+  // putRecord 无原子 CAS：回读比对 nonce，压缩并发双写窗口
+  const verify = await readClaim(params, store);
+  if (!verify || verify.nonce !== nonce) {
+    // 并发落败：无法安全持锁，按 busy 处理（原记录可能已被改写，也无法恢复）
+    return { verdict: 'busy', seq: verify?.seq ?? localSeq + 1 };
+  }
+  return { verdict: 'acquired', handle: { params, nonce, previousPayload } };
+}
+
+/**
+ * 释放手动备份锁：仅当 PDS 记录仍是本锁（nonce 一致）时恢复占用前的
+ * 内容；若已被改写（兄弟端趁隙 commit 落了新高水位）则原样保留。
+ * 尽力而为，绝不删除——删除会抹掉兄弟端 commit 的高水位。
+ */
+export async function releaseBackupLock(
+  handle: BackupLockHandle,
+  store: RotationClaimStore,
+): Promise<void> {
+  try {
+    const currentPayload = await store.get(handle.params.rkey);
+    if (currentPayload === null) return; // 已被外力删除，无可恢复
+    const current = decryptClaim(handle.params.encKey, currentPayload);
+    if (!current || current.nonce !== handle.nonce) return; // 已易主，保留现状
+    if (handle.previousPayload === null) {
+      await store.del(handle.params.rkey);
+    } else {
+      await store.put(handle.params.rkey, handle.previousPayload);
+    }
+  } catch {
+    // 释放失败最坏后果：锁记录 TTL 后过期，epoch=0 被判别为崩溃残留抢占
   }
 }

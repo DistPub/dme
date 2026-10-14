@@ -510,11 +510,18 @@ const resolveProfiles = useCallback(async (
     setLogoutStatus('backing_up');
     setLogoutError(null);
     try {
-      await app.backupIdentity(backupPwd);
+      await app.backupIdentityGuarded(backupPwd);
       setLogoutModalVisible(false);
       await app.logout();
     } catch (err) {
-      setLogoutError(err instanceof Error ? err.message : t('chatlist.backupFailed'));
+      const msg = err instanceof Error ? err.message : '';
+      setLogoutError(
+        msg === 'BACKUP_CLAIM_STALE'
+          ? t('chatlist.backupClaimStale')
+          : msg === 'BACKUP_CLAIM_BUSY'
+            ? t('chatlist.backupClaimBusy')
+            : msg || t('chatlist.backupFailed'),
+      );
       setLogoutStatus('error');
     }
   }, [app, backupPwd, backupPwdConfirm, t]);

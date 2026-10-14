@@ -108,7 +108,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     }
     setBackupStatus('backing_up');
     try {
-      await app.backupIdentity(backupPwd);
+      await app.backupIdentityGuarded(backupPwd);
       setBackupStatus('done');
       setBackupPwd('');
       setBackupPwdConfirm('');
@@ -118,7 +118,11 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       setBackupError(
         msg === 'BACKUP_BLOCKED_STALE'
           ? t('settings.backupStaleBlocked')
-          : msg || t('settings.backupFailed'),
+          : msg === 'BACKUP_CLAIM_STALE'
+            ? t('settings.backupClaimStale')
+            : msg === 'BACKUP_CLAIM_BUSY'
+              ? t('settings.backupClaimBusy')
+              : msg || t('settings.backupFailed'),
       );
       setBackupStatus('error');
       setTimeout(() => setBackupStatus('idle'), 2000);

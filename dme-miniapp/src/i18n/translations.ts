@@ -103,6 +103,8 @@ export const zh: Record<string, string> = {
   'settings.passwordMismatch': '两次密码不一致',
   'settings.backupFailed': '备份失败',
   'settings.backupStaleBlocked': '存在待恢复的会话（另一台设备已更新密钥），为避免用旧状态覆盖云端备份，已阻止本次备份——请先从备份恢复',
+  'settings.backupClaimStale': '检测到其他设备有更新的密钥状态（本机长期未同步），为避免用旧状态覆盖云端备份，已阻止本次备份——请先恢复最新备份',
+  'settings.backupClaimBusy': '另一台设备正在执行密钥操作，为避免备份到中间状态，请稍后再试',
   'settings.restoreBackupStale': '云端备份未包含另一台设备的最新更新（与本机状态相同），恢复会倒灌旧状态——请先在已更新的设备上重新备份，再回来恢复',
   'settings.restoreTitle': '从备份恢复',
   'settings.restoreHint': '用云端最新备份覆盖本机身份与会话状态。当提示「此会话已在你的另一台设备上更新密钥」时，需在此恢复最新备份后才能继续收发。',
@@ -162,6 +164,8 @@ export const zh: Record<string, string> = {
   'chatlist.enterPassword': '请输入密码',
   'chatlist.passwordMismatch': '两次密码不一致',
   'chatlist.backupFailed': '备份失败',
+  'chatlist.backupClaimStale': '检测到其他设备有更新的密钥状态，为避免用旧状态覆盖云端备份，已阻止本次备份——请先在设置页恢复最新备份',
+  'chatlist.backupClaimBusy': '另一台设备正在执行密钥操作，请稍后再试',
 
   // chatview
   'chatview.title': '聊天',
@@ -416,6 +420,8 @@ export const en: Record<string, string> = {
   'settings.passwordMismatch': 'Passwords do not match',
   'settings.backupFailed': 'Backup failed',
   'settings.backupStaleBlocked': 'Some sessions await backup restore (updated on another device). Backup is blocked to avoid overwriting the cloud copy with stale state — restore from backup first.',
+  'settings.backupClaimStale': 'A newer key state exists on another device (this device has not synced for a long time). Backup is blocked to avoid overwriting the cloud copy with stale state — restore the latest backup first.',
+  'settings.backupClaimBusy': 'Another device is performing a key operation. Backup is blocked to avoid snapshotting a mid-operation state — please retry shortly.',
   'settings.restoreBackupStale': 'The cloud backup does not yet contain the update from your other device (identical to local state). Restoring would roll back — re-backup on the updated device first, then restore here.',
   'settings.restoreTitle': 'Restore from Backup',
   'settings.restoreHint': 'Overwrite local identity and sessions with the latest cloud backup. Required when told that this session was re-keyed on another device of yours.',
@@ -475,6 +481,8 @@ export const en: Record<string, string> = {
   'chatlist.enterPassword': 'Enter a password',
   'chatlist.passwordMismatch': 'Passwords do not match',
   'chatlist.backupFailed': 'Backup failed',
+  'chatlist.backupClaimStale': 'A newer key state exists on another device. Backup is blocked to avoid overwriting the cloud copy with stale state — restore the latest backup in Settings first.',
+  'chatlist.backupClaimBusy': 'Another device is performing a key operation. Please retry shortly.',
 
   // chatview
   'chatview.title': 'Chat',

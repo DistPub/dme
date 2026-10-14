@@ -114,6 +114,7 @@ export default function ChatListPage(): React.JSX.Element {
     sendMessage,
     sendFileMessage,
     backupIdentity,
+    backupIdentityGuarded,
     logout,
   } = useApp();
 
@@ -558,18 +559,25 @@ export default function ChatListPage(): React.JSX.Element {
       //    Taro.showLoading 是原生组件：JS 线程冻结期间依然显示动画；
       //    mask:true 让原生层直接拦截触摸，连点也从根上防住。
       await Taro.showLoading({ title: t('chatlist.backingUp'), mask: true });
-      await backupIdentity(backupPwd);
+      await backupIdentityGuarded(backupPwd);
       setLogoutModalVisible(false);
       await logout();
       await Taro.reLaunch({ url: '/pages/login/index' });
     } catch (err) {
-      setLogoutError(err instanceof Error ? err.message : t('chatlist.backupFailed'));
+      const msg = err instanceof Error ? err.message : '';
+      setLogoutError(
+        msg === 'BACKUP_CLAIM_STALE'
+          ? t('chatlist.backupClaimStale')
+          : msg === 'BACKUP_CLAIM_BUSY'
+            ? t('chatlist.backupClaimBusy')
+            : msg || t('chatlist.backupFailed'),
+      );
       setLogoutStatus('error');
     } finally {
       Taro.hideLoading();
       logoutBusyRef.current = false;
     }
-  }, [backupPwd, backupPwdConfirm, t, backupIdentity, logout]);
+  }, [backupPwd, backupPwdConfirm, t, backupIdentityGuarded, logout]);
 
   // ---- 三个邀请/握手区块的数据 ------------------------------------------
   const pendingReceivedInvites = useMemo(

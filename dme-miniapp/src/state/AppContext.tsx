@@ -45,8 +45,10 @@ import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
 import { maybeRotateGroups, type RotationDeps } from '../crypto/rotation';
 import {
+  acquireBackupLock,
   acquireRotationClaim,
   deriveRotationClaimParams,
+  releaseBackupLock,
   releaseRotationClaim,
   type RotationClaimStore,
 } from '../crypto/rotation-claim';
@@ -240,6 +242,7 @@ interface AppActions {
   setupIdentity: () => Promise<void>;
   declareKeys: (plcToken: string) => Promise<void>;
   backupIdentity: (password: string) => Promise<void>;
+  backupIdentityGuarded: (password: string) => Promise<void>;
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
@@ -1002,6 +1005,40 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
     await releaseRotationClaim(params, store);
   }, [pds, identityKeys]);
+
+  /**
+   * 手动备份（约定：任何备份点都必须先遵守宣言）——与 client 同语义：
+   * 宣言仲裁 busy/stale 一律拒绝并提示；通过则持锁备份 + 完成后恢复占用
+   * 前的记录（备份不推进账号状态，兄弟端 commit 的高水位必须原样保留）。
+   * PDS 不可用 fail-closed：无法仲裁时宁可不备份。
+   */
+  const backupIdentityGuarded = useCallback(
+    async (password: string): Promise<void> => {
+      const activeStorage = storageRef.current ?? storage;
+      const activePds = pdsRef.current ?? pds;
+      const activeKeys = identityKeysRef.current ?? identityKeys;
+      if (!activeStorage) throw new Error('backupIdentityGuarded: storage 未初始化');
+      if (!activePds) throw new Error('backupIdentityGuarded: pds 未初始化');
+      if (!activeKeys) throw new Error('backupIdentityGuarded: 身份密钥不可用');
+      const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
+      const store: RotationClaimStore = {
+        get: (rkey) => activePds.getRotationClaim(rkey),
+        put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
+        del: (rkey) => activePds.deleteRotationClaim(rkey),
+      };
+      const outcome = await acquireBackupLock(params, await activeStorage.getCommitSeq(), store);
+      if (outcome.verdict !== 'acquired') {
+        throw new Error(outcome.verdict === 'busy' ? 'BACKUP_CLAIM_BUSY' : 'BACKUP_CLAIM_STALE');
+      }
+      const { handle } = outcome;
+      try {
+        await backupIdentity(password);
+      } finally {
+        await releaseBackupLock(handle, store);
+      }
+    },
+    [storage, pds, identityKeys, backupIdentity],
+  );
 
   const restoreIdentityFromBackup = useCallback(
     async (password: string): Promise<boolean> => {
@@ -3110,6 +3147,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setupIdentity,
       declareKeys: declareKeysAction,
       backupIdentity,
+      backupIdentityGuarded,
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,
@@ -3183,6 +3221,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setupIdentity,
       declareKeysAction,
       backupIdentity,
+      backupIdentityGuarded,
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,

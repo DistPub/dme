@@ -116,6 +116,12 @@ export type GroupMemberRemoved = {
   readonly type: 'group_member_removed';
   readonly groupId: string;
   readonly groupName: string;
+  /**
+   * 被踢成员的 DID（2026-10-14 新增）。旧版本消息无此字段——
+   * 该消息只经 1v1 会话单发给被踢者，缺失时按「发给自己」宽松兼容，
+   * 重放防护依赖接收端 queueId 去重 + GroupInfo 新鲜度比较。
+   */
+  readonly memberDid?: string;
 };
 
 /** Member left: leaving member -> all other members, update member list. */

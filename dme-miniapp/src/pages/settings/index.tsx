@@ -172,7 +172,12 @@ export default function SettingsPage(): React.JSX.Element {
       Taro.hideLoading();
       await Taro.showToast({ title: t('settings.backedUp'), icon: 'success' });
     } catch (err) {
-      setError(`${t('settings.backupFailed')}: ${err instanceof Error ? err.message : ''}`);
+      const msg = err instanceof Error ? err.message : '';
+      setError(
+        msg === 'BACKUP_BLOCKED_STALE'
+          ? t('settings.backupStaleBlocked')
+          : `${t('settings.backupFailed')}: ${msg}`,
+      );
       console.error('备份失败:', err);
     } finally {
       Taro.hideLoading();
@@ -200,7 +205,12 @@ export default function SettingsPage(): React.JSX.Element {
       }
     } catch (err) {
       Taro.hideLoading();
-      setRestoreError(`${t('setup.restoreFailed')}: ${err instanceof Error ? err.message : ''}`);
+      const msg = err instanceof Error ? err.message : '';
+      setRestoreError(
+        msg === 'RESTORE_BACKUP_STALE'
+          ? t('settings.restoreBackupStale')
+          : `${t('setup.restoreFailed')}: ${msg}`,
+      );
       console.error('恢复失败:', err);
     } finally {
       setRestoreBusy(false);

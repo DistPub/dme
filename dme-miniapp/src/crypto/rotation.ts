@@ -77,6 +77,8 @@ export interface RotationDeps {
   getIntervalMs(): Promise<number>;
   getLastRotationAt(groupId: string): Promise<number>;
   setLastRotationAt(groupId: string, ts: number): Promise<void>;
+  /** 会话异常标记（desynced / sibling-rotated），无标记时 null。 */
+  getSessionIssue(groupId: string): Promise<'sibling-rotated' | 'desynced' | null>;
   /** PDS 宣言存取（AppContext 用 DmePds 组装，见 rotation-claim.ts）。 */
   claimStore: RotationClaimStore;
   /** 轮换成功后的备份联动（1.5）。 */
@@ -109,6 +111,11 @@ export function maybeRotateGroups(deps: RotationDeps): void {
         const interval = await deps.getIntervalMs();
         const last = await deps.getLastRotationAt(groupId);
         if (Date.now() - last < interval) continue;
+        // 缺口②：带异常标记的会话不轮换——状态已废（需重握手/恢复备份），
+        // 轮换无收益；且克隆端共享同一状态，一端轮换会在所有兄弟端触发
+        // sibling-rotated 横幅风暴（实测踩过）
+        const issue = await deps.getSessionIssue(groupId);
+        if (issue) continue;
       } catch (err) {
         console.warn('[dme:rotation] rotation check failed for', groupId, err);
         continue;

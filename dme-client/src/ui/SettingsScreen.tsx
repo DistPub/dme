@@ -114,7 +114,12 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       setBackupPwdConfirm('');
       setTimeout(() => setBackupStatus('idle'), 2000);
     } catch (err) {
-      setBackupError(err instanceof Error ? err.message : t('settings.backupFailed'));
+      const msg = err instanceof Error ? err.message : '';
+      setBackupError(
+        msg === 'BACKUP_BLOCKED_STALE'
+          ? t('settings.backupStaleBlocked')
+          : msg || t('settings.backupFailed'),
+      );
       setBackupStatus('error');
       setTimeout(() => setBackupStatus('idle'), 2000);
     }
@@ -141,7 +146,12 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         setTimeout(() => setRestoreStatus('idle'), 2000);
       }
     } catch (err) {
-      setRestoreError(err instanceof Error ? err.message : t('setup.restoreFailed'));
+      const msg = err instanceof Error ? err.message : '';
+      setRestoreError(
+        msg === 'RESTORE_BACKUP_STALE'
+          ? t('settings.restoreBackupStale')
+          : msg || t('setup.restoreFailed'),
+      );
       setRestoreStatus('error');
       setTimeout(() => setRestoreStatus('idle'), 2000);
     }

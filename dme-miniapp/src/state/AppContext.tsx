@@ -849,6 +849,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (!activePds) throw new Error('backupIdentity: pds 未初始化');
       if (!activeStorage) throw new Error('backupIdentity: storage 未初始化');
 
+      // 缺口③配套：本机存在 sibling-rotated 会话时，本机状态落后于兄弟端，
+      // 此时备份会用旧状态覆盖云端备份（云端可能已由兄弟端刷新为包含其推进
+      // 的新状态）。正确顺序是先「从备份恢复」，恢复完成后再备份。
+      for (const gid of await activeStorage.listGroups()) {
+        if ((await activeStorage.getSessionIssue(gid)) === 'sibling-rotated') {
+          throw new Error('BACKUP_BLOCKED_STALE');
+        }
+      }
+
       const groupIds = await activeStorage.listGroups();
       const mlsSessions: Record<string, string> = {};
       const rotationAt: Record<string, number> = {};
@@ -879,6 +888,31 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [identityKeys, pds, storage],
   );
 
+  // 缺口①：所有推进会话状态的动作（轮换 / 握手接会话）之后统一走这里的
+  // 备份联动——云端备份必须始终包含最新推进，否则兄弟端按 sibling-rotated
+  // 提示恢复时会倒灌旧状态（把新握手 / 新轮换抹掉，实测踩过）。
+  const triggerBackupAfterAdvance = useCallback(
+    async (tag: string): Promise<void> => {
+      const activeStorage = storageRef.current ?? storage;
+      if (!activeStorage) return;
+      try {
+        const cachedPassword = await getBackupPassword();
+        if (cachedPassword) {
+          await backupIdentity(cachedPassword);
+          console.log(`[dme:backup] ${tag} 后已静默刷新备份`);
+        } else {
+          await activeStorage.setBackupRequired(true);
+          setBackupRequiredState(true);
+        }
+      } catch (err) {
+        // 刷新失败仅 log（不影响推进结果）。若是因存在待恢复会话被拒
+        // （BACKUP_BLOCKED_STALE），sibling-rotated 横幅本就在引导恢复。
+        console.warn(`[dme:backup] ${tag} 后备份刷新失败:`, err);
+      }
+    },
+    [storage, backupIdentity],
+  );
+
   const restoreIdentityFromBackup = useCallback(
     async (password: string): Promise<boolean> => {
       const activeStorage = storageRef.current ?? storage;
@@ -893,6 +927,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (!encryptedData) return false;
 
       const data = decryptBackup(encryptedData, password);
+
+      // 缺口③护栏：对每个 sibling-rotated 会话，云端备份必须确实包含
+      // 兄弟端推进后的新状态——若备份里该会话与本机状态完全相同（备份
+      // 停留在推进之前）或根本没有该会话，恢复只会倒灌旧状态（实测踩过：
+      // 把重新握手的新会话覆盖回脱钩状态）。此时应先在已更新的设备上
+      // 重新备份。以「备份内容 ≠ 本机（落后的）内容」作为"备份包含
+      // 推进"的充分条件。
+      const staleGroupIds: string[] = [];
+      for (const gid of await activeStorage.listGroups()) {
+        if ((await activeStorage.getSessionIssue(gid)) !== 'sibling-rotated') continue;
+        const localSerialized = await activeStorage.getMlsSession(gid);
+        if (!localSerialized) continue; // 本机无此会话状态，无从比对
+        const backupSerialized = data.mlsSessions[gid];
+        if (!backupSerialized || backupSerialized === localSerialized) {
+          staleGroupIds.push(gid);
+        }
+      }
+      if (staleGroupIds.length > 0) {
+        throw new Error('RESTORE_BACKUP_STALE');
+      }
 
       await activeStorage.putIdentityKeys(data.identity);
       putIdentityKeys(data.identity);
@@ -967,26 +1021,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       getIntervalMs: () => activeStorage.getKeyRotationIntervalMs(),
       getLastRotationAt: (groupId) => activeStorage.getLastRotationAt(groupId),
       setLastRotationAt: (groupId, ts) => activeStorage.setLastRotationAt(groupId, ts),
+      // 缺口②：带异常标记的会话不参与轮换——状态已废，且克隆端一端轮换会
+      // 在所有兄弟端触发 sibling-rotated 横幅风暴（实测踩过）
+      getSessionIssue: (groupId) => activeStorage.getSessionIssue(groupId),
       claimStore: {
         get: (rkey) => activePds.getRotationClaim(rkey),
         put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
         del: (rkey) => activePds.deleteRotationClaim(rkey),
       } as RotationClaimStore,
       onRotated: async (groupId) => {
-        // 1.5 备份联动：有缓存密码 → 静默刷新备份；无 → 置强提示标记。
-        // 备份刷新失败仅 log（不影响轮换结果，下个周期重试时再触发）
-        try {
-          const cachedPassword = await getBackupPassword();
-          if (cachedPassword) {
-            await backupIdentity(cachedPassword);
-            console.log('[dme:rotation] 轮换后已静默刷新备份', groupId);
-          } else {
-            await activeStorage.setBackupRequired(true);
-            setBackupRequiredState(true);
-          }
-        } catch (err) {
-          console.warn('[dme:rotation] 轮换后备份刷新失败:', err);
-        }
+        // 1.5 备份联动（统一走 triggerBackupAfterAdvance）：有缓存密码 →
+        // 静默刷新备份；无 → 置强提示标记。
+        await triggerBackupAfterAdvance(`轮换 ${groupId}`);
       },
       onAborted: (groupId, reason) => {
         console.warn('[dme:rotation] 轮换中止', groupId, reason);
@@ -994,7 +1040,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
     };
     maybeRotateGroups(deps);
-  }, [session, storage, pds, poller, backupIdentity]);
+  }, [session, storage, pds, poller, triggerBackupAfterAdvance]);
 
   const runRotationCheckRef = useRef<(() => void) | null>(null);
   runRotationCheckRef.current = runRotationCheck;
@@ -1105,6 +1151,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
       poller.addSession(result.groupId, result.mlsSession);
 
+      // 缺口①：握手推进了会话状态，立即联动备份——保证兄弟端之后恢复
+      // 备份时拿到的是新会话，而不是被倒灌回旧状态
+      await triggerBackupAfterAdvance(`acceptInvite ${result.groupId}`);
+
       const envelope: DmeEnvelope = {
         $type: 'dme.queue.envelope',
         queueId: result.welcomeQueueId,
@@ -1117,7 +1167,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroups((prev) => (prev.includes(result.groupId) ? prev : [...prev, result.groupId]));
       setChatListVersion((v) => v + 1);
     },
-    [storage, identityKeys, session, pds, poller],
+    [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance],
   );
 
   // -------------------------------------------------------------------------
@@ -1163,6 +1213,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await activeStorage.putMlsSession(result.groupId, result.mlsSession.serialize());
       activePoller.addSession(result.groupId, result.mlsSession);
 
+      // 缺口①：接会话推进了状态，立即联动备份（同 acceptInviteQr）
+      await triggerBackupAfterAdvance(`processWelcome ${result.groupId}`);
+
       await activeStorage.deletePendingWelcome(welcome.queueId);
       activePoller.removePendingWelcome(welcome.queueId);
 
@@ -1172,7 +1225,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       console.log('processReceivedWelcome: 配对成功，已加入 MLS 群', result.groupId);
     },
-    [storage, identityKeys, session, poller, putStorage, putIdentityKeys],
+    [storage, identityKeys, session, poller, putStorage, putIdentityKeys, triggerBackupAfterAdvance],
   );
 
   processWelcomeRef.current = processReceivedWelcome;

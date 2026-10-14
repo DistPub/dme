@@ -47,6 +47,8 @@ import type { DmeEnvelope } from '../protocol/types';
 /** commit 前随机抖动上限（毫秒）。 */
 export const JITTER_MAX_MS = 2 * 60 * 1000;
 
+const inFlight = new Set<string>();
+
 // ---------------------------------------------------------------------------
 // 兄弟设备轮换信号（由 AppContext 的 group_commit catch 写入，见 1.6）
 // ---------------------------------------------------------------------------
@@ -81,10 +83,20 @@ export interface RotationDeps {
   getSessionIssue(groupId: string): Promise<'sibling-rotated' | 'desynced' | null>;
   /** PDS 宣言存取（AppContext 用 DmePds 组装，见 rotation-claim.ts）。 */
   claimStore: RotationClaimStore;
+  /** 账号级 commit 高水位（本地计数，随备份走；宣言 v2 比对基准）。 */
+  getCommitSeq(): Promise<number>;
+  setCommitSeq(seq: number): Promise<void>;
+  /** 身份签名公钥（宣言槽位账号级稳定派生源）。 */
+  getIdentitySigningPublicKey(): Promise<Uint8Array>;
   /** 轮换成功后的备份联动（1.5）。 */
   onRotated(groupId: string): Promise<void>;
-  /** 轮换中止/失败的 UI 通知（如"检测到另一台设备已轮换，请恢复备份"）。 */
-  onAborted(groupId: string, reason: 'sibling-rotated'): void;
+  /**
+   * 轮换中止/失败的 UI 通知：
+   * - sibling-rotated：另一台设备已轮换（poll 发现 wrapper）；
+   * - stale：宣言 v2 检测到 PDS 高水位高于本地且已过期 = 备份分叉，
+   *   必须提示恢复备份（用户拍板：seq 检测 desync）。
+   */
+  onAborted(groupId: string, reason: 'sibling-rotated' | 'stale'): void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -131,8 +143,6 @@ export function maybeRotateGroups(deps: RotationDeps): void {
   })();
 }
 
-const inFlight = new Set<string>();
-
 async function rotateSession(groupId: string, deps: RotationDeps): Promise<void> {
   const session = deps.getSession(groupId);
   if (!session) return;
@@ -158,18 +168,29 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
     return;
   }
 
-  // 宣言检查（commit 的硬性门槛，及时判定不依赖 poll 时序）：
-  // 另一端已认领 → 本周期跳过（其 wrapper 稍后经正常 poll 投递）；
+  // 宣言检查 v2（commit 的硬性门槛，账号级单调 commit 高水位仲裁）：
+  // 本地 seq 与 PDS 一致 → 允许 commit（写 seq+1，保留为高水位）；
+  // PDS 更高 → 其他端已推进（taken 静默跳过 / stale 提示恢复备份）；
   // PDS 不可用 → fail-closed 跳过，宁可下个周期重试也不无仲裁地 commit
-  const claimParams = await deriveRotationClaimParams(session.getExporterSecret());
+  const claimParams = await deriveRotationClaimParams(await deps.getIdentitySigningPublicKey());
+  let claimSeq: number;
   try {
-    const result = await acquireRotationClaim(
+    const { verdict, seq } = await acquireRotationClaim(
       claimParams,
-      { groupId, epoch: session.getEpoch() },
+      { groupId, epoch: session.getEpoch(), localSeq: await deps.getCommitSeq() },
       deps.claimStore,
     );
-    if (result !== 'acquired') {
+    claimSeq = seq;
+    if (verdict === 'taken') {
       console.log('[dme:rotation] rotation claimed by another device, skip this cycle', groupId);
+      return;
+    }
+    if (verdict === 'stale') {
+      // 宣言 v2：PDS 高水位高于本地且已过期 = 其他端早已 commit 而本端
+      // 长期未同步（备份分叉，wrapper 可能已超 7 天 TTL 丢失）。
+      // 绝不允许 commit，明确提示恢复备份（用户拍板设计）。
+      console.warn('[dme:rotation] commit seq ahead of local (backup fork), restore required', groupId);
+      deps.onAborted(groupId, 'stale');
       return;
     }
   } catch (err) {
@@ -177,9 +198,7 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
     return;
   }
 
-  // 快照提交前状态（wrapper 用旧 epoch 加密，投进群 queueId 空间）。
-  // 注意 claimParams 也派生自 pre-commit exporterSecret——commit 后
-  // exporterSecret 变化，释放宣言必须用这里捕获的旧参数。
+  // 快照提交前状态（wrapper 用旧 epoch 加密，投进群 queueId 空间）
   const preCommitState = session.serialize();
   try {
     const { commitMessage } = await session.updateOwnLeaf();
@@ -192,8 +211,8 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
         createEnvelope: deps.createEnvelope,
       });
     } catch (err) {
-      // 投递失败：回滚内存态、释放宣言、不记 lastRotationAt——绝不允许
-      // 本地已换代而 commit 未投出（否则全员脱钩）。下个周期自然重试。
+      // 投递失败：回滚内存态、释放宣言（避免虚高水位）、不记 lastRotationAt
+      // ——绝不允许本地已换代而 commit 未投出（否则全员脱钩）。下个周期重试。
       console.warn('[dme:rotation] commit delivery failed, rolling back', groupId, err);
       await deps.reloadSession(groupId, preCommitState);
       await releaseRotationClaim(claimParams, deps.claimStore);
@@ -208,9 +227,10 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
 
   await deps.putMlsSession(groupId, session.serialize());
   await deps.setLastRotationAt(groupId, Date.now());
-  // epoch 已换代，宣言槽位自然作废；删除仅为不让孤儿记录堆积
-  await releaseRotationClaim(claimParams, deps.claimStore);
-  console.log('[dme:rotation] rotated session', groupId);
+  // 宣言 v2：commit 成功后本地高水位推进，宣言保留在 PDS 作为账号
+  // commit 高水位（不删除）——任何落后端下次 commit 前都会发现分叉
+  await deps.setCommitSeq(claimSeq);
+  console.log('[dme:rotation] rotated session', groupId, 'commitSeq', claimSeq);
 
   await deps.onRotated(groupId);
 }

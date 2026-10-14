@@ -36,6 +36,7 @@ import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
 import { maybeRotateGroups, reportSiblingRotation, type RotationDeps } from '../crypto/rotation';
 import type { RotationClaimStore } from '../crypto/rotation-claim';
+import { deriveRotationClaimParams, peekCommitSeq } from '../crypto/rotation-claim';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -874,6 +875,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       groupInfos,
       blockList,
       rotationAt,
+      commitSeq: await storage.getCommitSeq(),
     };
 
     const encryptedData = encryptBackup(data, password);
@@ -983,6 +985,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await saveBackupPassword(password);
     await storage.setBackupRequired(false);
     setBackupRequiredState(false);
+    // 恢复账号级 commit 高水位（宣言 v2 比对基准；旧备份无此字段 → 0）
+    await storage.setCommitSeq(data.commitSeq ?? 0);
     // 恢复后状态整体重建（会话来自备份），旧的脱钩/兄弟轮换标记作废
     await storage.clearAllSessionIssues();
 
@@ -1000,7 +1004,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   // -----------------------------------------------------------------------
 
   const runRotationCheck = useCallback((): void => {
-    if (!session || !storage || !pds || !poller) return;
+    if (!session || !storage || !pds || !poller || !identityKeys) return;
     const deps: RotationDeps = {
       listGroupIds: () => storage.listGroups(),
       getSession: (groupId) => poller.getSession(groupId),
@@ -1023,6 +1027,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         put: (rkey, payload) => pds.putRotationClaim(rkey, payload),
         del: (rkey) => pds.deleteRotationClaim(rkey),
       } as RotationClaimStore,
+      getCommitSeq: () => storage.getCommitSeq(),
+      setCommitSeq: (seq) => storage.setCommitSeq(seq),
+      getIdentitySigningPublicKey: async () => identityKeys.signing.publicKey,
       onRotated: async (groupId) => {
         // 1.5 备份联动（统一走 triggerBackupAfterAdvance）：有缓存密码 →
         // 静默刷新备份；无 → 置强提示标记。
@@ -1030,11 +1037,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       onAborted: (groupId, reason) => {
         console.warn('[dme:rotation] rotation aborted', groupId, reason);
+        // sibling-rotated 与 stale（宣言 v2 检测到的备份分叉）恢复路径一致：
+        // 本机落后，需要恢复最新备份。复用同一标记与会话列表横幅。
         void storage.setSessionIssue(groupId, 'sibling-rotated');
+        if (reason === 'stale') {
+          reportSiblingRotation(groupId);
+        }
       },
     };
     maybeRotateGroups(deps);
-  }, [session, storage, pds, poller, triggerBackupAfterAdvance]);
+  }, [session, storage, pds, poller, identityKeys, triggerBackupAfterAdvance]);
 
   // runRotationCheck 依赖在它之后定义的 backupIdentity 之前就绪即可；
   // setKeyRotationIntervalMs 经 ref 调用，避免声明顺序循环
@@ -1420,11 +1432,29 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         }
         case 'group_invite_response': {
           const resp = parsed as unknown as GroupInviteResponse;
+          // 重放去重：同一条响应重复投递只处理一次（存储桶与 putMessage
+          // 的默认归属一致：发送者 1v1 会话，保持系统消息原显示位置）
+          const respBucket = msg.senderDid === userDid ? userDid : msg.senderDid;
+          if (await msgStorage.hasMessage(respBucket, msg.envelope.queueId)) {
+            console.log('handleIncomingMessage: duplicate group_invite_response, skipping', msg.envelope.queueId);
+            break;
+          }
           const existing = await msgStorage.getPendingInvite(resp.inviteId);
           if (existing) {
-            const updated: PendingInvite = resp.accepted
-              ? { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized }
-              : { ...existing, status: 'rejected' };
+            let updated: PendingInvite;
+            if (!resp.accepted) {
+              updated = { ...existing, status: 'rejected' };
+            } else if (existing.ownKeyPackagePoolId || existing.ownKeyPackagePairSerialized) {
+              // 接受响应且本机就是接受方（有 pair）：正常置 accepted
+              updated = { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized };
+            } else {
+              // 接受响应但本机无 pair（恢复备份后重放「过去某个自己」的确认，
+              // 或多端另一台设备接受的）：welcome 对本机数学上解不开（KP 私钥
+              // 不在本机），置 accepted 只会掩盖重新接受的入口——保持 pending，
+              // 让卡片继续提供「接受」按钮（实测踩坑：恢复后看到自己的确认
+              // 消息、卡片却消失、永远进不了群）
+              updated = existing;
+            }
             await msgStorage.putPendingInvite(updated);
             setPendingInvites((prev) =>
               prev.map((i) => i.inviteId === resp.inviteId ? updated : i),
@@ -1466,15 +1496,34 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             try {
               const allInvites = await msgStorage.getPendingInvites();
               const matchingInvites = allInvites.filter(
-                (i) => i.groupId === welcome.groupId && i.inviteeDid === userDid && i.ownKeyPackagePairSerialized,
+                (i) =>
+                  i.groupId === welcome.groupId &&
+                  i.inviteeDid === userDid &&
+                  (i.ownKeyPackagePoolId || i.ownKeyPackagePairSerialized),
               );
               const ownInvite = matchingInvites.length > 0
                 ? matchingInvites[matchingInvites.length - 1]
                 : null;
 
-              if (ownInvite?.ownKeyPackagePairSerialized) {
-                const { deserializeOwnKeyPackagePair } = await import('../handshake/group-invite');
-                const pair = deserializeOwnKeyPackagePair(ownInvite.ownKeyPackagePairSerialized);
+              if (ownInvite && (ownInvite.ownKeyPackagePoolId || ownInvite.ownKeyPackagePairSerialized)) {
+                // 取 KP pair：优先池条目（池化路径，池随备份走）；回退旧格式
+                // pair 本体序列化（池化前的历史邀请记录）
+                let pair: { publicPackage: KeyPackage; privatePackage: PrivateKeyPackage } | null = null;
+                if (ownInvite.ownKeyPackagePoolId) {
+                  const entry = (await msgStorage.getKeyPackagePool()).find(
+                    (e) => e.id === ownInvite.ownKeyPackagePoolId && !e.consumed,
+                  );
+                  if (entry) {
+                    pair = {
+                      publicPackage: deserializeWithUint8Array<KeyPackage>(entry.publicPackageSerialized),
+                      privatePackage: deserializeWithUint8Array<PrivateKeyPackage>(entry.privatePackageSerialized),
+                    };
+                  }
+                } else if (ownInvite.ownKeyPackagePairSerialized) {
+                  const { deserializeOwnKeyPackagePair } = await import('../handshake/group-invite');
+                  pair = deserializeOwnKeyPackagePair(ownInvite.ownKeyPackagePairSerialized);
+                }
+                if (!pair) throw new Error('key package pair unavailable (consumed or missing from pool)');
 
                 const { decodeMlsMessage } = await import('ts-mls');
                 const { MlsSession } = await import('../crypto/mls-session');
@@ -1497,6 +1546,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                 await msgStorage.putMlsSession(welcome.groupId, newSession.serialize());
                 poller.addSession(welcome.groupId, newSession);
                 joined = true;
+                // KP 一次性：join 成功才标记池条目 consumed（welcome 未到达时
+                // pair 保持未消费，随备份供恢复端 join——池化闭环的关键）
+                if (ownInvite.ownKeyPackagePoolId) {
+                  await msgStorage.markKeyPackageConsumed(ownInvite.ownKeyPackagePoolId);
+                }
+                // 备份点：新群会话建立，必须立即联动备份（其他端恢复后才有此群）
+                await triggerBackupAfterAdvance(`joinGroupViaWelcome ${welcome.groupId}`);
                 // 刚经 Welcome 真正入群：立刻收敛该群残留的 pending 邀请。
                 // 重放的邀请信封可能在入群之后才到达（信封按代际游标重放），
                 // 若不在这里收敛，邀请卡片会活到下次重启才被 reconcile 清掉
@@ -1529,11 +1585,36 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             }
           }
 
-          // 统一出口：join 未成功一律忽略。KP pair 只在点「接受」时随邀请
-          // 记录生成，而邀请记录不进备份——恢复/新端场景下这是重放的陈旧
-          // welcome。插消息与群元数据会产生打不开任何消息的僵尸群条目，
-          // 且预览谎报已加入（实测：私密标签页全新恢复后出现 666 群假条目）
-          if (!joined) break;
+          // 统一出口：join 未成功一律忽略插消息。KP pair 只在点「接受」时
+          // 随邀请记录生成，而邀请记录不进备份——恢复/新端场景下 welcome
+          // 虽然重放到达，但其加密对应的那把 KeyPackage 私钥已不存在，
+          // 数学上永远解不开，插消息与群元数据只会产生僵尸群假条目。
+          // 重新入群的唯一路径是重新接受（生成新 pair），因此把该群
+          // 自己的邀请记录重置回 pending，让卡片重新出现「接受」按钮——
+          // 否则用户看到「已接受」却永远进不了群，界面无任何解释
+          // （实测踩坑：恢复后能收到邀请/自己确认/Bob 确认，唯独进不了群）
+          if (!joined) {
+            for (const inv of await msgStorage.getPendingInvites()) {
+              if (inv.groupId === welcome.groupId && inv.inviteeDid === userDid && inv.status !== 'pending') {
+                await msgStorage.putPendingInvite({
+                  ...inv,
+                  status: 'pending',
+                  keyPackageSerialized: undefined,
+                  ownKeyPackagePairSerialized: undefined,
+                  ownKeyPackagePoolId: undefined,
+                });
+              }
+            }
+            setReceivedGroupInvites((prev) =>
+              prev.map((i) =>
+                i.groupId === welcome.groupId && i.inviteeDid === userDid && i.status !== 'pending'
+                  ? { ...i, status: 'pending' as const, keyPackageSerialized: undefined, ownKeyPackagePairSerialized: undefined }
+                  : i,
+              ),
+            );
+            setChatListVersion((v) => v + 1);
+            break;
+          }
           if (!(await msgStorage.getMlsSession(welcome.groupId))) {
             console.log(
               'handleIncomingMessage: ignoring stale group_welcome replay (no local session)',
@@ -1597,6 +1678,28 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                 const commitBytes = base64urlToBytes(commit.commitPayload);
                 await groupSession.decrypt(commitBytes);
                 await msgStorage.putMlsSession(commit.groupId, groupSession.serialize());
+                if (msg.senderDid === userDid && identityKeys && pds) {
+                  // 宣言 v2：兄弟端 commit 应用成功 → 异步追平账号 commit 高水位
+                  // （best-effort）。正常在线端消费了兄弟的 wrapper 后状态一致，
+                  // 若不追平，本端下次轮换时会发现 PDS seq > 本地 seq 而误判
+                  // 落后（stale）。追平后 seq 与云端一致，不误报。
+                  void (async () => {
+                    try {
+                      const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
+                      const remote = await peekCommitSeq(params, {
+                        get: (rkey) => pds.getRotationClaim(rkey),
+                        put: (rkey, payload) => pds.putRotationClaim(rkey, payload),
+                        del: (rkey) => pds.deleteRotationClaim(rkey),
+                      });
+                      if (remote !== null) {
+                        const local = await msgStorage.getCommitSeq();
+                        if (remote > local) await msgStorage.setCommitSeq(remote);
+                      }
+                    } catch {
+                      // best-effort：追平失败不影响本次 commit 应用
+                    }
+                  })();
+                }
               } catch (err) {
                 console.error('handleIncomingMessage: failed to process group commit:', err);
                 if (msg.senderDid === userDid) {
@@ -1735,6 +1838,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                 if (leafIndex >= 0) {
                   const { commitMessage } = await groupSession.removeMember(leafIndex);
                   await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
+                  // 备份点：群主执行退群清理 commit，群会话状态推进，
+                  // 立即联动备份（其他端恢复后才有含此次移除的新状态）
+                  await triggerBackupAfterAdvance(`removeLeavingMember ${left.groupId}`);
 
                   const commitMsg = {
                     type: 'group_commit' as const,
@@ -1917,7 +2023,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     }
 
     setChatListVersion((v) => v + 1);
-  }, [identityKeys, poller, pds, soundEnabled, downloadFile, language]);
+  }, [identityKeys, poller, pds, soundEnabled, downloadFile, language, triggerBackupAfterAdvance]);
 
   handleIncomingMessageRef.current = handleIncomingMessage;
 
@@ -2502,11 +2608,24 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       const inviterEncKey = await getRemoteEncryptionKey(invite.inviterDid);
       if (!inviterEncKey) throw new Error('respondToGroupInvite: inviter has no encryption key');
 
-      const { encryptedKeyPackage, keyPackagePairSerialized } = await generateEncryptedKeyPackageForInvite({
-        ownDid: session.did,
-        ownIdentityKeys: identityKeys,
-        inviterEncryptionPublicKey: inviterEncKey,
-      });
+      // KP 池化（备份点）：welcome 的解密依赖接受方 KP pair 的私钥，pair 必须
+      // 随备份走，否则恢复后 welcome（TTL 内重放）数学上永远解不开（实测踩坑：
+      // 恢复后收到邀请/自己确认/Bob 确认，唯独进不了群）。从 keyPackagePool
+      // 取未消费 pair——池已进 FullBackupData：welcome 未到达时 pair 完好随
+      // 备份，恢复后直接 join；join 成功才标 consumed（KP 一次性）。
+      let poolEntry = (await storage.getKeyPackagePool()).find((e) => !e.consumed) ?? null;
+      if (!poolEntry) {
+        await refreshKeyPackagePool();
+        poolEntry = (await storage.getKeyPackagePool()).find((e) => !e.consumed) ?? null;
+      }
+      if (!poolEntry) throw new Error('respondToGroupInvite: key package pool exhausted');
+
+      const { encryptKeyPackagePairForInvite } = await import('../handshake/group-invite');
+      const poolPublicPackage = deserializeWithUint8Array<KeyPackage>(poolEntry.publicPackageSerialized);
+      const encryptedKeyPackage = await encryptKeyPackagePairForInvite(
+        poolPublicPackage,
+        inviterEncKey,
+      );
 
       const response = createAcceptResponse({
         inviteId,
@@ -2533,7 +2652,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       const updatedInvite: PendingInvite = {
         ...invite,
         status: 'accepted',
-        ownKeyPackagePairSerialized: keyPackagePairSerialized,
+        ownKeyPackagePoolId: poolEntry.id,
       };
       await storage.putPendingInvite(updatedInvite);
       setReceivedGroupInvites((prev) =>
@@ -2565,7 +2684,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       prev.map((i) => i.inviteId === inviteId ? { ...i, status: accepted ? 'accepted' : 'rejected' } : i),
     );
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, receivedGroupInvites]);
+  }, [session, storage, identityKeys, pds, poller, receivedGroupInvites, refreshKeyPackagePool]);
 
   const createGroupFromPendingInvites = useCallback(async (groupId: string): Promise<void> => {
     if (!session || !storage || !identityKeys || !pds || !poller) {
@@ -2705,9 +2824,13 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       }
     }
 
+    // 备份点：新建群会话（覆盖同 groupId 的旧会话）+ owner KP + 全部
+    // welcome/commit 投递完成，立即联动备份（群主其他端恢复后才有新群）
+    await triggerBackupAfterAdvance(`createGroup ${groupId}`);
+
     setGroups((prev) => [...prev, groupId]);
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, pendingInvites, language]);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites, language, triggerBackupAfterAdvance]);
 
   const cancelGroupInvite = useCallback(async (inviteId: string): Promise<void> => {
     if (!storage) throw new Error('cancelGroupInvite: storage not initialized');
@@ -2886,12 +3009,15 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       createEnvelope: (envelope) => pds.createEnvelope(envelope),
     });
 
+    // 备份点：踢人 commit 投递成功，群会话状态推进，立即联动备份
+    await triggerBackupAfterAdvance(`removeMember ${groupId}`);
+
     const updatedMembers = groupInfo.members.filter((m) => m.did !== memberDid);
     const updatedInfo: GroupInfo = { ...groupInfo, members: updatedMembers };
     await storage.putGroupInfo(updatedInfo);
     setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? updatedInfo : g));
     setChatListVersion((v) => v + 1);
-  }, [session, storage, pds, poller]);
+  }, [session, storage, pds, poller, triggerBackupAfterAdvance]);
 
   const addAcceptedMembersToGroup = useCallback(async (groupId: string): Promise<void> => {
     if (!session || !storage || !identityKeys || !pds || !poller) {
@@ -2970,6 +3096,9 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       });
     }
 
+    // 备份点：拉人 commit 全部投递成功，群会话状态推进，立即联动备份
+    await triggerBackupAfterAdvance(`addAcceptedMembers ${groupId}`);
+
     const updatedInfo: GroupInfo = { ...groupInfo, members: [...groupInfo.members, ...newMembers] };
     await storage.putGroupInfo(updatedInfo);
 
@@ -2980,7 +3109,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     setGroupInfos((prev) => prev.map((g) => g.groupId === groupId ? updatedInfo : g));
     setPendingInvites((prev) => prev.filter((i) => i.groupId !== groupId));
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, pendingInvites]);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites, triggerBackupAfterAdvance]);
 
   const leaveGroup = useCallback(async (groupId: string): Promise<void> => {
     if (!session || !storage || !pds || !poller) {

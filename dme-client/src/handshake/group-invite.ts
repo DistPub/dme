@@ -161,6 +161,26 @@ export async function generateEncryptedKeyPackageForInvite(params: {
   };
 }
 
+/**
+ * 将本地 KP pair 的公钥加密给邀请人（池化接受路径：pair 从
+ * keyPackagePool 取出，本函数只做加密，不生成新 pair）。
+ *
+ * @param publicPackage - 池条目里的 KP 公钥包
+ * @param inviterEncryptionPublicKey - 邀请人的 X25519 公钥
+ * @returns base64url 序列化加密 KeyPackage（放进 group_invite_response）
+ */
+export async function encryptKeyPackagePairForInvite(
+  publicPackage: KeyPackage,
+  inviterEncryptionPublicKey: Uint8Array,
+): Promise<string> {
+  const encrypted = await encryptKeyPackage(publicPackage, inviterEncryptionPublicKey);
+  const serialized = serializeEncryptedKeyPackage(
+    encrypted.ephemeralPublicKey,
+    encrypted.ciphertext,
+  );
+  return bytesToBase64url(serialized);
+}
+
 // ---------------------------------------------------------------------------
 // Alice-side: Process accepted invite response
 // ---------------------------------------------------------------------------

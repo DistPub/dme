@@ -593,6 +593,20 @@ export class DmeStorage {
   }
 
   /**
+   * 账号级 commit 高水位（宣言 v2）：本端已完成的 commit 计数，随备份走。
+   * 每次成功 commit 单调 +1；commit 前与 PDS 宣言比对检测备份分叉。
+   */
+  async getCommitSeq(): Promise<number> {
+    const raw = await storage.getItem(this.prefix + 'commitSeq');
+    const parsed = raw !== null ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+  }
+
+  async setCommitSeq(seq: number): Promise<void> {
+    await storage.setItem(this.prefix + 'commitSeq', String(Math.max(0, Math.floor(seq))));
+  }
+
+  /**
    * 会话异常标记（持久化）：
    * - 'sibling-rotated'：同账号另一台设备已轮换，本机无法应用其 commit，
    *   唯一恢复路径是恢复最新备份（1.6）；

@@ -39,6 +39,14 @@ export type PendingInvite = {
   readonly status: InviteStatus;
   readonly createdAt: string;
   readonly keyPackageSerialized?: string;
+  /**
+   * 接受方自己的 KP pair 池条目 id（2026-10-14 起）。点接受时从
+   * keyPackagePool 取未消费 pair（池随备份走），welcome 解密依赖其私钥——
+   * 池化让「welcome 未到达」的中间态天然闭环：pair 留在池里随备份，
+   * 恢复后 welcome（TTL 内重放）可直接 join。join 成功后标记 consumed。
+   */
+  readonly ownKeyPackagePoolId?: string;
+  /** @deprecated 旧格式：pair 本体序列化（池化前的历史记录兼容读取） */
   readonly ownKeyPackagePairSerialized?: string;
 };
 

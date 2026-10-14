@@ -32,6 +32,7 @@ import { DmePds } from '../atproto/pds';
 import { declareKeys, getRemoteEncryptionKey, resolvePdsUrl } from '../atproto/did';
 import { resolveHandleCached } from '../atproto/profile-cache';
 import { acceptInvite, processWelcome } from '../handshake/handshake';
+import { decodeAndDecryptQr } from '../handshake/qr-decode';
 import { encodeQrPayload } from '../handshake/qr-encode';
 import { DmePoller } from '../poll/poller';
 import type { IncomingMessage, IncomingWelcome } from '../poll/poller';
@@ -43,7 +44,12 @@ import { MlsSession } from '../crypto/mls-session';
 import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
 import { maybeRotateGroups, type RotationDeps } from '../crypto/rotation';
-import type { RotationClaimStore } from '../crypto/rotation-claim';
+import {
+  acquireRotationClaim,
+  deriveRotationClaimParams,
+  releaseRotationClaim,
+  type RotationClaimStore,
+} from '../crypto/rotation-claim';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -944,6 +950,59 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [storage, backupIdentity],
   );
 
+  /**
+   * 宣言门禁（约定7/8/9，2026-10-15 破例全量接入）：本账号任何 commit 型
+   * 备份点动作（轮换/建群/踢人/拉人/退群清理/扫码握手/点接受群邀请）的
+   * 前置检查。账号级单调 commit 高水位仲裁：
+   * 返回应写入的高水位 seq，调用方在 commit 投递成功后 setCommitSeq；
+   * 返回 null = 拒绝执行——taken/stale（其他端已推进/备份分叉）已置
+   * sibling-rotated 提示恢复最新备份；PDS 不可用 fail-closed（不置标记、
+   * 不动作，下个时机重试，绝不无仲裁 commit）。
+   */
+  const acquireClaimForCommit = useCallback(
+    async (groupId: string, epoch: number): Promise<number | null> => {
+      const activeStorage = storageRef.current ?? storage;
+      const activePds = pdsRef.current ?? pds;
+      const activeKeys = identityKeysRef.current ?? identityKeys;
+      if (!activeStorage || !activePds || !activeKeys) return null;
+      const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
+      const store: RotationClaimStore = {
+        get: (rkey) => activePds.getRotationClaim(rkey),
+        put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
+        del: (rkey) => activePds.deleteRotationClaim(rkey),
+      };
+      try {
+        const { verdict, seq } = await acquireRotationClaim(
+          params,
+          { groupId, epoch, localSeq: await activeStorage.getCommitSeq() },
+          store,
+        );
+        if (verdict === 'acquired') return seq;
+        console.warn(`[dme:claim] 宣言${verdict}: 禁止 commit，需恢复备份`, groupId);
+        await activeStorage.setSessionIssue(groupId, 'sibling-rotated');
+        return null;
+      } catch (err) {
+        console.warn('[dme:claim] 宣言检查失败，fail-closed（不 commit）', groupId, err);
+        return null;
+      }
+    },
+    [storage, pds, identityKeys],
+  );
+
+  /** 释放宣言：commit/投递失败回滚时调用，避免虚高水位（尽力而为）。 */
+  const releaseClaim = useCallback(async (): Promise<void> => {
+    const activePds = pdsRef.current ?? pds;
+    const activeKeys = identityKeysRef.current ?? identityKeys;
+    if (!activePds || !activeKeys) return;
+    const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
+    const store: RotationClaimStore = {
+      get: (rkey) => activePds.getRotationClaim(rkey),
+      put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
+      del: (rkey) => activePds.deleteRotationClaim(rkey),
+    };
+    await releaseRotationClaim(params, store);
+  }, [pds, identityKeys]);
+
   const restoreIdentityFromBackup = useCallback(
     async (password: string): Promise<boolean> => {
       const activeStorage = storageRef.current ?? storage;
@@ -1192,10 +1251,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         throw new Error('acceptInviteQr: 尚未完全初始化');
       }
 
-      const result = await acceptInvite(session.did, identityKeys, qrString);
+      // 宣言门禁（约定7）：建立 1v1 会话（备份点）前必须先宣言——同账号
+      // 多端同时扫同一码会各自生成不同叶密钥、同 groupId 状态分叉；
+      // taken/stale 已置 sibling-rotated 提示恢复备份，fail-closed 放弃本次添加
+      const { aliceDid } = await decodeAndDecryptQr(qrString, identityKeys.encryption.privateKey);
+      const claimSeq = await acquireClaimForCommit(aliceDid, 0);
+      if (claimSeq === null) {
+        throw new Error('acceptInviteQr: 宣言被拒（需恢复备份或 PDS 不可用）');
+      }
+
+      let result: Awaited<ReturnType<typeof acceptInvite>>;
+      try {
+        result = await acceptInvite(session.did, identityKeys, qrString);
+      } catch (err) {
+        await releaseClaim();
+        throw err;
+      }
 
       await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
       poller.addSession(result.groupId, result.mlsSession);
+      await storage.setCommitSeq(claimSeq);
 
       // 缺口①：握手推进了会话状态，立即联动备份——保证兄弟端之后恢复
       // 备份时拿到的是新会话，而不是被倒灌回旧状态
@@ -1213,7 +1288,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroups((prev) => (prev.includes(result.groupId) ? prev : [...prev, result.groupId]));
       setChatListVersion((v) => v + 1);
     },
-    [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance],
+    [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim],
   );
 
   // -------------------------------------------------------------------------
@@ -1575,15 +1650,33 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   if (leafIndex >= 0) {
                     // Phase 1.0：先快照提交前状态，commit 投群 queueId 空间
                     const preCommitState = groupSession.serialize();
-                    const { commitMessage } = await groupSession.removeMember(leafIndex);
-                    await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
 
-                    await deliverCommitViaGroupSpace({
-                      preCommitStateSerialized: preCommitState,
-                      groupId: left.groupId,
-                      commitMessage,
-                      createEnvelope: (envelope) => pds.createEnvelope(envelope),
-                    });
+                    // 宣言门禁（约定7）：群主执行退群清理 commit 前必须先宣言；
+                    // taken/stale 已置 sibling-rotated 提示恢复备份，fail-closed 放弃
+                    const claimSeq = await acquireClaimForCommit(left.groupId, groupSession.getEpoch());
+                    if (claimSeq === null) break;
+
+                    try {
+                      const { commitMessage } = await groupSession.removeMember(leafIndex);
+                      await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
+                      await msgStorage.setCommitSeq(claimSeq);
+
+                      await deliverCommitViaGroupSpace({
+                        preCommitStateSerialized: preCommitState,
+                        groupId: left.groupId,
+                        commitMessage,
+                        createEnvelope: (envelope) => pds.createEnvelope(envelope),
+                      });
+
+                      // 备份点：群主执行退群清理 commit，群会话状态推进，
+                      // 立即联动备份（其他端恢复后才有含此次移除的新状态）
+                      await triggerBackupAfterAdvance(`removeLeavingMember ${left.groupId}`);
+                    } catch (err) {
+                      // commit/投递失败：释放宣言避免虚高水位；信封重放时
+                      // 下次处理自然重试
+                      await releaseClaim();
+                      throw err;
+                    }
                   }
                 } catch (err) {
                   console.error('handleIncomingMessage: 移除退群成员失败', err);
@@ -2385,6 +2478,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (!invite) throw new Error('respondToGroupInvite: 邀请不存在');
 
       if (accepted) {
+        // 宣言门禁（约定7）：点接受（产生备份点状态）前必须先宣言——同账号
+        // 多端同时点接受会向群主发两个不同 KP 的 accept_response，后者覆盖
+        // 前者、先点的一端永远等不到 welcome；taken/stale 已置标记提示
+        // 恢复备份，fail-closed 保持 pending 稍后重试
+        const claimSeq = await acquireClaimForCommit(invite.groupId, 0);
+        if (claimSeq === null) return;
+
         const inviterEncKey = await getRemoteEncryptionKey(invite.inviterDid);
         if (!inviterEncKey) throw new Error('respondToGroupInvite: 邀请人没有加密公钥');
 
@@ -2404,18 +2504,24 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         const mlsSession = poller.getSession(invite.inviterDid);
         if (!mlsSession) throw new Error('respondToGroupInvite: 缺少与邀请人的 MLS 会话');
 
-        const encResult = await mlsSession.encrypt(
-          new TextEncoder().encode(JSON.stringify(response)),
-        );
-        await storage.putMlsSession(invite.inviterDid, mlsSession.serialize());
+        try {
+          const encResult = await mlsSession.encrypt(
+            new TextEncoder().encode(JSON.stringify(response)),
+          );
+          await storage.putMlsSession(invite.inviterDid, mlsSession.serialize());
 
-        await pds.createEnvelope({
-          $type: 'dme.queue.envelope',
-          queueId: encResult.queueId,
-          payload: bytesToBase64url(encResult.ciphertext),
-          createdAt: new Date().toISOString(),
-          messageType: 'application',
-        });
+          await pds.createEnvelope({
+            $type: 'dme.queue.envelope',
+            queueId: encResult.queueId,
+            payload: bytesToBase64url(encResult.ciphertext),
+            createdAt: new Date().toISOString(),
+            messageType: 'application',
+          });
+        } catch (err) {
+          await releaseClaim();
+          throw err;
+        }
+        await storage.setCommitSeq(claimSeq);
 
         const updatedInvite: PendingInvite = {
           ...invite,
@@ -2452,7 +2558,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       setChatListVersion((v) => v + 1);
     },
-    [session, storage, identityKeys, pds, poller, receivedGroupInvites],
+    [session, storage, identityKeys, pds, poller, receivedGroupInvites, acquireClaimForCommit, releaseClaim],
   );
 
   const createGroupFromPendingInvites = useCallback(
@@ -2476,13 +2582,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         acceptedMembers.push({ did: invite.inviteeDid, keyPackage });
       }
 
-      const { mlsSession: newSession, welcomes, commits } = await createGroupWithMembers({
-        groupId,
-        ownerDid: session.did,
-        ownerIdentityKeys: identityKeys,
-        acceptedMembers,
-      });
+      // 宣言门禁（约定7）：建群（首串 commit）前必须先宣言；新群 epoch 从 0 起。
+      // taken/stale 已置标记提示恢复备份，fail-closed 静默放弃本次操作
+      const claimSeq = await acquireClaimForCommit(groupId, 0);
+      if (claimSeq === null) return;
 
+      let created: Awaited<ReturnType<typeof createGroupWithMembers>>;
+      try {
+        created = await createGroupWithMembers({
+          groupId,
+          ownerDid: session.did,
+          ownerIdentityKeys: identityKeys,
+          acceptedMembers,
+        });
+      } catch (err) {
+        await releaseClaim();
+        throw err;
+      }
+      const { mlsSession: newSession, welcomes, commits } = created;
+
+      try {
       await storage.putMlsSession(groupId, newSession.serialize());
       poller.addSession(groupId, newSession);
 
@@ -2546,11 +2665,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           await sendEncryptedTo(memberDid, commitMsg);
         }
       }
+      } catch (err) {
+        // welcome/commit 投递失败：移除新群会话并释放宣言——绝不让
+        // 「本地已换代而对端未收到」的状态落盘（否则全员脱钩），上层可重试
+        console.warn('createGroupFromPendingInvites: 投递失败，清理新群会话', err);
+        poller.removeSession(groupId);
+        await storage.deleteMlsSession(groupId);
+        await releaseClaim();
+        throw err;
+      }
+
+      await storage.setCommitSeq(claimSeq);
+
+      // 备份点：新建群会话 + 全部 welcome/commit 投递完成，立即联动备份
+      // （群主其他端恢复后才有新群，否则与全群脱钩）
+      await triggerBackupAfterAdvance(`createGroup ${groupId}`);
 
       setGroups((prev) => (prev.includes(groupId) ? prev : [...prev, groupId]));
       setChatListVersion((v) => v + 1);
     },
-    [session, storage, identityKeys, pds, poller, pendingInvites, language, sendEncryptedTo],
+    [session, storage, identityKeys, pds, poller, pendingInvites, language, sendEncryptedTo, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim],
   );
 
   const cancelGroupInvite = useCallback(
@@ -2646,10 +2780,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       );
       if (accepted.length === 0) throw new Error('addAcceptedMembersToGroup: 没有已接受的成员');
 
+      // 宣言门禁（约定7）：拉人 commit 前必须先宣言；taken/stale 已置标记
+      // 提示恢复备份，fail-closed 静默放弃本次操作
+      const stateBeforeAdds = mlsSession.serialize();
+      const claimSeq = await acquireClaimForCommit(groupId, mlsSession.getEpoch());
+      if (claimSeq === null) return;
+
       const newMembers: GroupMember[] = [];
       const commitsWithTargets: { commitMessage: Uint8Array; preCommitState: string; targetDids: string[] }[] = [];
       const existingDids = new Set(groupInfo.members.map((m) => m.did));
 
+      try {
       for (const invite of accepted) {
         if (!invite.keyPackageSerialized) continue;
         const keyPackage = await deserializeAcceptedKeyPackage({
@@ -2697,6 +2838,22 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           createEnvelope: (envelope) => pds.createEnvelope(envelope),
         });
       }
+      } catch (err) {
+        // addMember/投递失败：从动作前快照回滚内存态与存储态、释放宣言，
+        // 绝不让「本地已换代而 commit 未投出」落盘
+        console.warn('addAcceptedMembersToGroup: commit 失败，回滚', err);
+        const impl = await getNobleMlsImpl();
+        const rolledBack = await MlsSession.deserialize(stateBeforeAdds, impl);
+        poller.addSession(groupId, rolledBack);
+        await storage.putMlsSession(groupId, stateBeforeAdds);
+        await releaseClaim();
+        throw err;
+      }
+
+      await storage.setCommitSeq(claimSeq);
+
+      // 备份点：拉人 commit 全部投递成功，群会话状态推进，立即联动备份
+      await triggerBackupAfterAdvance(`addAcceptedMembers ${groupId}`);
 
       const updatedInfo: GroupInfo = {
         ...groupInfo,
@@ -2712,7 +2869,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingInvites((prev) => prev.filter((i) => i.groupId !== groupId));
       setChatListVersion((v) => v + 1);
     },
-    [session, storage, identityKeys, pds, poller, pendingInvites, sendEncryptedTo],
+    [session, storage, identityKeys, pds, poller, pendingInvites, sendEncryptedTo, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim],
   );
 
   const dissolveGroup = useCallback(
@@ -2775,22 +2932,46 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       // Phase 1.0：先快照「提交前状态」，commit 投群 queueId 空间（见 commit-delivery.ts）
       const preCommitState = mlsSession.serialize();
-      const { commitMessage } = await mlsSession.removeMember(leafIndex);
-      await storage.putMlsSession(groupId, mlsSession.serialize());
 
-      const removedMsg: GroupMemberRemoved = {
-        type: 'group_member_removed',
-        groupId,
-        groupName: groupInfo.groupName,
-      };
-      await sendEncryptedTo(memberDid, removedMsg);
+      // 宣言门禁（约定7）：踢人 commit 前必须先宣言；taken/stale 已置标记
+      // 提示恢复备份，fail-closed 静默放弃本次操作
+      const claimSeq = await acquireClaimForCommit(groupId, mlsSession.getEpoch());
+      if (claimSeq === null) return;
 
-      await deliverCommitViaGroupSpace({
-        preCommitStateSerialized: preCommitState,
-        groupId,
-        commitMessage,
-        createEnvelope: (envelope) => pds.createEnvelope(envelope),
-      });
+      let commitMessage: Uint8Array;
+      try {
+        ({ commitMessage } = await mlsSession.removeMember(leafIndex));
+        await storage.putMlsSession(groupId, mlsSession.serialize());
+
+        const removedMsg: GroupMemberRemoved = {
+          type: 'group_member_removed',
+          groupId,
+          groupName: groupInfo.groupName,
+        };
+        await sendEncryptedTo(memberDid, removedMsg);
+
+        await deliverCommitViaGroupSpace({
+          preCommitStateSerialized: preCommitState,
+          groupId,
+          commitMessage,
+          createEnvelope: (envelope) => pds.createEnvelope(envelope),
+        });
+      } catch (err) {
+        // commit/投递失败：从提交前快照回滚内存态与存储态、释放宣言，
+        // 绝不让「本地已换代而 commit 未投出」落盘
+        console.warn('removeMemberFromGroup: commit 失败，回滚', err);
+        const impl = await getNobleMlsImpl();
+        const rolledBack = await MlsSession.deserialize(preCommitState, impl);
+        poller.addSession(groupId, rolledBack);
+        await storage.putMlsSession(groupId, preCommitState);
+        await releaseClaim();
+        throw err;
+      }
+
+      await storage.setCommitSeq(claimSeq);
+
+      // 备份点：踢人 commit 投递成功，群会话状态推进，立即联动备份
+      await triggerBackupAfterAdvance(`removeMember ${groupId}`);
 
       const updatedInfo: GroupInfo = {
         ...groupInfo,
@@ -2800,7 +2981,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroupInfos((prev) => prev.map((g) => (g.groupId === groupId ? updatedInfo : g)));
       setChatListVersion((v) => v + 1);
     },
-    [session, storage, pds, poller, sendEncryptedTo],
+    [session, storage, pds, poller, sendEncryptedTo, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim],
   );
 
   const leaveGroup = useCallback(

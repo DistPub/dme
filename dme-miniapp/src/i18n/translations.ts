@@ -102,6 +102,11 @@ export const zh: Record<string, string> = {
   'settings.enterPassword': '请输入密码',
   'settings.passwordMismatch': '两次密码不一致',
   'settings.backupFailed': '备份失败',
+  'settings.restoreTitle': '从备份恢复',
+  'settings.restoreHint': '用云端最新备份覆盖本机身份与会话状态。当提示「此会话已在你的另一台设备上更新密钥」时，需在此恢复最新备份后才能继续收发。',
+  'settings.restore': '恢复',
+  'settings.restoring': '恢复中...',
+  'settings.restoreSucceeded': '已恢复！',
   'settings.about': '关于',
 
   // about
@@ -408,6 +413,11 @@ export const en: Record<string, string> = {
   'settings.enterPassword': 'Enter a password',
   'settings.passwordMismatch': 'Passwords do not match',
   'settings.backupFailed': 'Backup failed',
+  'settings.restoreTitle': 'Restore from Backup',
+  'settings.restoreHint': 'Overwrite local identity and sessions with the latest cloud backup. Required when told that this session was re-keyed on another device of yours.',
+  'settings.restore': 'Restore',
+  'settings.restoring': 'Restoring...',
+  'settings.restoreSucceeded': 'Restored!',
   'settings.about': 'About',
 
   // about

@@ -11,15 +11,18 @@
  *   5. Gateway URL     —— [输入] + [保存][重置]
  *   6. 声音            —— 开关（行内）
  *   7. 身份备份         —— [密码][确认密码] + [备份]
+ *   7.5 从备份恢复      —— [密码] + [恢复]（轮换后 sibling-rotated 的唯一
+ *       恢复路径；web 设置页已同步增加，不再是纯 Setup 流程专属）
  *   8. 关于            —— [关于] → /pages/about
  *
  * ⚠️ 与 web 的差异**已全部修正**（曾经的偏差）：
  *   1. 删除多余的「账号」区（web 无此区）
  *   2. 每个字段都是 [保存] + [重置] 一对（web 如此）；只有轮询批次是单 [保存]
  *   3. 删除「退出登录」按钮 —— web 的退出登录只在 ChatList 的头像菜单里
- *   4. 删除「从备份恢复」—— 该功能属于 Setup/登录流程，不属于设置页；
- *      小程序在登录页已有「从备份恢复」入口，设置页再放一个是重复入口。
- *      （dme-client 的 SettingsScreen 里也没有这一段。）
+ *   4. 「从备份恢复」曾经删除（当时该功能属于 Setup/登录流程，设置页再放
+ *      一个是重复入口）；但定时密钥轮换上线后，sibling-rotated（另一台设备
+ *      已轮换）的唯一恢复路径是在已登录状态下从备份恢复，web 设置页已
+ *      加入口，小程序对齐恢复（2026-10-14）。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -60,6 +63,7 @@ export default function SettingsPage(): React.JSX.Element {
     setGatewayUrl,
     setSoundEnabled,
     backupIdentity,
+    restoreIdentityFromBackup,
   } = useApp();
 
   useWebTitle(t('settings.title'));
@@ -80,6 +84,11 @@ export default function SettingsPage(): React.JSX.Element {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 从备份恢复（对应 web SettingsScreen 的 restorePwd / restoreStatus / restoreError）
+  const [restorePassword, setRestorePassword] = useState('');
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   useEffect(() => {
     setBatchDraft(String(pollBatchSize));
@@ -170,6 +179,33 @@ export default function SettingsPage(): React.JSX.Element {
       setBusy(false);
     }
   }, [password, confirmPassword, backupIdentity, t]);
+
+  // ---- 从备份恢复（对应 web handleRestore；showLoading 理由同 handleBackup） --
+  const handleRestore = useCallback(async (): Promise<void> => {
+    setRestoreError(null);
+    if (!restorePassword) {
+      setRestoreError(t('settings.enterPassword'));
+      return;
+    }
+    setRestoreBusy(true);
+    try {
+      await Taro.showLoading({ title: t('settings.restoring'), mask: true });
+      const ok = await restoreIdentityFromBackup(restorePassword);
+      Taro.hideLoading();
+      if (ok) {
+        setRestorePassword('');
+        await Taro.showToast({ title: t('settings.restoreSucceeded'), icon: 'success' });
+      } else {
+        setRestoreError(t('setup.noBackup'));
+      }
+    } catch (err) {
+      Taro.hideLoading();
+      setRestoreError(`${t('setup.restoreFailed')}: ${err instanceof Error ? err.message : ''}`);
+      console.error('恢复失败:', err);
+    } finally {
+      setRestoreBusy(false);
+    }
+  }, [restorePassword, restoreIdentityFromBackup, t]);
 
   return (
     <View className="settings">
@@ -331,6 +367,25 @@ export default function SettingsPage(): React.JSX.Element {
         <Button className="settings__fullButton" disabled={busy} onClick={() => void handleBackup()}>
           {busy ? t('settings.backingUp') : t('settings.backup')}
         </Button>
+
+        {/* 7.5 从备份恢复（轮换后 sibling-rotated 的唯一恢复路径） */}
+        <Text className="settings__title">{t('settings.restoreTitle')}</Text>
+        <Text className="settings__hint">{t('settings.restoreHint')}</Text>
+        <Input
+          className="settings__input"
+          password
+          value={restorePassword}
+          placeholder={t('settings.passwordPlaceholder')}
+          onInput={(e) => setRestorePassword(e.detail.value)}
+        />
+        <Button
+          className="settings__fullButton settings__fullButton--ghost"
+          disabled={restoreBusy}
+          onClick={() => void handleRestore()}
+        >
+          {restoreBusy ? t('settings.restoring') : t('settings.restore')}
+        </Button>
+        {restoreError ? <Text className="settings__error">{restoreError}</Text> : null}
 
         {/* 8. 关于（对应 web 的 styles.fullButton + navigation.navigate('About')） */}
         <Button

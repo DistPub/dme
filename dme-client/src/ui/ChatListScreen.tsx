@@ -751,13 +751,22 @@ const resolveProfiles = useCallback(async (
             )}
             {sessionIssues.length > 0 && (
               <View style={styles.issueBanner}>
-                {sessionIssues.map(({ groupId, issue }) => (
-                  <Text key={groupId} style={styles.issueBannerText}>
-                    {issue === 'sibling-rotated'
-                      ? t('chatlist.siblingRotatedBanner')
-                      : t('chatlist.desyncedBanner')}
-                  </Text>
-                ))}
+                {sessionIssues.map(({ groupId, issue }) => {
+                  const bannerText = issue === 'sibling-rotated'
+                    ? t('chatlist.siblingRotatedBanner')
+                    : t('chatlist.desyncedBanner');
+                  // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页
+                  return issue === 'sibling-rotated' ? (
+                    <TouchableOpacity
+                      key={groupId}
+                      onPress={() => navigation.navigate('Settings')}
+                    >
+                      <Text style={styles.issueBannerText}>{bannerText}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text key={groupId} style={styles.issueBannerText}>{bannerText}</Text>
+                  );
+                })}
               </View>
             )}
             {app.receivedGroupInvites.filter((i) => i.status === 'pending').length > 0 && (

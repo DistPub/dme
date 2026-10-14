@@ -41,6 +41,10 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const [backupStatus, setBackupStatus] = useState<'idle' | 'backing_up' | 'done' | 'error'>('idle');
   const [backupError, setBackupError] = useState<string | null>(null);
 
+  const [restorePwd, setRestorePwd] = useState('');
+  const [restoreStatus, setRestoreStatus] = useState<'idle' | 'restoring' | 'done' | 'error'>('idle');
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+
   const handleSave = async (): Promise<void> => {
     const n = parseInt(draft, 10);
     if (!Number.isFinite(n) || n < 1 || n > 20) return;
@@ -113,6 +117,33 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       setBackupError(err instanceof Error ? err.message : t('settings.backupFailed'));
       setBackupStatus('error');
       setTimeout(() => setBackupStatus('idle'), 2000);
+    }
+  };
+
+  // 从备份恢复（key-rotation-plan.md 1.6）：sibling-rotated / 需要回滚时的
+  // 唯一恢复路径。用云端最新备份覆盖本机身份与会话状态。
+  const handleRestore = async (): Promise<void> => {
+    setRestoreError(null);
+    if (!restorePwd) {
+      setRestoreError(t('settings.enterPassword'));
+      return;
+    }
+    setRestoreStatus('restoring');
+    try {
+      const ok = await app.restoreIdentityFromBackup(restorePwd);
+      if (ok) {
+        setRestoreStatus('done');
+        setRestorePwd('');
+        setTimeout(() => setRestoreStatus('idle'), 2000);
+      } else {
+        setRestoreError(t('setup.noBackup'));
+        setRestoreStatus('error');
+        setTimeout(() => setRestoreStatus('idle'), 2000);
+      }
+    } catch (err) {
+      setRestoreError(err instanceof Error ? err.message : t('setup.restoreFailed'));
+      setRestoreStatus('error');
+      setTimeout(() => setRestoreStatus('idle'), 2000);
     }
   };
 
@@ -311,6 +342,37 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         {backupError ? (
           <Text style={styles.error}>{backupError}</Text>
         ) : null}
+
+        <Text style={[styles.title, styles.restoreTitle]}>{t('settings.restoreTitle')}</Text>
+        <Text style={styles.hint}>{t('settings.restoreHint')}</Text>
+        <TextInput
+          style={styles.input}
+          value={restorePwd}
+          onChangeText={setRestorePwd}
+          placeholder={t('settings.passwordPlaceholder')}
+          placeholderTextColor={theme.colors.textSecondary}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={restoreStatus !== 'restoring'}
+        />
+        <Button
+          label={
+            restoreStatus === 'restoring'
+              ? t('settings.restoring')
+              : restoreStatus === 'done'
+                ? t('settings.restoreSucceeded')
+                : t('settings.restore')
+          }
+          onPress={handleRestore}
+          variant="secondary"
+          style={styles.fullButton}
+          disabled={restoreStatus === 'restoring'}
+        />
+        {restoreError ? (
+          <Text style={styles.error}>{restoreError}</Text>
+        ) : null}
+
         <Button
           label={t('settings.about')}
           onPress={() => navigation.navigate('About')}
@@ -385,6 +447,9 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 48,
     flexShrink: 0,
+  },
+  restoreTitle: {
+    marginTop: theme.spacing.lg,
   },
   rowButtons: {
     flexDirection: 'row',

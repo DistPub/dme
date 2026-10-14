@@ -3032,7 +3032,10 @@ blockList,
     }),
     [
       session, storage, identityKeys, poller, pds, loading, error,
-      groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize, appViewProxy, serverUrl, gatewayUrl,
+      groups, pendingWelcomes, keyPackagePool, chatListVersion, pollBatchSize,
+      // backupRequired / keyRotationIntervalMs 必须在依赖里：轮换/备份只改
+      // 这两个 state，漏掉会让 useMemo 持续吐旧值，横幅直到刷新才消失
+      keyRotationIntervalMs, backupRequired, appViewProxy, serverUrl, gatewayUrl,
       pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
       embedMismatch, embedTokenApplied, loginStep, loginFormSnapshot,
       login, cancel2FA, logout, restoreSession, setupIdentity, declareKeysAction,

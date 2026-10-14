@@ -1,18 +1,29 @@
-/*
+# 缓存策略（Cloudflare _headers 语法）。
+#
+# 2026-10-14 实测事故：曾用 Netlify 专属的 "! Cache-Control" 否定语法给
+# "/*" 兜底 immutable、再在入口路径清除——Cloudflare 不支持否定语法，
+# 把两条 Cache-Control 合并成 "max-age=0, must-revalidate, max-age=31536000,
+# immutable"，index.html 被 Cloudflare 边缘与浏览器按一年 immutable 缓存，
+# CI 部署后用户永远拿不到新版本。
+#
+# 因此本文件的铁律：
+#  1. 不用 "!" 否定语法（Netlify 专属）；
+#  2. 任何一条路径规则不与 "/*" 兜底规则同时携带 Cache-Control（会被合并）；
+#  3. immutable 只授予内容哈希化路径（内容变则 URL 变，永不陈旧）；
+#  4. 入口 HTML / sw.js / manifest.json 必须每次 revalidate。
+
+# 内容哈希资源（Expo 产物，路径含内容哈希）：可永久缓存
+/_expo/static/*
   Cache-Control: public, max-age=31536000, immutable
 
+# 入口与 SW：必须每次 revalidate（发新版的生命线，不许 immutable）
 /
-  ! Cache-Control
   Cache-Control: public, max-age=0, must-revalidate
-
 /index.html
-  ! Cache-Control
   Cache-Control: public, max-age=0, must-revalidate
-
 /sw.js
-  ! Cache-Control
   Cache-Control: no-cache
-
 /manifest.json
-  ! Cache-Control
+  Cache-Control: no-cache
+/workbox-*.js
   Cache-Control: no-cache

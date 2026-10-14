@@ -35,6 +35,7 @@ import { MlsSession } from '../crypto/mls-session';
 import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
 import { maybeRotateGroups, reportSiblingRotation, type RotationDeps } from '../crypto/rotation';
+import type { RotationClaimStore } from '../crypto/rotation-claim';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -812,11 +813,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     const groupIds = await storage.listGroups();
     const mlsSessions: Record<string, string> = {};
+    const rotationAt: Record<string, number> = {};
     for (const gid of groupIds) {
       const serialized = await storage.getMlsSession(gid);
       if (serialized) {
         mlsSessions[gid] = serialized;
       }
+      rotationAt[gid] = await storage.getLastRotationAt(gid);
     }
     const keyPackagePool = await storage.getKeyPackagePool();
     const groupInfos = await storage.listGroupInfos();
@@ -828,6 +831,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       keyPackagePool,
       groupInfos,
       blockList,
+      rotationAt,
     };
 
     const encryptedData = encryptBackup(data, password);
@@ -854,9 +858,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.putIdentityKeys(data.identity);
     setIdentityKeys(data.identity);
 
-    // 恢复 MLS sessions 并加载到 poller
+    // 恢复 MLS sessions 并加载到 poller；同时写回轮换时间戳——否则多端
+    // 同时恢复后 lastRotationAt 全部归零，又同时到期、同时轮换、再撞槽
     for (const [groupId, serialized] of Object.entries(data.mlsSessions)) {
       await storage.putMlsSession(groupId, serialized);
+      await storage.setLastRotationAt(groupId, data.rotationAt?.[groupId] ?? 0);
       try {
         const impl = await getNobleMlsImpl();
         const mlsSession = await MlsSession.deserialize(serialized, impl);
@@ -919,6 +925,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       getIntervalMs: () => storage.getKeyRotationIntervalMs(),
       getLastRotationAt: (groupId) => storage.getLastRotationAt(groupId),
       setLastRotationAt: (groupId, ts) => storage.setLastRotationAt(groupId, ts),
+      claimStore: {
+        get: (rkey) => pds.getRotationClaim(rkey),
+        put: (rkey, payload) => pds.putRotationClaim(rkey, payload),
+        del: (rkey) => pds.deleteRotationClaim(rkey),
+      } as RotationClaimStore,
       onRotated: async (groupId) => {
         // 1.5 备份联动：有缓存密码 → 静默刷新备份；无 → 置强提示标记。
         // 备份刷新失败仅 log（不影响轮换结果，下个周期重试时再触发）

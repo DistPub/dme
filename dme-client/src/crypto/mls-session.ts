@@ -220,6 +220,11 @@ export class MlsSession {
     return this.state.keySchedule.exporterSecret;
   }
 
+  /** 当前 group epoch（宣言槽位派生 / 新旧状态比较用）。 */
+  getEpoch(): number {
+    return Number(this.state.groupContext.epoch);
+  }
+
   getSenderLeafIndex(): number {
     return this.senderLeafIndex;
   }

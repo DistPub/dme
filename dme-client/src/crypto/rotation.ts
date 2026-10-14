@@ -14,14 +14,21 @@
  *  - commit 前 poll 一轮：若同账号兄弟设备已抢先 commit，其 wrapper 会经
  *    group_commit 路径触发 sibling 信号（本机无法应用兄弟的 commit）——
  *    轮换中止并上抛，走"恢复备份"路径（1.6）；
- *  - 残余窗口：两设备在 poll 延迟内同时 commit 仍可能撞槽（同 queueId
- *    server last-write-wins），概率约 (秒级窗口/抖动区间)²，接受；撞槽的
+ *  - **宣言检查（PDS rotation-claim，commit 的硬性门槛）**：poll 是被动的、
+ *    受 poll 间隔限制（实测同账号多端同时到期的首轮轮换曾撞槽：两端
+ *    queueId 相同、server last-write-wins，一端 commit 被覆盖丢失）。
+ *    宣言改为 commit 前主动读本账号 PDS 的仲裁记录——rkey 由本 epoch
+ *    exporterSecret 派生（所有端一致），读到新鲜宣言就跳过本周期；
+ *    详见 rotation-claim.ts。宣言不可用时 fail-closed：不 commit，
+ *    宁可下个周期重试；
+ *  - 残余窗口：两设备在宣言写入→回读的一个网络往返内同时认领仍可能
+ *    双 commit 撞槽，概率已从 (秒级窗口/抖动区间)² 降至可忽略；撞槽的
  *    一端会话分叉，其后续消息对端解不开 → 对端 desync 标记，最终以恢复
  *    备份收敛。
  *
  * 原子性：updateOwnLeaf 推进本地状态后若投递失败，从提交前快照回滚内存态、
- * 不记 lastRotationAt，下个周期自然重试——绝不允许"本地已换代而 commit
- * 未投出"的状态落盘（那会让全员脱钩）。
+ * 释放宣言、不记 lastRotationAt，下个周期自然重试——绝不允许"本地已换代而
+ * commit 未投出"的状态落盘（那会让全员脱钩）。
  *
  * 备份联动（1.5）：轮换成功后由 deps.onRotated 回调处理——有缓存密码则
  * 静默刷新备份，否则置 backupRequired 强提示。
@@ -29,6 +36,12 @@
 
 import { deliverCommitViaGroupSpace } from '../state/commit-delivery';
 import type { MlsSession } from './mls-session';
+import {
+  acquireRotationClaim,
+  deriveRotationClaimParams,
+  releaseRotationClaim,
+  type RotationClaimStore,
+} from './rotation-claim';
 import type { DmeEnvelope } from '../protocol/types';
 
 /** commit 前随机抖动上限（毫秒）。 */
@@ -64,6 +77,8 @@ export interface RotationDeps {
   getIntervalMs(): Promise<number>;
   getLastRotationAt(groupId: string): Promise<number>;
   setLastRotationAt(groupId: string, ts: number): Promise<void>;
+  /** PDS 宣言存取（AppContext 用 DmePds 组装，见 rotation-claim.ts）。 */
+  claimStore: RotationClaimStore;
   /** 轮换成功后的备份联动（1.5）。 */
   onRotated(groupId: string): Promise<void>;
   /** 轮换中止/失败的 UI 通知（如"检测到另一台设备已轮换，请恢复备份"）。 */
@@ -136,27 +151,58 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
     return;
   }
 
-  // 快照提交前状态（wrapper 用旧 epoch 加密，投进群 queueId 空间）
-  const preCommitState = session.serialize();
-  const { commitMessage } = await session.updateOwnLeaf();
-
+  // 宣言检查（commit 的硬性门槛，及时判定不依赖 poll 时序）：
+  // 另一端已认领 → 本周期跳过（其 wrapper 稍后经正常 poll 投递）；
+  // PDS 不可用 → fail-closed 跳过，宁可下个周期重试也不无仲裁地 commit
+  const claimParams = await deriveRotationClaimParams(session.getExporterSecret());
   try {
-    await deliverCommitViaGroupSpace({
-      preCommitStateSerialized: preCommitState,
-      groupId,
-      commitMessage,
-      createEnvelope: deps.createEnvelope,
-    });
+    const result = await acquireRotationClaim(
+      claimParams,
+      { groupId, epoch: session.getEpoch() },
+      deps.claimStore,
+    );
+    if (result !== 'acquired') {
+      console.log('[dme:rotation] rotation claimed by another device, skip this cycle', groupId);
+      return;
+    }
   } catch (err) {
-    // 投递失败：回滚内存态、不记 lastRotationAt——绝不允许本地已换代而
-    // commit 未投出（否则全员脱钩）。下个周期自然重试。
-    console.warn('[dme:rotation] commit delivery failed, rolling back', groupId, err);
-    await deps.reloadSession(groupId, preCommitState);
+    console.warn('[dme:rotation] rotation claim check failed, skip this cycle', groupId, err);
+    return;
+  }
+
+  // 快照提交前状态（wrapper 用旧 epoch 加密，投进群 queueId 空间）。
+  // 注意 claimParams 也派生自 pre-commit exporterSecret——commit 后
+  // exporterSecret 变化，释放宣言必须用这里捕获的旧参数。
+  const preCommitState = session.serialize();
+  try {
+    const { commitMessage } = await session.updateOwnLeaf();
+
+    try {
+      await deliverCommitViaGroupSpace({
+        preCommitStateSerialized: preCommitState,
+        groupId,
+        commitMessage,
+        createEnvelope: deps.createEnvelope,
+      });
+    } catch (err) {
+      // 投递失败：回滚内存态、释放宣言、不记 lastRotationAt——绝不允许
+      // 本地已换代而 commit 未投出（否则全员脱钩）。下个周期自然重试。
+      console.warn('[dme:rotation] commit delivery failed, rolling back', groupId, err);
+      await deps.reloadSession(groupId, preCommitState);
+      await releaseRotationClaim(claimParams, deps.claimStore);
+      return;
+    }
+  } catch (err) {
+    // updateOwnLeaf 本身失败（状态未推进）：释放宣言即可，下个周期重试
+    console.warn('[dme:rotation] updateOwnLeaf failed', groupId, err);
+    await releaseRotationClaim(claimParams, deps.claimStore);
     return;
   }
 
   await deps.putMlsSession(groupId, session.serialize());
   await deps.setLastRotationAt(groupId, Date.now());
+  // epoch 已换代，宣言槽位自然作废；删除仅为不让孤儿记录堆积
+  await releaseRotationClaim(claimParams, deps.claimStore);
   console.log('[dme:rotation] rotated session', groupId);
 
   await deps.onRotated(groupId);

@@ -44,6 +44,12 @@ export interface FullBackupData {
   groupInfos: GroupInfo[];
   /** 屏蔽的 DID 列表。 */
   blockList: string[];
+  /**
+   * 每会话最近一次密钥轮换时间戳（groupId -> epoch ms）。恢复时写回本地，
+   * 避免多端同时恢复后 lastRotationAt 全部归零、又同时到期撞槽。
+   * 旧备份无此字段 → 视为 0（从未轮换，恢复后立即到期，向后兼容）。
+   */
+  rotationAt?: Record<string, number>;
 }
 
 /** JSON 序列化时的中间结构（Uint8Array 转 base64url）。 */
@@ -56,6 +62,7 @@ interface SerializedBackup {
   keyPackagePool: KeyPackagePoolEntry[];
   groupInfos: GroupInfo[];
   blockList: string[];
+  rotationAt?: Record<string, number>;
 }
 
 /**
@@ -78,6 +85,7 @@ function serializeFullBackupData(data: FullBackupData): string {
     keyPackagePool: data.keyPackagePool,
     groupInfos: data.groupInfos,
     blockList: data.blockList,
+    rotationAt: data.rotationAt,
   };
   return JSON.stringify(serialized);
 }
@@ -103,6 +111,7 @@ function deserializeFullBackupData(json: string): FullBackupData {
     keyPackagePool: obj.keyPackagePool,
     groupInfos: obj.groupInfos,
     blockList: obj.blockList ?? [],
+    rotationAt: obj.rotationAt,
   };
 }
 

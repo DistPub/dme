@@ -35,3 +35,12 @@ export const KEYPACKAGE_POOL_SIZE = 5;
 /** QueueID length in bytes. */
 export const QUEUEID_LENGTH = 32;
 
+/** Label for rotation claim rkey/encKey derivation (domain separation). */
+export const ROTATION_CLAIM_LABEL = 'DME-rotation-claim';
+
+/** Rotation claim record rkey length in bytes. */
+export const ROTATION_CLAIM_RKEY_LENGTH = 16;
+
+/** Rotation claim content AES key length in bytes. */
+export const ROTATION_CLAIM_ENC_KEY_LENGTH = 32;
+

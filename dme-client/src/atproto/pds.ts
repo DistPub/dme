@@ -15,7 +15,8 @@ import type { Agent } from '@atproto/api';
 import type { DmeEnvelope } from '../protocol/index';
 import { DME_ENVELOPE_NSID } from '../protocol/index';
 import { DME_BACKUP_NSID } from '../protocol/types';
-import type { IdentityBackupRecord } from '../protocol/types';
+import type { IdentityBackupRecord, RotationClaimRecord } from '../protocol/types';
+import { DME_ROTATION_CLAIM_NSID } from '../protocol/types';
 
 interface CreateRecordResult {
   uri: string;
@@ -159,6 +160,62 @@ export class DmePds {
       return record.encryptedData;
     } catch {
       return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // 密钥轮换宣言（rotation-claim）：commit 前置检查的仲裁记录
+  // ---------------------------------------------------------------------
+
+  /**
+   * 写入/覆盖轮换宣言记录（upsert，rkey 由 pre-commit exporterSecret 派生）。
+   * 注意：atproto putRecord 是 last-write-wins、无原子 CAS，并发双写由
+   * rotation-claim 的回读比对 nonce 兑底。
+   */
+  async putRotationClaim(rkey: string, payload: string): Promise<void> {
+    await this.agent.com.atproto.repo.putRecord({
+      repo: this.agent.assertDid,
+      collection: DME_ROTATION_CLAIM_NSID,
+      rkey,
+      record: {
+        $type: DME_ROTATION_CLAIM_NSID,
+        payload,
+        createdAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  /**
+   * 读取轮换宣言密文。记录不存在返回 null；网络/鉴权等未知错误抛出
+   * （调用方 fail-closed：宣言不可用时不 commit）。仅「确认记录不存在」
+   * 的 XRPC 错误（400/404）折叠为 null。
+   */
+  async getRotationClaim(rkey: string): Promise<string | null> {
+    try {
+      const result = await this.agent.com.atproto.repo.getRecord({
+        repo: this.agent.assertDid,
+        collection: DME_ROTATION_CLAIM_NSID,
+        rkey,
+      });
+      const record = result.data.value as RotationClaimRecord;
+      return record.payload ?? null;
+    } catch (err) {
+      const status = (err as { status?: unknown }).status;
+      if (status === 400 || status === 404) return null;
+      throw err;
+    }
+  }
+
+  /** 删除轮换宣言记录（尽力而为，不存在时静默忽略）。 */
+  async deleteRotationClaim(rkey: string): Promise<void> {
+    try {
+      await this.agent.com.atproto.repo.deleteRecord({
+        repo: this.agent.assertDid,
+        collection: DME_ROTATION_CLAIM_NSID,
+        rkey,
+      });
+    } catch {
+      // 尽力而为：epoch 换代后槽位不再被读取，删除失败无碍
     }
   }
 }

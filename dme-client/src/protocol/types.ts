@@ -160,3 +160,18 @@ export interface IdentityBackupRecord {
   encryptedData: string;
   createdAt: string;
 }
+
+/** Lexicon NSID for the key-rotation claim record. */
+export const DME_ROTATION_CLAIM_NSID = 'dme.rotation.claim' as const;
+
+/**
+ * PDS record declaring "this device performs the upcoming rotation commit".
+ * rkey 由 pre-commit exporterSecret 派生（本 epoch 所有端一致）；payload 为
+ * HKDF(exporterSecret) 派生密钥加密的宣言内容（仓库公开可读，必须不透明）。
+ */
+export interface RotationClaimRecord {
+  $type: 'dme.rotation.claim';
+  /** base64url(iv(12) || AES-256-GCM ciphertext)。 */
+  payload: string;
+  createdAt: string;
+}

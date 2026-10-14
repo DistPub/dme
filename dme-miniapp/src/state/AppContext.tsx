@@ -145,6 +145,30 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+/**
+ * 收敛「群已加入但本地 pending 邀请残留」的陈旧邀请，返回收敛后的全量列表。
+ *
+ * 多端场景下，群邀请请求信封经 1v1 会话槽位投递，会被每个克隆端各自
+ * 接收并存为本地 pending 记录；而「接受」只发生在其中一端，邀请状态
+ * 不经备份同步（FullBackupData 不含邀请）。克隆端从备份恢复拿到群会话
+ * 后，本地残留的 pending 记录会让邀请卡片复活（实测），此时再点接受会
+ * 向群主重复发送 accept。凡 groupId 已存在会话的 pending 邀请一律就地
+ * 收敛为 accepted（含持久化），卡片不再渲染。
+ */
+async function reconcileStaleGroupInvites(store: DmeStorage): Promise<PendingInvite[]> {
+  const all = await store.getPendingInvites();
+  const reconciled: PendingInvite[] = [];
+  for (const invite of all) {
+    if (invite.status === 'pending' && (await store.getMlsSession(invite.groupId))) {
+      await store.updatePendingInviteStatus(invite.inviteId, 'accepted');
+      reconciled.push({ ...invite, status: 'accepted' });
+    } else {
+      reconciled.push(invite);
+    }
+  }
+  return reconciled;
+}
+
 // ---------------------------------------------------------------------------
 // Context 类型
 // ---------------------------------------------------------------------------
@@ -533,7 +557,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       // 恢复群邀请：pendingInvites（我发出的）/ receivedGroupInvites（我收到的）
       // receivedGroupInvites 必须跨重启存活 —— 1:1 会话里的 group_invite 卡片要一直显示"已响应"。
-      const allInvites = await correctStorage.getPendingInvites();
+      const allInvites = await reconcileStaleGroupInvites(correctStorage);
       const mySentInvites = allInvites.filter((i) => i.inviterDid === userDid);
       const myReceivedInvites = allInvites.filter((i) => i.inviteeDid === userDid);
 
@@ -979,8 +1003,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setGroups(Object.keys(data.mlsSessions));
       setChatListVersion((v) => v + 1);
 
-      // 1.2：恢复时也输过密码，同样记住（用户拍板）；
-      // 恢复后状态整体重建，旧的脱钩/兄弟轮换标记作废
+      // 备份不含邀请状态：恢复后立即收敛本地残留的 pending 邀请（群会话
+      // 已随备份恢复，残留记录会让邀请卡片复活），并同步界面状态
+      const reconciledInvites = await reconcileStaleGroupInvites(activeStorage);
+      setReceivedGroupInvites(
+        reconciledInvites.filter((i) => i.inviteeDid === (sessionRef.current ?? session)?.did),
+      );
+      // 恢复后状态整体重建，旧的脱钩/兄弟轮换标记作废；
+      // 1.2：恢复时也输过密码，同样记住（用户拍板）
       await saveBackupPassword(password);
       await activeStorage.setBackupRequired(false);
       setBackupRequiredState(false);
@@ -988,7 +1018,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       return true;
     },
-    [pds, storage, poller, putIdentityKeys],
+    [pds, storage, poller, putIdentityKeys, session],
   );
 
   const hasIdentityBackup = useCallback(async (): Promise<boolean> => {
@@ -1256,6 +1286,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         switch (msgType) {
           case 'group_invite_request': {
             const req = parsed as unknown as GroupInviteRequest;
+            // 陈旧重放防线：恢复旧备份会把会话代际游标拨回，7 天 TTL 内的
+            // 信封会被重新拉取。若该群会话已存在（已在群中），忽略重放的
+            // 邀请请求，避免邀请卡片复活、被再次接受时向群主重复 accept
+            if (await msgStorage.getMlsSession(req.groupId)) {
+              console.log('handleIncomingMessage: 忽略陈旧的 group_invite_request（已在群中）', req.groupId);
+              break;
+            }
             const invite: PendingInvite = {
               inviteId: req.inviteId,
               groupId: req.groupId,

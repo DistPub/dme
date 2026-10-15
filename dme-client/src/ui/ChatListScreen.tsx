@@ -9,7 +9,6 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Animated as RNAnimated,
   FlatList,
   Modal,
@@ -161,6 +160,7 @@ export function ChatListScreen(): React.JSX.Element {
     return () => { cancelled = true; };
   }, [app.storage, app.chatListVersion]);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+  const [logoutConfirmModalVisible, setLogoutConfirmModalVisible] = useState(false);
   const [backupPwd, setBackupPwd] = useState('');
   const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
   const [logoutStatus, setLogoutStatus] = useState<'idle' | 'backing_up' | 'error'>('idle');
@@ -490,9 +490,6 @@ const resolveProfiles = useCallback(async (
 
   const handleLogoutPress = useCallback((): void => {
     setMenuVisible(false);
-    // 当前所有备份点前都已过宣言并自动联动备份；backupRequired / sibling-rotated
-    // 意味着用户尚未遵从提示（没密码导致未自动备份，或需要恢复最新备份）。
-    // 这两种状态退出登录会丢失/倒灌关键会话状态，必须强制处理。
     const hasPendingRestore = sessionIssues.some((i) => i.issue === 'sibling-rotated');
     if (app.backupRequired || hasPendingRestore) {
       setBackupPwd('');
@@ -502,22 +499,13 @@ const resolveProfiles = useCallback(async (
       setLogoutModalVisible(true);
       return;
     }
-    // 无待处理状态：直接确认登出，不再强制备份
-    Alert.alert(
-      t('chatlist.logoutTitle'),
-      t('chatlist.logoutMessage'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('chatlist.logoutConfirm'),
-          style: 'destructive',
-          onPress: () => {
-            void app.logout();
-          },
-        },
-      ],
-    );
-  }, [app, sessionIssues, t]);
+    setLogoutConfirmModalVisible(true);
+  }, [app, sessionIssues]);
+
+  const handleLogoutConfirmDirect = useCallback((): void => {
+    setLogoutConfirmModalVisible(false);
+    void app.logout();
+  }, [app]);
 
   const handleLogoutConfirm = useCallback(async (): Promise<void> => {
     if (!backupPwd) {
@@ -1013,6 +1001,39 @@ const resolveProfiles = useCallback(async (
                 variant="primary"
                 style={styles.logoutBtn}
                 disabled={logoutStatus === 'backing_up'}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={logoutConfirmModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLogoutConfirmModalVisible(false)}
+      >
+        <View style={styles.logoutOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setLogoutConfirmModalVisible(false)}
+          />
+          <View style={styles.logoutCard}>
+            <Text style={styles.logoutTitle}>{t('chatlist.logoutTitle')}</Text>
+            <Text style={styles.logoutMessage}>{t('chatlist.logoutMessage')}</Text>
+            <View style={styles.logoutButtons}>
+              <Button
+                label={t('common.cancel')}
+                onPress={() => setLogoutConfirmModalVisible(false)}
+                variant="secondary"
+                style={styles.logoutBtn}
+              />
+              <Button
+                label={t('chatlist.logoutConfirm')}
+                onPress={() => { void handleLogoutConfirmDirect(); }}
+                variant="primary"
+                style={styles.logoutBtn}
               />
             </View>
           </View>

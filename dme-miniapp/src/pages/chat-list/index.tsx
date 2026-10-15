@@ -315,6 +315,20 @@ export default function ChatListPage(): React.JSX.Element {
         };
       }
       const cached = profileCacheRef.current[gid];
+      const isKnownGroupInvite = receivedGroupInvites.some((i) => i.groupId === gid);
+      if (isKnownGroupInvite) {
+        // 有 MLS session 且匹配到群邀请记录，但没有 GroupInfo：
+        // 群 welcome 在本机处理失败/需从备份恢复
+        return {
+          conversationId: gid,
+          displayName: t('chatlist.restoreBackupGroupName'),
+          handle: '',
+          avatarUrl: null,
+          lastMessage,
+          isGroup: true,
+          unreadCount,
+        };
+      }
       return {
         conversationId: gid,
         displayName: cached?.displayName || cached?.handle || handleCacheRef.current[gid] || gid,
@@ -454,6 +468,15 @@ export default function ChatListPage(): React.JSX.Element {
   // ---- 导航 --------------------------------------------------------------
   const navigateToChat = useCallback(
     async (groupId: string, isGroup: boolean): Promise<void> => {
+      // 幽灵群拦截：群会话但无 GroupInfo → welcome 处理失败，需恢复备份
+      if (isGroup && !groupInfos.some((g) => g.groupId === groupId)) {
+        Taro.showModal({
+          title: t('chatlist.restoreBackupGroupName'),
+          content: t('chatview.restoreBackupToContinue'),
+          showCancel: false,
+        });
+        return;
+      }
       // isGroup 必须显式传给 chat-view：群聊模式（发送者头像、群信息、
       // ⋮ → GroupSettings）与 1:1 模式共用同一个页面。
       const url = `/pages/pkg-chat/chat-view/index?conversationId=${encodeURIComponent(groupId)}&isGroup=${isGroup ? '1' : '0'}`;
@@ -480,7 +503,7 @@ export default function ChatListPage(): React.JSX.Element {
       }
       await Taro.navigateTo({ url });
     },
-    [forwardText, forwardPath, forwardName, forwardMime, forwardSize, sendMessage, sendFileMessage, t],
+    [forwardText, forwardPath, forwardName, forwardMime, forwardSize, sendMessage, sendFileMessage, t, groupInfos],
   );
 
   const openCreateGroup = useCallback(async (): Promise<void> => {

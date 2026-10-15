@@ -143,6 +143,7 @@ export const zh: Record<string, string> = {
   'chatlist.create': '创建',
   'chatlist.pendingWelcomes': '待处理握手 ({count})',
   'chatlist.waitingWelcome': '等待握手… {time}',
+  'chatlist.restoreBackupGroupName': '待恢复备份的群聊',
   'chatlist.invitePreview': '@{handle} 邀请你加入群聊：{group}',
   'chatlist.filePreview': '📎 {name}',
   'chatlist.postPreview': '🔗 帖子',
@@ -175,6 +176,7 @@ export const zh: Record<string, string> = {
   'chatview.dissolved': '群聊已解散，无法发送消息',
   'chatview.removed': '你已被移出群聊，无法发送消息',
   'chatview.left': '你已离开群聊，无法发送消息',
+  'chatview.restoreBackupToContinue': '你已在其他设备上加入此群，请从最新备份恢复后继续收发',
   // 按住说话（语音消息，仅 web）
   'chatview.holdToTalk': '按住 说话',
   'chatview.recording': '正在录音，松开发送',
@@ -439,6 +441,7 @@ export const en: Record<string, string> = {
   'chatlist.create': 'Create',
   'chatlist.pendingWelcomes': 'Pending Welcomes ({count})',
   'chatlist.waitingWelcome': 'Waiting for welcome… {time}',
+  'chatlist.restoreBackupGroupName': 'Group awaiting backup restore',
   'chatlist.invitePreview': '@{handle} invited you to join group: {group}',
   'chatlist.filePreview': '📎 {name}',
   'chatlist.postPreview': '🔗 Post',
@@ -471,6 +474,7 @@ export const en: Record<string, string> = {
   'chatview.dissolved': 'Group dissolved — cannot send messages',
   'chatview.removed': 'You were removed — cannot send messages',
   'chatview.left': 'You left — cannot send messages',
+  'chatview.restoreBackupToContinue': 'You joined this group on another device. Restore from the latest backup to continue.',
   // Voice messages (web only)
   'chatview.holdToTalk': 'Hold to talk',
   'chatview.recording': 'Recording — release to send',

@@ -513,6 +513,19 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 | `dissolved: true` | 群主解散 | 保留消息，禁止发送 |
 | `removed: true` | 被群主移除 | 保留消息，禁止发送 |
 | `left: true` | 主动离开 | 保留消息，禁止发送 |
+| 幽灵群（无 GroupInfo） | welcome 处理失败 / 需恢复备份 | 会话列表显示「待恢复备份的群聊」；点击弹提示不进入；banner 提示恢复备份 |
+
+## 同账号多端群邀请同步（2026-10-15 落地，双端）
+
+同账号多端场景下，设备 A 接受群邀请后消耗 KP pair 并触发备份；设备 B 未恢复 A 的备份，本地无可用 pair，收到 welcome 时 `joinViaWelcome` 失败。此前 `ownReplayWithoutPair` 保持 pending → 邀请卡片永远不消失；welcome 失理留下有 session 无 GroupInfo 的「幽灵群」（显示 groupId）。
+
+**修复（双端同步）：**
+
+- `group_invite_response` 处理器 `ownReplayWithoutPair` 分支：改为置 `accepted` + `setSessionIssue(..., 'sibling-rotated')` + `setChatListVersion(+1)`（触发 banner 即时刷新）+ 同步更新 `receivedGroupInvites` state。
+- `group_welcome` 处理器 `!joined` 重置逻辑：跳过 `accepted` 状态，避免把已提示恢复备份的状态又改回 pending。
+- `ChatListScreen`：无 GroupInfo 但存在对应 `receivedGroupInvites` 记录的 groupId 显示为「待恢复备份的群聊」（`chatlist.restoreBackupGroupName`）而非 groupId。
+- `ChatListScreen.navigateToChat`：幽灵群（isGroup 且 groupInfos 无对应记录）点击拦截，弹 Alert / `Taro.showModal` 提示恢复备份，不跳转。`ChatViewScreen` 保留 `needsBackupRestore` 只读兜底（deep link 等其他入口）。
+- i18n：新增 `chatlist.restoreBackupGroupName`、`chatview.restoreBackupToContinue` 中英文。
 
 ## 多语言 (i18n)
 

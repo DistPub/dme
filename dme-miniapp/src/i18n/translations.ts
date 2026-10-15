@@ -147,6 +147,7 @@ export const zh: Record<string, string> = {
   'chatlist.create': '创建',
   'chatlist.pendingWelcomes': '待处理握手 ({count})',
   'chatlist.waitingWelcome': '等待握手… {time}',
+  'chatlist.restoreBackupGroupName': '待恢复备份的群聊',
   'chatlist.invitePreview': '@{handle} 邀请你加入群聊：{group}',
   'chatlist.filePreview': '📎 {name}',
   'chatlist.timeJustNow': '刚刚',
@@ -178,6 +179,7 @@ export const zh: Record<string, string> = {
   'chatview.dissolved': '群聊已解散，无法发送消息',
   'chatview.removed': '你已被移出群聊，无法发送消息',
   'chatview.left': '你已离开群聊，无法发送消息',
+  'chatview.restoreBackupToContinue': '你已在其他设备上加入此群，请从最新备份恢复后继续收发',
   // 小程序增量：web 端这两处是 ⋮ 菜单里的操作，无对应 key；命名沿用 chatview 前缀
   'chatview.deleteConversation': '删除会话',
   'chatview.deleteConversationConfirm': '将删除本机会话与消息记录，且不可恢复。确定删除？',
@@ -465,6 +467,7 @@ export const en: Record<string, string> = {
   'chatlist.create': 'Create',
   'chatlist.pendingWelcomes': 'Pending Welcomes ({count})',
   'chatlist.waitingWelcome': 'Waiting for welcome… {time}',
+  'chatlist.restoreBackupGroupName': 'Group awaiting backup restore',
   'chatlist.invitePreview': '@{handle} invited you to join group: {group}',
   'chatlist.filePreview': '📎 {name}',
   'chatlist.timeJustNow': 'Just now',
@@ -496,6 +499,7 @@ export const en: Record<string, string> = {
   'chatview.dissolved': 'Group dissolved — cannot send messages',
   'chatview.removed': 'You were removed — cannot send messages',
   'chatview.left': 'You left — cannot send messages',
+  'chatview.restoreBackupToContinue': 'You joined this group on another device. Restore from the latest backup to continue.',
   // miniapp-only additions (web has these behind a ⋮ menu, no dedicated keys)
   'chatview.deleteConversation': 'Delete conversation',
   'chatview.deleteConversationConfirm': 'This deletes the local conversation and messages permanently. Continue?',

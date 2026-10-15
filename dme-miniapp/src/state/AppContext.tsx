@@ -1494,9 +1494,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               } else if (ownReplayWithoutPair) {
                 // 本机是受邀方但无 pair（恢复备份后重放「过去某个自己」的
                 // 确认，或多端另一台设备接受的）：welcome 对本机数学上解不开
-                // （KP 私钥不在本机），置 accepted 只会掩盖重新接受的入口
-                // ——保持 pending，让卡片继续提供「接受」按钮
-                updated = existing;
+                // （KP 私钥不在本机）。把状态收敛为 accepted，避免会话列表/私聊
+                // 卡片永远 pending；并标记 issue，引导从其他设备最新备份恢复。
+                updated = { ...existing, status: 'accepted' };
+                await msgStorage.setSessionIssue(existing.groupId, 'sibling-rotated');
+                setChatListVersion((v) => v + 1);
               } else {
                 // 接受响应如实记账：① 群主收到受邀人的接受（建群前置状态，
                 // keyPackageSerialized 是 createGroupFromPendingInvites 的必要
@@ -1505,6 +1507,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               }
               await msgStorage.putPendingInvite(updated);
               setPendingInvites((prev) =>
+                prev.map((i) => (i.inviteId === resp.inviteId ? updated : i)),
+              );
+              setReceivedGroupInvites((prev) =>
                 prev.map((i) => (i.inviteId === resp.inviteId ? updated : i)),
               );
             }
@@ -1632,8 +1637,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             // 群，界面无任何解释（实测踩坑：恢复后能收到邀请/自己确认/Bob
             // 确认，唯独进不了群）
             if (!joined) {
+              // 本机无法加入：保留已由 sibling 响应收敛为 accepted 的状态，避免
+              // 把「需恢复备份」的提示又改回 pending。其他非 pending 状态重置回
+              // pending，让卡片重新提供接受入口。
               for (const inv of await msgStorage.getPendingInvites()) {
-                if (inv.groupId === welcome.groupId && inv.inviteeDid === userDid && inv.status !== 'pending') {
+                if (
+                  inv.groupId === welcome.groupId &&
+                  inv.inviteeDid === userDid &&
+                  inv.status !== 'pending' &&
+                  inv.status !== 'accepted'
+                ) {
                   await msgStorage.putPendingInvite({
                     ...inv,
                     status: 'pending',
@@ -1645,7 +1658,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               }
               setReceivedGroupInvites((prev) =>
                 prev.map((i) =>
-                  i.groupId === welcome.groupId && i.inviteeDid === userDid && i.status !== 'pending'
+                  i.groupId === welcome.groupId && i.inviteeDid === userDid && i.status !== 'pending' && i.status !== 'accepted'
                     ? { ...i, status: 'pending' as const, keyPackageSerialized: undefined, ownKeyPackagePairSerialized: undefined, ownKeyPackagePoolId: undefined }
                     : i,
                 ),

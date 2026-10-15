@@ -9,6 +9,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Animated as RNAnimated,
   FlatList,
   Modal,
@@ -336,6 +337,20 @@ const resolveProfiles = useCallback(async (
         };
       }
       const cachedProfile = profileCacheRef.current[groupId];
+      const isKnownGroupInvite = app.receivedGroupInvites.some((i) => i.groupId === groupId);
+      if (isKnownGroupInvite) {
+        // 有 MLS session 且匹配到群邀请记录，但没有 GroupInfo：
+        // 群 welcome 在本机处理失败/需从备份恢复
+        return {
+          groupId,
+          displayName: t('chatlist.restoreBackupGroupName'),
+          lastMessage,
+          isGroup: true,
+          unreadCount,
+          avatarUrl: null,
+          handle: '',
+        };
+      }
       return {
         groupId,
         displayName:
@@ -411,6 +426,14 @@ const resolveProfiles = useCallback(async (
 
   const navigateToChat = useCallback(
     async (groupId: string, isGroup: boolean): Promise<void> => {
+      // 幽灵群拦截：群会话但无 GroupInfo → welcome 处理失败，需恢复备份
+      if (isGroup && !app.groupInfos.some((g) => g.groupId === groupId)) {
+        Alert.alert(
+          t('chatlist.restoreBackupGroupName'),
+          t('chatview.restoreBackupToContinue'),
+        );
+        return;
+      }
       if (forwardText) {
         try {
           await app.sendMessage(groupId, forwardText);

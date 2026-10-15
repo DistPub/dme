@@ -1452,11 +1452,42 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
           case 'group_invite_response': {
             const resp = parsed as unknown as GroupInviteResponse;
+            // 重放去重（与 dme-client 同步）：同一条响应重复投递只处理一次
+            // （存储桶与 putMessage 的默认归属一致：发送者 1v1 会话，保持
+            // 系统消息原显示位置）
+            const respBucket = msg.senderDid === userDid ? userDid : msg.senderDid;
+            if (await msgStorage.hasMessage(respBucket, msg.envelope.queueId)) {
+              console.log('handleIncomingMessage: duplicate group_invite_response, skipping', msg.envelope.queueId);
+              break;
+            }
             const existing = await msgStorage.getPendingInvite(resp.inviteId);
             if (existing) {
-              const updated: PendingInvite = resp.accepted
-                ? { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized }
-                : { ...existing, status: 'rejected' };
+              // 「恢复备份后重放自己过去的接受确认」的精确判定（与 dme-client
+              // 17f209c 同步）：响应发送者是本机用户 + 邀请记录里受邀人就是
+              // 本机用户 + 本机无 KP pair。旧条件只看本机有无 pair 会误伤
+              // 群主——群主发出去的邀请记录本来就没有 pair（pair 只在受邀方
+              // 记录里），受邀人真实接受的响应会被误判为重放：邀请永远
+              // pending、会话列表「0 接受」且 keyPackageSerialized 落不了库、
+              // 无法建群（2026-10-15 实测踩坑）。
+              const ownReplayWithoutPair =
+                msg.senderDid === userDid &&
+                existing.inviteeDid === userDid &&
+                !(existing.ownKeyPackagePoolId || existing.ownKeyPackagePairSerialized);
+              let updated: PendingInvite;
+              if (!resp.accepted) {
+                updated = { ...existing, status: 'rejected' };
+              } else if (ownReplayWithoutPair) {
+                // 本机是受邀方但无 pair（恢复备份后重放「过去某个自己」的
+                // 确认，或多端另一台设备接受的）：welcome 对本机数学上解不开
+                // （KP 私钥不在本机），置 accepted 只会掩盖重新接受的入口
+                // ——保持 pending，让卡片继续提供「接受」按钮
+                updated = existing;
+              } else {
+                // 接受响应如实记账：① 群主收到受邀人的接受（建群前置状态，
+                // keyPackageSerialized 是 createGroupFromPendingInvites 的必要
+                // 输入）；② 受邀方自己的确认镜像（有 pair）
+                updated = { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized };
+              }
               await msgStorage.putPendingInvite(updated);
               setPendingInvites((prev) =>
                 prev.map((i) => (i.inviteId === resp.inviteId ? updated : i)),
@@ -1480,6 +1511,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           case 'group_welcome': {
             const welcome = parsed as unknown as GroupWelcome;
 
+            // 陈旧重放防线（与 dme-client 同步）：同一条 welcome 已处理过
+            // （消息已入库）则整体跳过。joinViaWelcome 消耗 KP pair 具有一次性，
+            // 重复执行只会抛错，且恢复旧备份后游标拨回会导致 welcome 被重新拉取
+            if (await msgStorage.hasMessage(welcome.groupId, msg.envelope.queueId)) {
+              console.log('handleIncomingMessage: duplicate group_welcome, skipping', msg.envelope.queueId);
+              break;
+            }
+
+            // join 是否真正成功——只有成功才允许插「已入群」消息与群元数据。
+            // 2026-10-14 实测踩坑：joinViaWelcome 抛错（KP 已被消耗 / welcome
+            // 与 pair 不匹配）后 catch 只打日志，代码继续往下插「你已加入
+            // 群聊」并 putGroupInfo 覆盖群元数据——本机有残留旧会话时旧防线
+            // 只挡僵尸条目，挡不住假入群消息误导用户（点接受后无法聊天的直接原因）
+            let joined = false;
+
             if (identityKeys && poller) {
               try {
                 const allInvites = await msgStorage.getPendingInvites();
@@ -1487,12 +1533,29 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   (i) =>
                     i.groupId === welcome.groupId &&
                     i.inviteeDid === userDid &&
-                    i.ownKeyPackagePairSerialized,
+                    (i.ownKeyPackagePoolId || i.ownKeyPackagePairSerialized),
                 );
                 const ownInvite = matching.length > 0 ? matching[matching.length - 1] : null;
 
-                if (ownInvite?.ownKeyPackagePairSerialized) {
-                  const pair = deserializeOwnKeyPackagePair(ownInvite.ownKeyPackagePairSerialized);
+                if (ownInvite && (ownInvite.ownKeyPackagePoolId || ownInvite.ownKeyPackagePairSerialized)) {
+                  // 取 KP pair（池化闭环）：优先池条目（池随备份走，恢复后可直接
+                  // join）；回退旧格式 pair 本体序列化（池化前的历史邀请记录）
+                  let pair: { publicPackage: KeyPackage; privatePackage: PrivateKeyPackage } | null = null;
+                  if (ownInvite.ownKeyPackagePoolId) {
+                    const entry = (await msgStorage.getKeyPackagePool()).find(
+                      (e) => e.id === ownInvite.ownKeyPackagePoolId && !e.consumed,
+                    );
+                    if (entry) {
+                      pair = {
+                        publicPackage: deserializeWithUint8Array<KeyPackage>(entry.publicPackageSerialized),
+                        privatePackage: deserializeWithUint8Array<PrivateKeyPackage>(entry.privatePackageSerialized),
+                      };
+                    }
+                  } else if (ownInvite.ownKeyPackagePairSerialized) {
+                    pair = deserializeOwnKeyPackagePair(ownInvite.ownKeyPackagePairSerialized);
+                  }
+                  if (!pair) throw new Error('key package pair unavailable (consumed or missing from pool)');
+
                   const { decodeMlsMessage } = await import('ts-mls');
                   const impl = await getNobleMlsImpl();
                   const decoded = decodeMlsMessage(base64urlToBytes(welcome.welcomePayload), 0);
@@ -1504,6 +1567,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   const newSession = await MlsSession.joinViaWelcome(m.welcome, pair, impl);
                   await msgStorage.putMlsSession(welcome.groupId, newSession.serialize());
                   poller.addSession(welcome.groupId, newSession);
+                  joined = true;
+                  // KP 一次性：join 成功才标记池条目 consumed（welcome 未到达时
+                  // pair 保持未消费，随备份供恢复端 join——池化闭环的关键）
+                  if (ownInvite.ownKeyPackagePoolId) {
+                    await msgStorage.markKeyPackageConsumed(ownInvite.ownKeyPackagePoolId);
+                  }
+                  // 备份点（与 dme-client 同步）：新群会话建立，必须立即联动备份
+                  // （其他端恢复后才有此群）
+                  await triggerBackupAfterAdvance(`joinGroupViaWelcome ${welcome.groupId}`);
                   // 刚经 Welcome 真正入群：立刻收敛该群残留的 pending 邀请。
                   // 重放的邀请信封可能在入群之后才到达（信封按代际游标重放），
                   // 若不在这里收敛，邀请卡片会活到下次重启才被 reconcile 清掉
@@ -1521,20 +1593,54 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   );
                   // 保留 invite（status 仍为 accepted）：group_invite 消息会留在 1:1 会话里，
                   // receivedGroupInvites 必须跨重启存活，卡片才能一直显示"已响应"。
+                } else {
+                  // 本机没有该群的 KP pair（邀请记录丢失 / 恢复场景）：
+                  // 无法经 KeyPackage 加入，绝不能插「你已加入群聊」
+                  console.log(
+                    'handleIncomingMessage: ignoring group_welcome without local key package pair',
+                    welcome.groupId,
+                  );
                 }
               } catch (err) {
+                // join 失败：会话未建立，绝不插假入群消息、绝不覆盖 GroupInfo
                 console.error('handleIncomingMessage: 通过 welcome 入群失败', err);
               }
             }
 
-            // 重放防线（与 dme-client 同步）：本机既没有该群会话、也无法经
-            // KeyPackage 加入（KP pair 只在点「接受」时随邀请记录生成，而邀请
-            // 记录不进备份）——这是一条恢复/新端场景下重放的陈旧 welcome。
-            // 绝不能插入「你已加入群聊」消息与群元数据：否则产生打不开任何
-            // 消息的僵尸群条目，且预览谎报已加入（实测：全新恢复后出现假条目）。
+            // 统一出口（与 dme-client 同步）：join 未成功一律忽略插消息。
+            // KP pair 只在点「接受」时随邀请记录生成，而邀请记录不进备份——
+            // 恢复/新端场景下 welcome 虽然重放到达，但其加密对应的那把
+            // KeyPackage 私钥已不存在，数学上永远解不开，插消息与群元数据
+            // 只会产生僵尸群假条目。重新入群的唯一路径是重新接受（生成新
+            // pair / 池条目），因此把该群自己的邀请记录重置回 pending，让
+            // 卡片重新出现「接受」按钮——否则用户看到「已接受」却永远进不了
+            // 群，界面无任何解释（实测踩坑：恢复后能收到邀请/自己确认/Bob
+            // 确认，唯独进不了群）
+            if (!joined) {
+              for (const inv of await msgStorage.getPendingInvites()) {
+                if (inv.groupId === welcome.groupId && inv.inviteeDid === userDid && inv.status !== 'pending') {
+                  await msgStorage.putPendingInvite({
+                    ...inv,
+                    status: 'pending',
+                    keyPackageSerialized: undefined,
+                    ownKeyPackagePairSerialized: undefined,
+                    ownKeyPackagePoolId: undefined,
+                  });
+                }
+              }
+              setReceivedGroupInvites((prev) =>
+                prev.map((i) =>
+                  i.groupId === welcome.groupId && i.inviteeDid === userDid && i.status !== 'pending'
+                    ? { ...i, status: 'pending' as const, keyPackageSerialized: undefined, ownKeyPackagePairSerialized: undefined, ownKeyPackagePoolId: undefined }
+                    : i,
+                ),
+              );
+              setChatListVersion((v) => v + 1);
+              break;
+            }
             if (!(await msgStorage.getMlsSession(welcome.groupId))) {
               console.log(
-                'handleIncomingMessage: 忽略重放的陈旧 group_welcome（本机无该群会话）',
+                'handleIncomingMessage: ignoring stale group_welcome replay (no local session)',
                 welcome.groupId,
               );
               break;
@@ -1623,12 +1729,25 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
           case 'group_dissolved': {
             const dissolved = parsed as unknown as GroupDissolved;
+
+            // 陈旧重放防线（与 dme-client 同步）：同一条 dissolved 已处理过
+            // （消息已入库）则跳过，避免恢复备份后重复插「群已解散」系统消息
+            if (await msgStorage.hasMessage(dissolved.groupId, msg.envelope.queueId)) {
+              console.log('handleIncomingMessage: duplicate group_dissolved, skipping', msg.envelope.queueId);
+              break;
+            }
+            const dissolvedExisting = await msgStorage.getGroupInfo(dissolved.groupId);
+            // 幂等：已标记解散的不重复处理
+            if (dissolvedExisting?.dissolved) {
+              console.log('handleIncomingMessage: already marked dissolved, skipping', dissolved.groupId);
+              break;
+            }
+
             poller?.removeSession(dissolved.groupId);
             await msgStorage.deleteMlsSession(dissolved.groupId);
 
-            const existing = await msgStorage.getGroupInfo(dissolved.groupId);
-            if (existing) {
-              const dissolvedInfo: GroupInfo = { ...existing, dissolved: true };
+            if (dissolvedExisting) {
+              const dissolvedInfo: GroupInfo = { ...dissolvedExisting, dissolved: true };
               await msgStorage.putGroupInfo(dissolvedInfo);
               setGroupInfos((prev) =>
                 prev.map((g) => (g.groupId === dissolved.groupId ? dissolvedInfo : g)),
@@ -1649,12 +1768,49 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
           case 'group_member_removed': {
             const removed = parsed as unknown as GroupMemberRemoved;
+
+            // 陈旧重放防线（与 dme-client 同步，2026-10-14 实测踩坑）：恢复旧
+            // 备份会把 1v1 代际游标拨回，7 天 TTL 内真实发生过的 removed 信封
+            // 会被重新投递。无差别处理会重复插「你已被移出群聊」系统消息，
+            // 更严重的是会删掉本机刚经 group_welcome 重新入群新建的会话。
+            //
+            // 防线 1：定向校验——新版消息带 memberDid，只处理发给自己的；
+            // 旧版消息无该字段（协议只单发给被踢者），宽松放行
+            if (removed.memberDid && removed.memberDid !== userDid) {
+              console.log('handleIncomingMessage: ignoring removed notice for other member', removed.memberDid);
+              break;
+            }
+            // 防线 2：queueId 去重——同一条 removed 重复到达只处理一次
+            if (await msgStorage.hasMessage(removed.groupId, msg.envelope.queueId)) {
+              console.log('handleIncomingMessage: duplicate group_member_removed, skipping', msg.envelope.queueId);
+              break;
+            }
+            const removedExisting = await msgStorage.getGroupInfo(removed.groupId);
+            // 防线 3：新鲜度——本机群元数据比这条 removed 信封更新，说明
+            // 用户在「被踢」之后重新入群过（新 welcome 的 createdAt 必然晚于
+            // 旧 removed），这是重放的陈旧通知，绝不能删新会话
+            if (
+              removedExisting &&
+              !removedExisting.removed &&
+              new Date(removedExisting.createdAt).getTime() > new Date(msg.envelope.createdAt).getTime()
+            ) {
+              console.log(
+                'handleIncomingMessage: ignoring stale group_member_removed (re-joined after removal)',
+                removed.groupId,
+              );
+              break;
+            }
+            // 防线 4：幂等——已处理过的 removed（备份带回标记）不重复插消息
+            if (removedExisting?.removed) {
+              console.log('handleIncomingMessage: already marked removed, skipping', removed.groupId);
+              break;
+            }
+
             poller?.removeSession(removed.groupId);
             await msgStorage.deleteMlsSession(removed.groupId);
 
-            const existing = await msgStorage.getGroupInfo(removed.groupId);
-            if (existing) {
-              const removedInfo: GroupInfo = { ...existing, removed: true };
+            if (removedExisting) {
+              const removedInfo: GroupInfo = { ...removedExisting, removed: true };
               await msgStorage.putGroupInfo(removedInfo);
               setGroupInfos((prev) =>
                 prev.map((g) => (g.groupId === removed.groupId ? removedInfo : g)),
@@ -2515,22 +2671,54 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (!invite) throw new Error('respondToGroupInvite: 邀请不存在');
 
       if (accepted) {
-        // 宣言门禁（约定7）：点接受（产生备份点状态）前必须先宣言——同账号
-        // 多端同时点接受会向群主发两个不同 KP 的 accept_response，后者覆盖
-        // 前者、先点的一端永远等不到 welcome；taken/stale 已置标记提示
-        // 恢复备份，fail-closed 保持 pending 稍后重试
-        const claimSeq = await acquireClaimForCommit(invite.groupId, 0);
-        if (claimSeq === null) return;
+        // 陈旧邀请防线（与 dme-client 同步，2026-10-14 实测踩坑）：恢复旧
+        // 备份/重放复活的老邀请被再次点「接受」时，若本机已有该群的 MLS
+        // 会话，说明用户本来就在群中。此时再发 accept_response 是无效重复
+        // ——群主端该 inviteId 早已 cancelled/不存在，静默丢弃后用户端卡片
+        // 变「已接受」却永远等不到 welcome，静默卡死无法聊天。直接本地收敛。
+        if (await storage.getMlsSession(invite.groupId)) {
+          console.log(
+            'respondToGroupInvite: already in group, converging stale invite without re-accepting',
+            invite.groupId,
+          );
+          const convergedInvite: PendingInvite = { ...invite, status: 'accepted' };
+          await storage.putPendingInvite(convergedInvite);
+          setReceivedGroupInvites((prev) =>
+            prev.map((i) => (i.inviteId === inviteId ? convergedInvite : i)),
+          );
+          setChatListVersion((v) => v + 1);
+          return;
+        }
 
         const inviterEncKey = await getRemoteEncryptionKey(invite.inviterDid);
         if (!inviterEncKey) throw new Error('respondToGroupInvite: 邀请人没有加密公钥');
 
-        const { encryptedKeyPackage, keyPackagePairSerialized } =
-          await generateEncryptedKeyPackageForInvite({
-            ownDid: session.did,
-            ownIdentityKeys: identityKeys,
-            inviterEncryptionPublicKey: inviterEncKey,
-          });
+        // KP 池化（备份点，与 dme-client 同步）：welcome 的解密依赖接受方
+        // KP pair 的私钥，pair 必须随备份走，否则恢复后 welcome（TTL 内重放）
+        // 数学上永远解不开（实测踩坑：恢复后收到邀请/自己确认/Bob 确认，
+        // 唯独进不了群）。从 keyPackagePool 取未消费 pair——池已进 FullBackup
+        // Data：welcome 未到达时 pair 完好随备份，恢复后直接 join；join 成功
+        // 才标 consumed（KP 一次性）。
+        let poolEntry = (await storage.getKeyPackagePool()).find((e) => !e.consumed) ?? null;
+        if (!poolEntry) {
+          await refreshKeyPackagePool();
+          poolEntry = (await storage.getKeyPackagePool()).find((e) => !e.consumed) ?? null;
+        }
+        if (!poolEntry) throw new Error('respondToGroupInvite: key package pool exhausted');
+
+        // 宣言门禁（约定7）：点接受（占用 KP、产生备份点状态）前必须先宣言。
+        // 同账号多端同时点接受会向群主发两个不同 KP 的 accept_response，
+        // 后者覆盖前者、先点的一端永远等不到 welcome；taken/stale 已置标记
+        // 提示恢复备份，fail-closed 保持 pending 稍后重试
+        const claimSeq = await acquireClaimForCommit(invite.groupId, 0);
+        if (claimSeq === null) return;
+
+        const { encryptKeyPackagePairForInvite } = await import('../handshake/group-invite');
+        const poolPublicPackage = deserializeWithUint8Array<KeyPackage>(poolEntry.publicPackageSerialized);
+        const encryptedKeyPackage = await encryptKeyPackagePairForInvite(
+          poolPublicPackage,
+          inviterEncKey,
+        );
 
         const response = createAcceptResponse({
           inviteId,
@@ -2541,8 +2729,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         const mlsSession = poller.getSession(invite.inviterDid);
         if (!mlsSession) throw new Error('respondToGroupInvite: 缺少与邀请人的 MLS 会话');
 
+        let encResult: { queueId: string; ciphertext: Uint8Array };
         try {
-          const encResult = await mlsSession.encrypt(
+          encResult = await mlsSession.encrypt(
             new TextEncoder().encode(JSON.stringify(response)),
           );
           await storage.putMlsSession(invite.inviterDid, mlsSession.serialize());
@@ -2563,7 +2752,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         const updatedInvite: PendingInvite = {
           ...invite,
           status: 'accepted',
-          ownKeyPackagePairSerialized: keyPackagePairSerialized,
+          ownKeyPackagePoolId: poolEntry.id,
         };
         await storage.putPendingInvite(updatedInvite);
         setReceivedGroupInvites((prev) =>
@@ -2595,7 +2784,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       setChatListVersion((v) => v + 1);
     },
-    [session, storage, identityKeys, pds, poller, receivedGroupInvites, acquireClaimForCommit, releaseClaim],
+    [session, storage, identityKeys, pds, poller, receivedGroupInvites, refreshKeyPackagePool, acquireClaimForCommit, releaseClaim],
   );
 
   const createGroupFromPendingInvites = useCallback(
@@ -2984,6 +3173,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           type: 'group_member_removed',
           groupId,
           groupName: groupInfo.groupName,
+          // 定向标记（与 dme-client 同步）：接收端防线 1 依赖此字段做
+          // 定向校验，防止重放的陈旧 removed 误删重新入群后的新会话
+          memberDid,
         };
         await sendEncryptedTo(memberDid, removedMsg);
 

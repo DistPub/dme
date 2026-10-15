@@ -1481,6 +1481,29 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       switch (msgType) {
         case 'group_invite_request': {
           const req = parsed as unknown as GroupInviteRequest;
+          // 2026-10-15 真根因：poller 244 行的 own-leaf skip 是 `gen < expected`，
+          // 仅能挡"自己叶子下 gen 已过期"（多端轮换 commit 重投递场景），**挡不住
+          // `gen > expected`**——典型 = 备份恢复后本机 mls session 的 expectedGen
+          // 落后于 PDS 上同叶子更高 gen 的 envelope（这是正常的「自己刚发出去
+          // 还没消费」语义）。多端 / 跨设备登录 / 恢复备份 场景下 fatesky 通过
+          // 1v1 fatesky-东兴 session 发出的 group_invite_request 落进 fatesky
+          // 自己的 leaf，PDS 保留 7 天；备份恢复到 expectedGen 更老的 session 时
+          // `gen (N+1) < expected (N)` = false，**不 skip，照常解密 + onMessage**
+          // → handleIncomingMessage → 1491 旧实现 `inviterDid: msg.senderDid ===
+          // userDid` + `inviteeDid: userDid` 写入「自邀请自」PendingInvite。
+          // 群聊邀请走 1v1 1 个发送方 + 1 个接收方，1v1 ownLeaf 下的 envelope
+          // 语义上永远是**自己发出去的 application message**（commit 走群 session，
+          // 不走 1v1）——「收到的群邀请」是别人发给自己的，**不可能出自自己叶子**。
+          // 直接拒收：自己的 group_invite_request 一律不当作入站邀请。
+          // 注：group_commit 走群 session 自己的 leaf（轮换 commit wrapper），不在
+          // 1v1 路径——本 break 仅限 1v1 application 消息，不影响 commit 应用。
+          if (msg.senderDid === userDid) {
+            console.log(
+              'handleIncomingMessage: ignoring own-leaf group_invite_request (self-replay)',
+              req.inviteId, req.groupId,
+            );
+            break;
+          }
           // 陈旧重放防线：恢复旧备份会把会话代际游标拨回，7 天 TTL 内的
           // 信封会被重新拉取。若该群会话已存在（已在群中），忽略重放的
           // 邀请请求，避免邀请卡片复活、被再次接受时向群主重复 accept

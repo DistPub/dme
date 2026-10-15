@@ -1414,6 +1414,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         switch (msgType) {
           case 'group_invite_request': {
             const req = parsed as unknown as GroupInviteRequest;
+            // 2026-10-15 真根因：poller 244 行的 own-leaf skip 是 `gen < expected`，
+            // 仅能挡"自己叶子下 gen 已过期"，**挡不住 `gen > expected`**——备份
+            // 恢复 / 多端 / 跨设备登录 场景下，自己通过 1v1 session 发出去的
+            // group_invite_request 落进自己 leaf，PDS 保留 7 天；恢复到 expected
+            // 更老的 mls session 时 `gen > expected`，不 skip，照常解密 + onMessage
+            // → 1491 旧实现「自邀请自」写入。1v1 ownLeaf 下的 envelope 语义上
+            // 永远是自己发出去的 application message（commit 走群 session）——
+            // 「收到的群邀请」不可能出自自己叶子，直接拒收。
+            if (msg.senderDid === userDid) {
+              console.log(
+                'handleIncomingMessage: 忽略 own-leaf group_invite_request（self-replay）',
+                req.inviteId, req.groupId,
+              );
+              break;
+            }
             // 陈旧重放防线：恢复旧备份会把会话代际游标拨回，7 天 TTL 内的
             // 信封会被重新拉取。若该群会话已存在（已在群中），忽略重放的
             // 邀请请求，避免邀请卡片复活、被再次接受时向群主重复 accept

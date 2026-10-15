@@ -1526,19 +1526,32 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           }
           const existing = await msgStorage.getPendingInvite(resp.inviteId);
           if (existing) {
+            // 「恢复备份后重放自己过去的接受确认」的精确判定：响应发送者是
+            // 本机用户 + 邀请记录里受邀人就是本机用户 + 本机无 KP pair。
+            // 2026-10-15 实测踩坑：旧条件只看本机有无 pair，误伤了群主——
+            // 群主发出去的邀请记录本来就没有 pair（pair 只在受邀方的记录里），
+            // 群主收到受邀人的接受响应被误判为重放、邀请永远 pending，
+            // 会话列表「0 接受」且 keyPackageSerialized 落不了库、无法建群。
+            const ownReplayWithoutPair =
+              msg.senderDid === userDid &&
+              existing.inviteeDid === userDid &&
+              !(existing.ownKeyPackagePoolId || existing.ownKeyPackagePairSerialized);
             let updated: PendingInvite;
             if (!resp.accepted) {
               updated = { ...existing, status: 'rejected' };
-            } else if (existing.ownKeyPackagePoolId || existing.ownKeyPackagePairSerialized) {
-              // 接受响应且本机就是接受方（有 pair）：正常置 accepted
-              updated = { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized };
-            } else {
-              // 接受响应但本机无 pair（恢复备份后重放「过去某个自己」的确认，
+            } else if (ownReplayWithoutPair) {
+              // 本机是受邀方但无 pair（恢复备份后重放「过去某个自己」的确认，
               // 或多端另一台设备接受的）：welcome 对本机数学上解不开（KP 私钥
               // 不在本机），置 accepted 只会掩盖重新接受的入口——保持 pending，
               // 让卡片继续提供「接受」按钮（实测踩坑：恢复后看到自己的确认
               // 消息、卡片却消失、永远进不了群）
               updated = existing;
+            } else {
+              // 接受响应如实记账：① 群主收到受邀人的接受（inviteeDid ≠ 本机，
+              // 建群前置状态；keyPackageSerialized 是 createGroupFromPendingInvites
+              // 的必要输入）；② 受邀方自己的确认镜像（有 pair），与
+              // respondToGroupInvite 的本地收敛一致
+              updated = { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized };
             }
             await msgStorage.putPendingInvite(updated);
             setPendingInvites((prev) =>

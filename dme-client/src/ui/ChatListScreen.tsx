@@ -9,6 +9,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Animated as RNAnimated,
   FlatList,
   Modal,
@@ -489,12 +490,34 @@ const resolveProfiles = useCallback(async (
 
   const handleLogoutPress = useCallback((): void => {
     setMenuVisible(false);
-    setBackupPwd('');
-    setBackupPwdConfirm('');
-    setLogoutError(null);
-    setLogoutStatus('idle');
-    setLogoutModalVisible(true);
-  }, []);
+    // 当前所有备份点前都已过宣言并自动联动备份；backupRequired / sibling-rotated
+    // 意味着用户尚未遵从提示（没密码导致未自动备份，或需要恢复最新备份）。
+    // 这两种状态退出登录会丢失/倒灌关键会话状态，必须强制处理。
+    const hasPendingRestore = sessionIssues.some((i) => i.issue === 'sibling-rotated');
+    if (app.backupRequired || hasPendingRestore) {
+      setBackupPwd('');
+      setBackupPwdConfirm('');
+      setLogoutError(null);
+      setLogoutStatus('idle');
+      setLogoutModalVisible(true);
+      return;
+    }
+    // 无待处理状态：直接确认登出，不再强制备份
+    Alert.alert(
+      t('chatlist.logoutTitle'),
+      t('chatlist.logoutMessage'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('chatlist.logoutConfirm'),
+          style: 'destructive',
+          onPress: () => {
+            void app.logout();
+          },
+        },
+      ],
+    );
+  }, [app, sessionIssues, t]);
 
   const handleLogoutConfirm = useCallback(async (): Promise<void> => {
     if (!backupPwd) {

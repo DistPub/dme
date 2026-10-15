@@ -522,15 +522,31 @@ export default function ChatListPage(): React.JSX.Element {
     [t, deleteFriend],
   );
 
-  // ---- 退出登录（两次备份密码） -----------------------------------------
+  // ---- 退出登录（有条件强制备份） -----------------------------------------
+  // 所有备份点前都已过宣言并自动联动备份；backupRequired / sibling-rotated
+  // 意味着用户尚未遵从提示。这两种状态退出会丢失/倒灌关键状态，必须处理。
   const handleLogoutPress = useCallback((): void => {
     setMenuVisible(false);
-    setBackupPwd('');
-    setBackupPwdConfirm('');
-    setLogoutError(null);
-    setLogoutStatus('idle');
-    setLogoutModalVisible(true);
-  }, []);
+    const hasPendingRestore = sessionIssues.some((i) => i.issue === 'sibling-rotated');
+    if (backupRequired || hasPendingRestore) {
+      setBackupPwd('');
+      setBackupPwdConfirm('');
+      setLogoutError(null);
+      setLogoutStatus('idle');
+      setLogoutModalVisible(true);
+      return;
+    }
+    void Taro.showModal({
+      title: t('chatlist.logoutTitle'),
+      content: t('chatlist.logoutMessage'),
+      confirmText: t('chatlist.logoutConfirm'),
+      cancelText: t('common.cancel'),
+    }).then(async (res) => {
+      if (!res.confirm) return;
+      await logout();
+      await Taro.reLaunch({ url: '/pages/login/index' });
+    });
+  }, [backupRequired, sessionIssues, t, logout]);
 
   const handleLogoutConfirm = useCallback(async (): Promise<void> => {
     if (logoutBusyRef.current) return; // 重入闸门：让步窗口内的连点直接吞掉

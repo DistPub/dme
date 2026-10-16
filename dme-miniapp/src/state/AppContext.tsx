@@ -163,10 +163,24 @@ function generateId(): string {
  * 向群主重复发送 accept。凡 groupId 已存在会话的 pending 邀请一律就地
  * 收敛为 accepted（含持久化），卡片不再渲染。
  */
-async function reconcileStaleGroupInvites(store: DmeStorage): Promise<PendingInvite[]> {
+async function reconcileStaleGroupInvites(store: DmeStorage, did: string): Promise<PendingInvite[]> {
   const all = await store.getPendingInvites();
   const reconciled: PendingInvite[] = [];
   for (const invite of all) {
+    // 群主侧收敛（2026-10-16，与 dme-client 同步）：本机是邀请人且该群已有
+    // GroupInfo = 群确已建成（建群成功端写 GroupInfo，随备份同步）。建群时的
+    // `updatePendingInviteStatus('cancelled')` 只作用于执行建群的那台设备，
+    // 兄弟端的镜像 pending 记录无人收敛 → 建群卡片永久残留（实测：A 端建群完成，
+    // B 端卡片不消失）。仅限邀请人侧：受邀方已入群也应保持 accepted。
+    if (
+      invite.inviterDid === did &&
+      (invite.status === 'pending' || invite.status === 'accepted') &&
+      (await store.getGroupInfo(invite.groupId))
+    ) {
+      await store.updatePendingInviteStatus(invite.inviteId, 'cancelled');
+      reconciled.push({ ...invite, status: 'cancelled' });
+      continue;
+    }
     if (invite.status === 'pending' && (await store.getMlsSession(invite.groupId))) {
       await store.updatePendingInviteStatus(invite.inviteId, 'accepted');
       reconciled.push({ ...invite, status: 'accepted' });
@@ -572,7 +586,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       // 恢复群邀请：pendingInvites（我发出的）/ receivedGroupInvites（我收到的）
       // receivedGroupInvites 必须跨重启存活 —— 1:1 会话里的 group_invite 卡片要一直显示"已响应"。
-      const allInvites = await reconcileStaleGroupInvites(correctStorage);
+      const allInvites = await reconcileStaleGroupInvites(correctStorage, userDid);
       const mySentInvites = allInvites.filter((i) => i.inviterDid === userDid);
       const myReceivedInvites = allInvites.filter((i) => i.inviteeDid === userDid);
 
@@ -1111,7 +1125,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       // 备份不含邀请状态：恢复后立即收敛本地残留的 pending 邀请（群会话
       // 已随备份恢复，残留记录会让邀请卡片复活），并同步界面状态
-      const reconciledInvites = await reconcileStaleGroupInvites(activeStorage);
+      const reconciledInvites = await reconcileStaleGroupInvites(
+        activeStorage,
+        (sessionRef.current ?? session)?.did ?? '',
+      );
       setReceivedGroupInvites(
         reconciledInvites.filter((i) => i.inviteeDid === (sessionRef.current ?? session)?.did),
       );

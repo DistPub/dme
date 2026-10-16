@@ -1444,13 +1444,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                 );
                 break;
               }
+              const mirrorStatus: PendingInvite['status'] =
+                (await msgStorage.getGroupInfo(req.groupId)) ? 'cancelled' : 'pending';
               const mirrorInvite: PendingInvite = {
                 inviteId: req.inviteId,
                 groupId: req.groupId,
                 groupName: req.groupName,
                 inviterDid: userDid,
                 inviteeDid: msg.groupId,
-                status: 'pending',
+                status: mirrorStatus,
                 createdAt: msg.envelope.createdAt,
               };
               await msgStorage.putPendingInvite(mirrorInvite);
@@ -1473,13 +1475,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               );
               break;
             }
+            // 2026-10-16 权威收敛（与 dme-client 同步）：重放重建 pending 前，
+            // 若该群 GroupInfo 已存在（群已建成），邀请必然已终结——受邀人侧
+            // 收敛为 accepted（曾响应过，别再亮接受按钮）。
+            const existingGroup = await msgStorage.getGroupInfo(req.groupId);
             const invite: PendingInvite = {
               inviteId: req.inviteId,
               groupId: req.groupId,
               groupName: req.groupName,
               inviterDid: msg.senderDid,
               inviteeDid: userDid,
-              status: 'pending',
+              status: existingGroup ? 'accepted' : 'pending',
               createdAt: msg.envelope.createdAt,
             };
             await msgStorage.putPendingInvite(invite);
@@ -1513,6 +1519,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               break;
             }
             const existing = await msgStorage.getPendingInvite(resp.inviteId);
+            if (!existing) {
+              // 2026-10-16 恢复备份重放顺序修复（与 dme-client 同步）：response
+              // 可能先于 request 被处理（清缓存后 PDS 重拉不保证顺序）。此前
+              // 此处只写系统消息，随后 request 到达会把已拒绝/已接受的邀请按
+              // pending 重建——卡片复活（实测：双端恢复备份后被拒邀请重新出现
+              // 待处理卡片）。先落一条带最终状态的记录，request 后到时被
+              // inviteId 幂等挡住，不会重置为 pending。
+              const reconstructed: PendingInvite = {
+                inviteId: resp.inviteId,
+                groupId: resp.groupId,
+                groupName: '',
+                inviterDid: msg.senderDid === userDid ? msg.groupId : msg.senderDid,
+                inviteeDid: msg.senderDid === userDid ? userDid : msg.groupId,
+                status: resp.accepted ? 'accepted' : 'rejected',
+                createdAt: msg.envelope.createdAt,
+              };
+              await msgStorage.putPendingInvite(reconstructed);
+              setPendingInvites((prev) => prev.some((i) => i.inviteId === resp.inviteId) ? prev : [...prev, reconstructed]);
+              console.log('handleIncomingMessage: group_invite_response 先于 request，已记录最终状态', resp.inviteId, resp.accepted);
+            }
             if (existing) {
               // 「恢复备份后重放自己过去的接受确认」的精确判定（与 dme-client
               // 17f209c 同步）：响应发送者是本机用户 + 邀请记录里受邀人就是

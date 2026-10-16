@@ -477,6 +477,18 @@ export default function ChatListPage(): React.JSX.Element {
         });
         return;
       }
+      // 反向幽灵群（2026-10-16，与 dme-client 同步）：有 GroupInfo 但无群
+      // mlsSession —— 群主兄弟端结构性收不到 welcome（welcome 只投给受邀者），
+      // 群元数据靠共享 1v1 会话重放重建，真正的 MLS 会话只能从群主端备份恢复。
+      // 不做假会话，明示用户。
+      if (isGroup && !poller?.getSession(groupId)) {
+        Taro.showModal({
+          title: t('chatlist.restoreBackupGroupName'),
+          content: t('chatview.restoreBackupToContinue'),
+          showCancel: false,
+        });
+        return;
+      }
       // isGroup 必须显式传给 chat-view：群聊模式（发送者头像、群信息、
       // ⋮ → GroupSettings）与 1:1 模式共用同一个页面。
       const url = `/pages/pkg-chat/chat-view/index?conversationId=${encodeURIComponent(groupId)}&isGroup=${isGroup ? '1' : '0'}`;

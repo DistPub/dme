@@ -434,6 +434,16 @@ const resolveProfiles = useCallback(async (
         );
         return;
       }
+      // 反向幽灵群（2026-10-16）：有 GroupInfo 但无群 mlsSession —— 群主兄弟端
+      // 结构性收不到 welcome（welcome 只投给受邀者），群元数据靠共享 1v1 会话
+      // 重放重建，真正的 MLS 会话只能从群主端备份恢复。不做假会话，明示用户。
+      if (isGroup && !app.poller?.getSession(groupId)) {
+        Alert.alert(
+          t('chatlist.restoreBackupGroupName'),
+          t('chatview.restoreBackupToContinue'),
+        );
+        return;
+      }
       if (forwardText) {
         try {
           await app.sendMessage(groupId, forwardText);

@@ -1818,13 +1818,30 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         case 'group_metadata_update': {
           const update = parsed as unknown as GroupMetadataUpdate;
           const existing = await msgStorage.getGroupInfo(update.groupId);
-          if (existing) {
-            const updated: GroupInfo = { ...existing, members: update.members, groupName: update.groupName };
-            await msgStorage.putGroupInfo(updated);
-            setGroupInfos((prev) =>
-              prev.map((g) => g.groupId === update.groupId ? updated : g),
-            );
-          }
+          // 2026-10-16 修复：改为「不存在就新建」。同账号兄弟端拿到群会话的路径
+          // 是群 queueId 空间的 commit wrapper（group_commit 分支），该路径只
+          // 应用 MLS 状态、不写 GroupInfo；而 group_welcome 只发给受邀人，兄弟端
+          // 收不到。此前 `if (existing)` 门禁让兄弟端永远建不出 GroupInfo——
+          // 会话列表出现该群但 groupInfoMap 查不到，落到 1:1 兜底分支用 groupId
+          // 当显示名（实测：A 端建群「瞌睡」，B 端列表显示 mval8b8m2hklqzjj）。
+          // metadata 自带 groupName + members，足以构造完整 GroupInfo。
+          const creatorMember = update.members.find((m) => m.role === 'creator');
+          const info: GroupInfo = existing
+            ? { ...existing, members: update.members, groupName: update.groupName }
+            : {
+                groupId: update.groupId,
+                groupName: update.groupName,
+                creatorDid: creatorMember?.did ?? msg.senderDid,
+                members: update.members,
+                createdAt: msg.envelope.createdAt,
+              };
+          await msgStorage.putGroupInfo(info);
+          setGroupInfos((prev) =>
+            prev.some((g) => g.groupId === update.groupId)
+              ? prev.map((g) => g.groupId === update.groupId ? info : g)
+              : [...prev, info],
+          );
+          setGroups((prev) => prev.includes(update.groupId) ? prev : [...prev, update.groupId]);
           await msgStorage.putMessage({
             id: msg.envelope.queueId,
             fromDid: msg.senderDid,
@@ -1835,6 +1852,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             kind: 'group_system',
             conversationId: update.groupId,
           });
+          setChatListVersion((v) => v + 1);
           break;
         }
         case 'group_commit': {

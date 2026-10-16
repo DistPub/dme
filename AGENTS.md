@@ -531,6 +531,12 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 
 `group_invite_request` 的 own-leaf 处理从「一刀切拒收」改为**镜像重建**：同账号多端下，兄弟端轮询到本账号发出的邀请（1v1 对端 = 受邀人），按 `inviterDid=本机 / inviteeDid=msg.groupId` 重建 pending 记录 + `group.youInvited` 系统消息（`sys_invite_{inviteId}`），以 inviteId 幂等去重。原因：`sendGroupInvites` 是纯本地记账，一刀切拒收 own-leaf 让兄弟端永远看不到邀请、无法接力建群（实测：iOS web 发邀请，Android web 卡片与消息全缺失）。already-in-group 陈旧防线保留在分支之前。后续 `group_invite_response` 经受邀人叶子广播，两端都能凭记录对号；双端同时建群由宣言门禁拦截。
 
+### 兄弟端建群后群名缺失（2026-10-16 落地，双端）
+
+同账号兄弟端拿到**新建群**会话的路径是群 queueId 空间的 commit wrapper（`group_commit` 分支），该路径只应用 MLS 状态、**不写 GroupInfo**；而带群名的 `group_welcome` 只发给受邀人、`group_metadata_update` 此前有 `if (existing)` 门禁——三者叠加导致兄弟端「有会话无元数据」，会话列表落到 1:1 兜底分支用 groupId 当显示名（实测：A 端建群「瞌睡」，B 端列表显示 `mval8b8m2hklqzjj`）。
+
+**修复（双端同步）：** `group_metadata_update` 处理器改为**不存在就新建**——`existing` 有则合并（members + groupName），无则用 payload 构造完整 `GroupInfo`（`creatorDid` 从 `members` 里 `role === 'creator'` 推导，兜底 `msg.senderDid`），同时补齐 `setGroupInfos` 追加分支、`setGroups` 登记与 `setChatListVersion` 刷新。
+
 ## 多语言 (i18n)
 
 客户端支持 简体中文 (`zh`) / English (`en`) 双语，运行时切换，无需重启。

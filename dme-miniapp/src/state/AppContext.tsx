@@ -1419,21 +1419,56 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             // 恢复 / 多端 / 跨设备登录 场景下，自己通过 1v1 session 发出去的
             // group_invite_request 落进自己 leaf，PDS 保留 7 天；恢复到 expected
             // 更老的 mls session 时 `gen > expected`，不 skip，照常解密 + onMessage
-            // → 1491 旧实现「自邀请自」写入。1v1 ownLeaf 下的 envelope 语义上
+            // → 旧实现「自邀请自」写入。1v1 ownLeaf 下的 envelope 语义上
             // 永远是自己发出去的 application message（commit 走群 session）——
-            // 「收到的群邀请」不可能出自自己叶子，直接拒收。
-            if (msg.senderDid === userDid) {
-              console.log(
-                'handleIncomingMessage: 忽略 own-leaf group_invite_request（self-replay）',
-                req.inviteId, req.groupId,
-              );
-              break;
-            }
+            // 「收到的群邀请」不可能出自自己叶子。
             // 陈旧重放防线：恢复旧备份会把会话代际游标拨回，7 天 TTL 内的
             // 信封会被重新拉取。若该群会话已存在（已在群中），忽略重放的
             // 邀请请求，避免邀请卡片复活、被再次接受时向群主重复 accept
             if (await msgStorage.getMlsSession(req.groupId)) {
               console.log('handleIncomingMessage: 忽略陈旧的 group_invite_request（已在群中）', req.groupId);
+              break;
+            }
+            if (msg.senderDid === userDid) {
+              // 2026-10-16 own-leaf 镜像收敛（与 dme-client 同步）：同账号多端下，
+              // 兄弟端轮询到本账号发出的 invite_request（1v1 对端 = 受邀人），
+              // 此前一刀切拒收导致兄弟端既无 pending 记录也无「你邀请了…」系统
+              // 消息——多端邀请状态永不同步。重建镜像记录：inviterDid=本机、
+              // inviteeDid=1v1 对端（msg.groupId），以 inviteId 幂等去重。
+              if (await msgStorage.getPendingInvite(req.inviteId)) {
+                console.log(
+                  'handleIncomingMessage: 重复的 own-leaf group_invite_request 镜像，跳过',
+                  req.inviteId, req.groupId,
+                );
+                break;
+              }
+              const mirrorInvite: PendingInvite = {
+                inviteId: req.inviteId,
+                groupId: req.groupId,
+                groupName: req.groupName,
+                inviterDid: userDid,
+                inviteeDid: msg.groupId,
+                status: 'pending',
+                createdAt: msg.envelope.createdAt,
+              };
+              await msgStorage.putPendingInvite(mirrorInvite);
+              setPendingInvites((prev) => [...prev, mirrorInvite]);
+
+              const inviteeHandle = await resolveHandleCached(msg.groupId);
+              await msgStorage.putMessage({
+                id: `sys_invite_${req.inviteId}`,
+                fromDid: userDid,
+                toDid: msg.groupId,
+                plaintext: t(language, 'group.youInvited', { handle: inviteeHandle, group: req.groupName }),
+                createdAt: msg.envelope.createdAt,
+                sent: true,
+                kind: 'group_system',
+              });
+              setChatListVersion((v) => v + 1);
+              console.log(
+                'handleIncomingMessage: own-leaf group_invite_request 镜像已重建',
+                req.inviteId, req.groupId,
+              );
               break;
             }
             const invite: PendingInvite = {

@@ -527,6 +527,10 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 - `ChatListScreen.navigateToChat`：幽灵群（isGroup 且 groupInfos 无对应记录）点击拦截，弹 Alert / `Taro.showModal` 提示恢复备份，不跳转。`ChatViewScreen` 保留 `needsBackupRestore` 只读兜底（deep link 等其他入口）。
 - i18n：新增 `chatlist.restoreBackupGroupName`、`chatview.restoreBackupToContinue` 中英文。
 
+### own-leaf 邀请镜像收敛（2026-10-16 落地，双端）
+
+`group_invite_request` 的 own-leaf 处理从「一刀切拒收」改为**镜像重建**：同账号多端下，兄弟端轮询到本账号发出的邀请（1v1 对端 = 受邀人），按 `inviterDid=本机 / inviteeDid=msg.groupId` 重建 pending 记录 + `group.youInvited` 系统消息（`sys_invite_{inviteId}`），以 inviteId 幂等去重。原因：`sendGroupInvites` 是纯本地记账，一刀切拒收 own-leaf 让兄弟端永远看不到邀请、无法接力建群（实测：iOS web 发邀请，Android web 卡片与消息全缺失）。already-in-group 陈旧防线保留在分支之前。后续 `group_invite_response` 经受邀人叶子广播，两端都能凭记录对号；双端同时建群由宣言门禁拦截。
+
 ## 多语言 (i18n)
 
 客户端支持 简体中文 (`zh`) / English (`en`) 双语，运行时切换，无需重启。

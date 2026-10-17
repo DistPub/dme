@@ -637,7 +637,11 @@ export default function ChatListPage(): React.JSX.Element {
   );
 
   const groupedSentInvites = useMemo(() => {
-    const active = pendingInvites.filter((i) => i.status === 'pending' || i.status === 'accepted');
+    // 建群卡片语义 = 我发出的邀请（inviterDid===本机）。不过滤会把受邀方向
+    // 记录（含恢复备份重放重建的）混进来，伪造建群卡片（与 dme-client 同步）。
+    const active = pendingInvites.filter((i) =>
+      i.inviterDid === session?.did && (i.status === 'pending' || i.status === 'accepted'),
+    );
     const map = new Map<string, typeof active>();
     for (const inv of active) {
       const arr = map.get(inv.groupId) ?? [];

@@ -1475,6 +1475,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               );
               break;
             }
+            // 幂等 + 保状态（与 dme-client 同步）：response 先到时已落最终状态
+            // 记录，此处不得覆盖为 pending
+            const priorInvite = await msgStorage.getPendingInvite(req.inviteId);
+            if (priorInvite && priorInvite.status !== 'pending') {
+              console.log('handleIncomingMessage: group_invite_request 晚于 response，保留最终状态', req.inviteId, priorInvite.status);
+              break;
+            }
             // 2026-10-16 权威收敛（与 dme-client 同步）：重放重建 pending 前，
             // 若该群 GroupInfo 已存在（群已建成），邀请必然已终结——受邀人侧
             // 收敛为 accepted（曾响应过，别再亮接受按钮）。
@@ -1536,7 +1543,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                 createdAt: msg.envelope.createdAt,
               };
               await msgStorage.putPendingInvite(reconstructed);
-              setPendingInvites((prev) => prev.some((i) => i.inviteId === resp.inviteId) ? prev : [...prev, reconstructed]);
+              // 只落库，不进 pendingInvites UI state——建群卡片按 inviterDid===本机
+              // 渲染「我发出的邀请」，受邀方向记录混进去会伪造建群卡片
               console.log('handleIncomingMessage: group_invite_response 先于 request，已记录最终状态', resp.inviteId, resp.accepted);
             }
             if (existing) {

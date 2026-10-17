@@ -850,13 +850,19 @@ const resolveProfiles = useCallback(async (
               </View>
             )}
 
-            {app.pendingInvites.filter((i) => i.status === 'pending' || i.status === 'accepted').length > 0 && (
+            {app.pendingInvites.filter((i) =>
+              i.inviterDid === app.session?.did && (i.status === 'pending' || i.status === 'accepted'),
+            ).length > 0 && (
               <View style={styles.inviteSection}>
                 <Text style={styles.sectionTitle}>
                   {t('chatlist.pendingGroupInvites')}
                 </Text>
                 {(() => {
-                  const active = app.pendingInvites.filter((i) => i.status === 'pending' || i.status === 'accepted');
+                  // 建群卡片语义 = 我发出的邀请（inviterDid===本机）。不过滤会把
+                  // 受邀方向记录（含恢复备份重放重建的）混进来，伪造建群卡片
+                  const active = app.pendingInvites.filter((i) =>
+                    i.inviterDid === app.session?.did && (i.status === 'pending' || i.status === 'accepted'),
+                  );
                   const grouped = new Map<string, typeof active>();
                   for (const inv of active) {
                     const arr = grouped.get(inv.groupId) ?? [];

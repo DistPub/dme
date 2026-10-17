@@ -439,6 +439,11 @@ const resolveProfiles = useCallback(async (
         );
         return;
       }
+      // 反向幽灵群（2026-10-17）：有 GroupInfo 无群 mlsSession（群主兄弟端）——
+      // 列表名与横幅已说明需恢复备份，点群静默拦截不进入（不弹窗）
+      if (isGroup && !app.poller?.getSession(groupId)) {
+        return;
+      }
       if (forwardText) {
         try {
           await app.sendMessage(groupId, forwardText);

@@ -484,6 +484,11 @@ export default function ChatListPage(): React.JSX.Element {
       }
       // 反向幽灵群不再弹窗（2026-10-17 用户拍板，与 dme-client 同步）：
       // 列表群名改显「待恢复备份的群聊」+ 顶部恢复备份横幅
+      // 反向幽灵群（2026-10-17，与 dme-client 同步）：有 GroupInfo 无群
+      // mlsSession（群主兄弟端）——列表名与横幅已说明需恢复备份，点群静默拦截
+      if (isGroup && !poller?.getSession(groupId)) {
+        return;
+      }
       // isGroup 必须显式传给 chat-view：群聊模式（发送者头像、群信息、
       // ⋮ → GroupSettings）与 1:1 模式共用同一个页面。
       const url = `/pages/pkg-chat/chat-view/index?conversationId=${encodeURIComponent(groupId)}&isGroup=${isGroup ? '1' : '0'}`;

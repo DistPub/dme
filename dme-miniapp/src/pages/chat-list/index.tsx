@@ -304,9 +304,14 @@ export default function ChatListPage(): React.JSX.Element {
 
       const info = infoMap.get(gid);
       if (info) {
+        // 反向幽灵群（2026-10-17 用户拍板，与 dme-client 同步）：有 GroupInfo
+        // 但无群 mlsSession —— 群主兄弟端结构性收不到 welcome，真正的会话只能
+        // 从群主端备份恢复。群名直接显示为「待恢复备份的群聊」，不做假会话；
+        // 恢复备份提示由下方 ghost 横幅展示。
+        const hasSession = poller?.getSession(gid) != null;
         return {
           conversationId: gid,
-          displayName: info.groupName,
+          displayName: hasSession ? info.groupName : t('chatlist.restoreBackupGroupName'),
           handle: handleCacheRef.current[info.creatorDid] ?? '',
           avatarUrl: null,
           lastMessage,
@@ -477,18 +482,8 @@ export default function ChatListPage(): React.JSX.Element {
         });
         return;
       }
-      // 反向幽灵群（2026-10-16，与 dme-client 同步）：有 GroupInfo 但无群
-      // mlsSession —— 群主兄弟端结构性收不到 welcome（welcome 只投给受邀者），
-      // 群元数据靠共享 1v1 会话重放重建，真正的 MLS 会话只能从群主端备份恢复。
-      // 不做假会话，明示用户。
-      if (isGroup && !poller?.getSession(groupId)) {
-        Taro.showModal({
-          title: t('chatlist.restoreBackupGroupName'),
-          content: t('chatview.restoreBackupToContinue'),
-          showCancel: false,
-        });
-        return;
-      }
+      // 反向幽灵群不再弹窗（2026-10-17 用户拍板，与 dme-client 同步）：
+      // 列表群名改显「待恢复备份的群聊」+ 顶部恢复备份横幅
       // isGroup 必须显式传给 chat-view：群聊模式（发送者头像、群信息、
       // ⋮ → GroupSettings）与 1:1 模式共用同一个页面。
       const url = `/pages/pkg-chat/chat-view/index?conversationId=${encodeURIComponent(groupId)}&isGroup=${isGroup ? '1' : '0'}`;
@@ -721,9 +716,19 @@ export default function ChatListPage(): React.JSX.Element {
             <Text className="chatlist__issueBannerText">{t('chatlist.backupRequiredBanner')}</Text>
           </View>
         ) : null}
-        {sessionIssues.length > 0 ? (
+        {(() => {
+          // 2026-10-17 用户拍板（与 dme-client 同步）：反向幽灵群（有 GroupInfo
+          // 无群 mlsSession，群主兄弟端）与 sessionIssue 同栏展示恢复备份提示
+          const ghostIssues = groupInfos
+            .filter((g) => rows.some((c) => c.conversationId === g.groupId) && !poller?.getSession(g.groupId))
+            .map((g) => ({ groupId: g.groupId, issue: 'sibling-rotated' as const }));
+          const allIssues = [
+            ...sessionIssues,
+            ...ghostIssues.filter((g) => !sessionIssues.some((s) => s.groupId === g.groupId)),
+          ];
+          return allIssues.length > 0 ? (
           <View className="chatlist__issueBanner">
-            {sessionIssues.map(({ groupId, issue }) => (
+            {allIssues.map(({ groupId, issue }) => (
               <Text key={groupId} className="chatlist__issueBannerText">
                 {issue === 'sibling-rotated'
                   ? t('chatlist.siblingRotatedBanner')
@@ -731,7 +736,8 @@ export default function ChatListPage(): React.JSX.Element {
               </Text>
             ))}
           </View>
-        ) : null}
+          ) : null;
+        })()}
 
         {/* ① 收到的群邀请 */}
         {pendingReceivedInvites.length > 0 ? (

@@ -326,9 +326,14 @@ const resolveProfiles = useCallback(async (
 
       const info = groupInfoMap.get(groupId);
       if (info) {
+        // 反向幽灵群（2026-10-17 用户拍板）：有 GroupInfo 但无群 mlsSession ——
+        // 群主兄弟端结构性收不到 welcome，真正的会话只能从群主端备份恢复。
+        // 群名直接显示为「待恢复备份的群聊」，不做假会话；恢复备份提示
+        // 由下方 ghost 横幅展示（点击进设置页恢复）。
+        const hasSession = app.poller?.getSession(groupId) != null;
         return {
           groupId,
-          displayName: info.groupName,
+          displayName: hasSession ? info.groupName : t('chatlist.restoreBackupGroupName'),
           lastMessage,
           isGroup: true,
           unreadCount,
@@ -428,16 +433,6 @@ const resolveProfiles = useCallback(async (
     async (groupId: string, isGroup: boolean): Promise<void> => {
       // 幽灵群拦截：群会话但无 GroupInfo → welcome 处理失败，需恢复备份
       if (isGroup && !app.groupInfos.some((g) => g.groupId === groupId)) {
-        Alert.alert(
-          t('chatlist.restoreBackupGroupName'),
-          t('chatview.restoreBackupToContinue'),
-        );
-        return;
-      }
-      // 反向幽灵群（2026-10-16）：有 GroupInfo 但无群 mlsSession —— 群主兄弟端
-      // 结构性收不到 welcome（welcome 只投给受邀者），群元数据靠共享 1v1 会话
-      // 重放重建，真正的 MLS 会话只能从群主端备份恢复。不做假会话，明示用户。
-      if (isGroup && !app.poller?.getSession(groupId)) {
         Alert.alert(
           t('chatlist.restoreBackupGroupName'),
           t('chatview.restoreBackupToContinue'),
@@ -800,9 +795,19 @@ const resolveProfiles = useCallback(async (
                 <Text style={styles.issueBannerText}>{t('chatlist.backupRequiredBanner')}</Text>
               </TouchableOpacity>
             )}
-            {sessionIssues.length > 0 && (
+            {(() => {
+              // 2026-10-17 用户拍板：反向幽灵群（有 GroupInfo 无群 mlsSession，
+              // 群主兄弟端）与 sessionIssue 同栏展示恢复备份提示，不再用点群弹窗
+              const ghostIssues = app.groupInfos
+                .filter((g) => app.groups.includes(g.groupId) && !app.poller?.getSession(g.groupId))
+                .map((g) => ({ groupId: g.groupId, issue: 'sibling-rotated' as const }));
+              const allIssues = [
+                ...sessionIssues,
+                ...ghostIssues.filter((g) => !sessionIssues.some((s) => s.groupId === g.groupId)),
+              ];
+              return allIssues.length > 0 ? (
               <View style={styles.issueBanner}>
-                {sessionIssues.map(({ groupId, issue }) => {
+                {allIssues.map(({ groupId, issue }) => {
                   const bannerText = issue === 'sibling-rotated'
                     ? t('chatlist.siblingRotatedBanner')
                     : t('chatlist.desyncedBanner');
@@ -819,7 +824,8 @@ const resolveProfiles = useCallback(async (
                   );
                 })}
               </View>
-            )}
+              ) : null;
+            })()}
             {app.receivedGroupInvites.filter((i) => i.status === 'pending').length > 0 && (
               <View style={styles.inviteSection}>
                 <Text style={styles.sectionTitle}>{t('chatlist.groupInvitations')}</Text>

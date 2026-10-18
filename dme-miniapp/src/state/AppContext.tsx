@@ -1428,6 +1428,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const handleIncomingMessage = useCallback(
     async (msg: IncomingMessage, userDid: string, msgStorage: DmeStorage): Promise<void> => {
+      const isSelfSender = msg.senderDid === userDid;
+      // 2026-10-18 实测：群消息在两台同 DID 设备上，兄弟端 poller 因 mls session
+      // 状态短暂不一致，ownLeafIndex 错位导致 ownLeaf 跳过漏判，senderDid=本机
+      // DID 的消息进了 onMessage → 提示音误响。统一用 isSelfSender 在所有
+      // 提示音调用点过滤；消息仍正常落库显示（不影响同步）。
       const isBlockedSender = (await msgStorage.getBlockList()).includes(msg.senderDid);
       if (isBlockedSender) {
         console.log('handleIncomingMessage: 忽略被屏蔽发送者的消息', msg.senderDid);
@@ -1540,7 +1545,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             });
             if (
               soundEnabledRef.current &&
-              msg.senderDid !== userDid &&
+              !isSelfSender &&
               (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
             ) {
               void playMessageSound();
@@ -2075,7 +2080,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             });
             if (
               soundEnabledRef.current &&
-              msg.senderDid !== userDid &&
+              !isSelfSender &&
               (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
             ) {
               void playMessageSound();
@@ -2135,7 +2140,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         if (
           soundEnabledRef.current &&
-          msg.senderDid !== userDid &&
+          !isSelfSender &&
           (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
         ) {
           void playMessageSound();
@@ -2158,7 +2163,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         if (
           soundEnabledRef.current &&
-          msg.senderDid !== userDid &&
+          !isSelfSender &&
           (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
         ) {
           void playMessageSound();

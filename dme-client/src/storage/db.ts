@@ -322,6 +322,25 @@ export class DmeStorage {
     );
   }
 
+  /**
+   * 清空 queueId LRU 去重集合（恢复备份后必调）。
+   *
+   * 背景：b 端用云端备份覆盖本地 mlsSession 后，新 mlsSession 是「a 端建群
+   * 那一刻」的快照；b 端本地 `queueIdLru` 里残留**之前**用旧 mlsSession
+   * 处理过 envelope 的标记。如果不清：
+   *   - b 端 poller 拉到 a 端后续发的 envelope（commit wrapper / 群消息）
+   *   - `isQueueIdProcessed(.) === true`（之前走过）
+   *   - 跳过不 decrypt → mlsSession 永远不推进
+   *   - b 端 exporterSecret 永远停在备份那一刻 → 后续 envelope 永远拉不到
+   *   - b 端发消息也用旧 mlsSession → a 端解不开
+   *
+   * 清空后 b 端会重新 decrypt 这些 envelope：commit wrapper 推进 mlsSession
+   * （自愈），群消息正常进入 chat-view。
+   */
+  async clearQueueIdLru(): Promise<void> {
+    await storage.removeItem(this.prefix + 'queueIdLru');
+  }
+
   // -----------------------------------------------------------------------
   // KeyPackage 池
   // -----------------------------------------------------------------------

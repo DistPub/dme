@@ -276,7 +276,7 @@ export class DmePoller {
         this.inFlightQueueIds.delete(env.queueId);
       } catch (err) {
         this.inFlightQueueIds.delete(env.queueId);
-        console.error('[DIAG] DmePoller: process failed for', env.queueId, 'groupId=' + ctx?.groupId, 'err=' + (err instanceof Error ? err.message + ' / ' + err.name : String(err)));
+        console.error('[DIAG] DmePoller: process failed for', env.queueId, 'ctxType=' + ctx?.type, 'groupId=' + (ctx?.type === 'message' ? ctx.groupId : '(n/a)'), 'err=' + (err instanceof Error ? err.message + ' / ' + err.name : String(err)));
       }
     }
   }

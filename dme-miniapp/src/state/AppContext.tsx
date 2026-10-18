@@ -1146,6 +1146,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // 后没人再触发 setChatListVersion 重跑（收发正常路径不触发）→ 横
       // 幅永久卡住直到下次输密码恢复
       await activeStorage.clearAllSessionIssues();
+      // 缺口⑨修复：清空 queueId LRU 去重集合。b 端 web 之前用过 DME
+      // 时本机已用旧 mlsSession decrypt 过 a 端的 envelope，processed
+      // 集合残留在 storage；输密码恢复后 mlsSession 来自备份（a 端建
+      // 群那一刻），旧 envelope 被 isQueueIdProcessed 命中直接跳过 →
+      // mlsSession 永远不推进 → exporterSecret 永远停在备份那一刻 →
+      // 后续 envelope 永远拉不到 → b 端自己发消息也用旧 mlsSession，
+      // a 端解不开。清空后 b 端重新 decrypt 这些 envelope：commit
+      // wrapper 推进 mlsSession（自愈），群消息正常入屏。
+      await activeStorage.clearQueueIdLru();
 
       setGroups(Object.keys(data.mlsSessions));
       setChatListVersion((v) => v + 1);

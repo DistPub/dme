@@ -1508,6 +1508,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             });
             if (
               soundEnabledRef.current &&
+              msg.senderDid !== userDid &&
               (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
             ) {
               void playMessageSound();
@@ -2042,6 +2043,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
             });
             if (
               soundEnabledRef.current &&
+              msg.senderDid !== userDid &&
               (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
             ) {
               void playMessageSound();
@@ -2101,6 +2103,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         if (
           soundEnabledRef.current &&
+          msg.senderDid !== userDid &&
           (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
         ) {
           void playMessageSound();
@@ -2123,6 +2126,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
         if (
           soundEnabledRef.current &&
+          msg.senderDid !== userDid &&
           (activeConversationRef.current === null || activeConversationRef.current === msg.groupId)
         ) {
           void playMessageSound();

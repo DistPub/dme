@@ -233,10 +233,11 @@ export class DmePoller {
         } else {
           const session = this.sessions.get(ctx.groupId);
           if (!session) {
-            console.log('DmePoller: no session for group', ctx.groupId);
+            console.log('[DIAG] DmePoller: no session for group', ctx.groupId);
             this.inFlightQueueIds.delete(env.queueId);
             continue;
           }
+          console.log('[DIAG] DmePoller: processing envelope', ctx.groupId, 'senderLeaf=' + ctx.senderLeafIndex, 'gen=' + ctx.generation, 'queueId=' + env.queueId);
 
           // 多端支持：扫描包含自己的叶子（去掉了 own-leaf skip 后，自己的设备也会拉到本机发出、已推进过 gen 的信封）。
           // 若本机对该叶子已消费到比信封 gen 更靠后，说明这条是本机自己发的、发送时已推进过 gen ——
@@ -275,7 +276,7 @@ export class DmePoller {
         this.inFlightQueueIds.delete(env.queueId);
       } catch (err) {
         this.inFlightQueueIds.delete(env.queueId);
-        console.error('DmePoller: process failed for', env.queueId, err);
+        console.error('[DIAG] DmePoller: process failed for', env.queueId, 'groupId=' + ctx?.groupId, 'err=' + (err instanceof Error ? err.message + ' / ' + err.name : String(err)));
       }
     }
   }

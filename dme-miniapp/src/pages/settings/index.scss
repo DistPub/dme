@@ -167,4 +167,14 @@
     margin-bottom: 16px;
     word-break: break-all;
   }
+
+  /* 强制备份（接管高水位）入口：警告提示 + 二次确认按钮 */
+  &__forceBackup {
+    margin-top: 8px;
+    margin-bottom: 16px;
+
+    .settings__hint {
+      margin-bottom: 16px;
+    }
+  }
 }

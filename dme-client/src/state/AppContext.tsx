@@ -316,6 +316,7 @@ interface AppActions {
   declareKeys: (plcToken: string) => Promise<void>;
   backupIdentity: (password: string) => Promise<void>;
   backupIdentityGuarded: (password: string) => Promise<void>;
+  backupIdentityForced: (password: string) => Promise<void>;
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
@@ -986,6 +987,30 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await releaseBackupLock(handle, claimStore);
     }
   }, [storage, pds, identityKeys, claimStore, backupIdentity]);
+
+  /**
+   * 强制备份（接管高水位）：最新密钥材料因忘记备份而丢失时的唯一自救
+   * 路径——宣言 stale 永久阻断正常备份，本机再也无法追平高水位。
+   *
+   * 不删除宣言（删除会丢失单调性、留下无仲裁窗口、且僵尸端归来后
+   * seq 撞车会造成分叉）：改为读取 PDS 高水位并**接管为本地 commitSeq**，
+   * 然后走正常的持锁备份（判定立刻通过，备份窗口内仍挡住兄弟端
+   * commit）。云端备份会被本机较旧的状态覆盖且不可逆——调用方必须
+   * 已获得用户对「丢弃其他设备新状态」的明确确认。
+   * PDS 不可用/读取失败 fail-closed（peekCommitSeq 抛出即中止）。
+   */
+  const backupIdentityForced = useCallback(async (password: string): Promise<void> => {
+    if (!storage) throw new Error('backupIdentityForced: storage not initialized');
+    if (!identityKeys) throw new Error('backupIdentityForced: identity keys not available');
+    if (!claimStore) throw new Error('backupIdentityForced: claim store not available');
+    const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
+    const cloudSeq = await peekCommitSeq(params, claimStore);
+    if (cloudSeq !== null && cloudSeq > (await storage.getCommitSeq())) {
+      await storage.setCommitSeq(cloudSeq);
+      console.warn('[dme:claim] forced backup: adopted PDS high watermark', cloudSeq);
+    }
+    await backupIdentityGuarded(password);
+  }, [storage, identityKeys, claimStore, backupIdentityGuarded]);
 
   const restoreIdentityFromBackup = useCallback(async (password: string): Promise<boolean> => {
     if (!pds) throw new Error('restoreIdentityFromBackup: pds not initialized');
@@ -3676,6 +3701,7 @@ blockList,
       declareKeys: declareKeysAction,
       backupIdentity,
       backupIdentityGuarded,
+      backupIdentityForced,
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,

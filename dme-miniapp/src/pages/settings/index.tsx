@@ -64,6 +64,7 @@ export default function SettingsPage(): React.JSX.Element {
     setSoundEnabled,
     backupIdentity,
     backupIdentityGuarded,
+    backupIdentityForced,
     restoreIdentityFromBackup,
   } = useApp();
 
@@ -85,6 +86,9 @@ export default function SettingsPage(): React.JSX.Element {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // BACKUP_CLAIM_STALE 时展示强制备份入口；两段确认防误触（不可逆覆盖云端备份）
+  const [claimStale, setClaimStale] = useState(false);
+  const [forceConfirm, setForceConfirm] = useState(false);
 
   // 从备份恢复（对应 web SettingsScreen 的 restorePwd / restoreStatus / restoreError）
   const [restorePassword, setRestorePassword] = useState('');
@@ -183,12 +187,46 @@ export default function SettingsPage(): React.JSX.Element {
               ? t('settings.backupClaimBusy')
               : `${t('settings.backupFailed')}: ${msg}`,
       );
+      if (msg === 'BACKUP_CLAIM_STALE') setClaimStale(true);
       console.error('备份失败:', err);
     } finally {
       Taro.hideLoading();
       setBusy(false);
     }
   }, [password, confirmPassword, backupIdentityGuarded, t]);
+
+  // ---- 强制备份（接管高水位，对应 web handleForceBackup） ----------------
+  // 仅当产生高水位的设备已丢失且密钥材料未备份时使用。两段确认：第一段
+  // 点只展示警告，第二次点才执行。
+  const handleForceBackup = useCallback(async (): Promise<void> => {
+    if (!forceConfirm) {
+      setForceConfirm(true);
+      return;
+    }
+    setForceConfirm(false);
+    setError(null);
+    if (!password || password !== confirmPassword) {
+      setError(t('settings.enterPassword'));
+      return;
+    }
+    setBusy(true);
+    try {
+      await Taro.showLoading({ title: t('settings.backingUp'), mask: true });
+      await backupIdentityForced(password);
+      setClaimStale(false);
+      setPassword('');
+      setConfirmPassword('');
+      Taro.hideLoading();
+      await Taro.showToast({ title: t('settings.backedUp'), icon: 'success' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      setError(`${t('settings.backupFailed')}: ${msg}`);
+      console.error('强制备份失败:', err);
+    } finally {
+      Taro.hideLoading();
+      setBusy(false);
+    }
+  }, [forceConfirm, password, confirmPassword, backupIdentityForced, t]);
 
   // ---- 从备份恢复（对应 web handleRestore；showLoading 理由同 handleBackup） --
   const handleRestore = useCallback(async (): Promise<void> => {
@@ -382,6 +420,22 @@ export default function SettingsPage(): React.JSX.Element {
         <Button className="settings__fullButton" disabled={busy} onClick={() => void handleBackup()}>
           {busy ? t('settings.backingUp') : t('settings.backup')}
         </Button>
+
+        {/* 7.4 强制备份（接管高水位）：高水位设备丢失且未备份时的自救路径 */}
+        {claimStale ? (
+          <View className="settings__forceBackup">
+            <Text className="settings__hint">
+              {forceConfirm ? t('settings.forceBackupWarning') : t('settings.forceBackupHint')}
+            </Text>
+            <Button
+              className="settings__fullButton settings__fullButton--ghost"
+              disabled={busy}
+              onClick={() => void handleForceBackup()}
+            >
+              {t(forceConfirm ? 'settings.forceBackupConfirm' : 'settings.forceBackup')}
+            </Button>
+          </View>
+        ) : null}
 
         {/* 7.5 从备份恢复（轮换后 sibling-rotated 的唯一恢复路径） */}
         <Text className="settings__title">{t('settings.restoreTitle')}</Text>

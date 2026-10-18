@@ -40,6 +40,9 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
   const [backupStatus, setBackupStatus] = useState<'idle' | 'backing_up' | 'done' | 'error'>('idle');
   const [backupError, setBackupError] = useState<string | null>(null);
+  // BACKUP_CLAIM_STALE 时展示强制备份入口；两段确认防误触（不可逆覆盖云端备份）
+  const [claimStale, setClaimStale] = useState(false);
+  const [forceConfirm, setForceConfirm] = useState(false);
 
   const [restorePwd, setRestorePwd] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<'idle' | 'restoring' | 'done' | 'error'>('idle');
@@ -123,6 +126,37 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             : msg === 'BACKUP_CLAIM_BUSY'
               ? t('settings.backupClaimBusy')
               : msg || t('settings.backupFailed'),
+      );
+      if (msg === 'BACKUP_CLAIM_STALE') setClaimStale(true);
+      setBackupStatus('error');
+      setTimeout(() => setBackupStatus('idle'), 2000);
+    }
+  };
+
+  // 强制备份（接管高水位）：仅当产生高水位的设备已丢失且密钥材料未备份时
+  // 使用。两段确认：第一次点只展示警告，第二次点才执行。
+  const handleForceBackup = async (): Promise<void> => {
+    if (!forceConfirm) {
+      setForceConfirm(true);
+      return;
+    }
+    setForceConfirm(false);
+    setBackupError(null);
+    if (!backupPwd || backupPwd !== backupPwdConfirm) {
+      setBackupError(t('settings.enterPassword'));
+      return;
+    }
+    setBackupStatus('backing_up');
+    try {
+      await app.backupIdentityForced(backupPwd);
+      setClaimStale(false);
+      setBackupStatus('done');
+      setBackupPwd('');
+      setBackupPwdConfirm('');
+      setTimeout(() => setBackupStatus('idle'), 2000);
+    } catch (err) {
+      setBackupError(
+        err instanceof Error && err.message ? err.message : t('settings.backupFailed'),
       );
       setBackupStatus('error');
       setTimeout(() => setBackupStatus('idle'), 2000);
@@ -357,6 +391,21 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           <Text style={styles.error}>{backupError}</Text>
         ) : null}
 
+        {claimStale ? (
+          <View style={styles.forceBackupWrap}>
+            <Text style={styles.hint}>
+              {forceConfirm ? t('settings.forceBackupWarning') : t('settings.forceBackupHint')}
+            </Text>
+            <Button
+              label={t(forceConfirm ? 'settings.forceBackupConfirm' : 'settings.forceBackup')}
+              onPress={handleForceBackup}
+              variant="secondary"
+              style={styles.fullButton}
+              disabled={backupStatus === 'backing_up'}
+            />
+          </View>
+        ) : null}
+
         <Text style={[styles.title, styles.restoreTitle]}>{t('settings.restoreTitle')}</Text>
         <Text style={styles.hint}>{t('settings.restoreHint')}</Text>
         <TextInput
@@ -464,6 +513,10 @@ const styles = StyleSheet.create({
   },
   restoreTitle: {
     marginTop: theme.spacing.lg,
+  },
+  forceBackupWrap: {
+    marginTop: theme.spacing.md,
+    gap: theme.spacing.md,
   },
   rowButtons: {
     flexDirection: 'row',

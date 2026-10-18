@@ -48,6 +48,7 @@ import {
   acquireBackupLock,
   acquireRotationClaim,
   deriveRotationClaimParams,
+  peekCommitSeq,
   releaseBackupLock,
   releaseRotationClaim,
   type RotationClaimStore,
@@ -243,6 +244,7 @@ interface AppActions {
   declareKeys: (plcToken: string) => Promise<void>;
   backupIdentity: (password: string) => Promise<void>;
   backupIdentityGuarded: (password: string) => Promise<void>;
+  backupIdentityForced: (password: string) => Promise<void>;
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
@@ -1038,6 +1040,36 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
     },
     [storage, pds, identityKeys, backupIdentity],
+  );
+
+  /**
+   * 强制备份（接管高水位）：与 client 同语义——最新密钥材料因忘记备份
+   * 丢失时宣言 stale 永久阻断正常备份，本机再也无法追平高水位。不删除
+   * 宣言（保单调性、避免无仲裁窗口、僵尸端归来仍能被 stale 拦截）：改为
+   * 读取 PDS 高水位并接管为本地 commitSeq，再走正常持锁备份。云端备份
+   * 会被本机较旧的状态覆盖且不可逆——调用方必须已获得用户明确确认。
+   * PDS 不可用/读取失败 fail-closed（peekCommitSeq 抛出即中止）。
+   */
+  const backupIdentityForced = useCallback(
+    async (password: string): Promise<void> => {
+      const activeStorage = storageRef.current ?? storage;
+      const activeKeys = identityKeysRef.current ?? identityKeys;
+      if (!activeStorage) throw new Error('backupIdentityForced: storage 未初始化');
+      if (!activeKeys) throw new Error('backupIdentityForced: 身份密钥不可用');
+      const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
+      const store: RotationClaimStore = {
+        get: (rkey) => (pdsRef.current ?? pds)!.getRotationClaim(rkey),
+        put: (rkey, payload) => (pdsRef.current ?? pds)!.putRotationClaim(rkey, payload),
+        del: (rkey) => (pdsRef.current ?? pds)!.deleteRotationClaim(rkey),
+      };
+      const cloudSeq = await peekCommitSeq(params, store);
+      if (cloudSeq !== null && cloudSeq > (await activeStorage.getCommitSeq())) {
+        await activeStorage.setCommitSeq(cloudSeq);
+        console.warn('[dme:claim] forced backup: adopted PDS high watermark', cloudSeq);
+      }
+      await backupIdentityGuarded(password);
+    },
+    [storage, pds, identityKeys, backupIdentityGuarded],
   );
 
   const restoreIdentityFromBackup = useCallback(
@@ -3471,6 +3503,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       declareKeys: declareKeysAction,
       backupIdentity,
       backupIdentityGuarded,
+      backupIdentityForced,
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,
@@ -3545,6 +3578,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       declareKeysAction,
       backupIdentity,
       backupIdentityGuarded,
+      backupIdentityForced,
       restoreIdentityFromBackup,
       hasIdentityBackup,
       sendMessage,

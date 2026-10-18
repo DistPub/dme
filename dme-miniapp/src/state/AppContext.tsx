@@ -973,8 +973,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
       const store: RotationClaimStore = {
         get: (rkey) => activePds.getRotationClaim(rkey),
-        put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
-        del: (rkey) => activePds.deleteRotationClaim(rkey),
+        put: (rkey, payload, expectedCid) => activePds.putRotationClaim(rkey, payload, expectedCid),
+        del: (rkey, expectedCid) => activePds.deleteRotationClaim(rkey, expectedCid),
       };
       try {
         const { verdict, seq } = await acquireRotationClaim(
@@ -1002,8 +1002,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
     const store: RotationClaimStore = {
       get: (rkey) => activePds.getRotationClaim(rkey),
-      put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
-      del: (rkey) => activePds.deleteRotationClaim(rkey),
+      put: (rkey, payload, expectedCid) => activePds.putRotationClaim(rkey, payload, expectedCid),
+      del: (rkey, expectedCid) => activePds.deleteRotationClaim(rkey, expectedCid),
     };
     await releaseRotationClaim(params, store);
   }, [pds, identityKeys]);
@@ -1025,8 +1025,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
       const store: RotationClaimStore = {
         get: (rkey) => activePds.getRotationClaim(rkey),
-        put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
-        del: (rkey) => activePds.deleteRotationClaim(rkey),
+        put: (rkey, payload, expectedCid) => activePds.putRotationClaim(rkey, payload, expectedCid),
+        del: (rkey, expectedCid) => activePds.deleteRotationClaim(rkey, expectedCid),
       };
       const outcome = await acquireBackupLock(params, await activeStorage.getCommitSeq(), store);
       if (outcome.verdict !== 'acquired') {
@@ -1059,8 +1059,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const params = await deriveRotationClaimParams(activeKeys.signing.publicKey);
       const store: RotationClaimStore = {
         get: (rkey) => (pdsRef.current ?? pds)!.getRotationClaim(rkey),
-        put: (rkey, payload) => (pdsRef.current ?? pds)!.putRotationClaim(rkey, payload),
-        del: (rkey) => (pdsRef.current ?? pds)!.deleteRotationClaim(rkey),
+        put: (rkey, payload, expectedCid) => (pdsRef.current ?? pds)!.putRotationClaim(rkey, payload, expectedCid),
+        del: (rkey, expectedCid) => (pdsRef.current ?? pds)!.deleteRotationClaim(rkey, expectedCid),
       };
       const cloudSeq = await peekCommitSeq(params, store);
       if (cloudSeq !== null && cloudSeq > (await activeStorage.getCommitSeq())) {
@@ -1212,8 +1212,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       getSessionIssue: (groupId) => activeStorage.getSessionIssue(groupId),
       claimStore: {
         get: (rkey) => activePds.getRotationClaim(rkey),
-        put: (rkey, payload) => activePds.putRotationClaim(rkey, payload),
-        del: (rkey) => activePds.deleteRotationClaim(rkey),
+        put: (rkey, payload, expectedCid) => activePds.putRotationClaim(rkey, payload, expectedCid),
+        del: (rkey, expectedCid) => activePds.deleteRotationClaim(rkey, expectedCid),
       } as RotationClaimStore,
       // 宣言 v2：账号级单调 commit 高水位（本地计数随备份走）
       getCommitSeq: () => activeStorage.getCommitSeq(),

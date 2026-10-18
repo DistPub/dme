@@ -19,8 +19,10 @@
  *           （wrapper 可能已超 7 天 TTL 丢失 = 静默失败场景），明确提示
  *           恢复备份；
  *       PDS seq  < 本地 seq → 异常（本地不可能超前），fail-closed taken；
- *   - putRecord 无原子 CAS（last-write-wins）：写后回读比 nonce，把并发
- *     双写窗口压到一个网络往返；
+ *   - putRecord 有原生 CAS（swapRecord：当前记录 CID 比对）+ createRecord
+ *     显式 rkey 的原子 create-if-absent：并发双写时服务端只让先到者成功，
+ *     落败方 CAS 失败 → taken（fail-closed）。nonce 回读保留作兜底
+ *     （防 PDS 实现忽略 swapRecord）；
  *   - commit 成功后宣言保留（高水位），仅投递失败回滚 / commit 失败时
  *     release 删除，避免虚高水位。
  *
@@ -69,14 +71,35 @@ export interface RotationClaim {
   createdAt: string;
 }
 
-/** PDS 记录读写抽象（AppContext 用 DmePds 组装）。 */
+/** 宣言槽位读结果：密文 + 记录 CID（CID 供 CAS 写入/删除比对）。 */
+export interface ClaimSlotRecord {
+  payload: string;
+  cid: string;
+}
+
+/**
+ * 判定 XRPC 错误是否为 CAS 并发冲突（并发落败，非网络/系统故障）：
+ * - putRecord swapRecord 不匹配 → InvalidSwap；
+ * - createRecord 显式 rkey 已存在 → RecordAlreadyExists。
+ */
+export function isClaimCasConflict(err: unknown): boolean {
+  const e = err as { error?: unknown; message?: unknown; body?: unknown };
+  const hay = [e?.error, e?.message, e?.body].filter((s): s is string => typeof s === 'string').join(' ');
+  return /InvalidSwap|RecordAlreadyExists|record already exists/i.test(hay);
+}
+
+/** PDS 记录读写抽象（AppContext 用 DmePds 组装）。全方法 CAS 语义。 */
 export interface RotationClaimStore {
-  /** 读宣言密文；记录不存在返回 null。网络等未知错误应 throw（fail-closed）。 */
-  get(rkey: string): Promise<string | null>;
-  /** 写入/覆盖宣言密文（upsert）。 */
-  put(rkey: string, payload: string): Promise<void>;
-  /** 删除宣言记录（尽力而为）。 */
-  del(rkey: string): Promise<void>;
+  /** 读宣言槽位（密文 + CID）；记录不存在返回 null。网络等未知错误应 throw（fail-closed）。 */
+  get(rkey: string): Promise<ClaimSlotRecord | null>;
+  /**
+   * CAS 写入：expectedCid 为 null → 原子 create-if-absent（槽位已存在则失败）；
+   * 否则仅当当前记录 CID == expectedCid 时写入。返回 false = 并发落败
+   * （他端先写），调用方必须按 taken 处理；网络等未知错误 throw（fail-closed）。
+   */
+  put(rkey: string, payload: string, expectedCid: string | null): Promise<boolean>;
+  /** CAS 删除：仅当当前记录 CID == expectedCid 时删除（尽力而为，失败静默）。 */
+  del(rkey: string, expectedCid: string): Promise<void>;
 }
 
 /**
@@ -135,13 +158,20 @@ function decryptClaim(encKey: Uint8Array, payload: string): RotationClaim | null
   }
 }
 
+/** 读宣言槽位：解密后的声明 + 记录 CID + 原始密文（供备份锁恢复）。 */
+interface ClaimView {
+  claim: RotationClaim | null;
+  cid: string | null;
+  rawPayload: string | null;
+}
+
 async function readClaim(
   params: RotationClaimParams,
   store: RotationClaimStore,
-): Promise<RotationClaim | null> {
-  const payload = await store.get(params.rkey);
-  if (payload === null) return null;
-  return decryptClaim(params.encKey, payload);
+): Promise<ClaimView> {
+  const rec = await store.get(params.rkey);
+  if (rec === null) return { claim: null, cid: null, rawPayload: null };
+  return { claim: decryptClaim(params.encKey, rec.payload), cid: rec.cid, rawPayload: rec.payload };
 }
 
 /** 只读 peek：读取当前高水位 seq（供兄弟端 commit 应用成功后追平本地计数）。 */
@@ -149,7 +179,7 @@ export async function peekCommitSeq(
   params: RotationClaimParams,
   store: RotationClaimStore,
 ): Promise<number | null> {
-  const claim = await readClaim(params, store);
+  const { claim } = await readClaim(params, store);
   if (!claim || claim.seq < 0) return null;
   return claim.seq;
 }
@@ -179,7 +209,7 @@ export async function acquireRotationClaim(
   claim: { groupId: string; epoch: number; localSeq: number },
   store: RotationClaimStore,
 ): Promise<RotationClaimOutcome> {
-  const existing = await readClaim(params, store);
+  const { claim: existing, cid: existingCid } = await readClaim(params, store);
 
   let nextSeq = claim.localSeq + 1;
 
@@ -215,21 +245,24 @@ export async function acquireRotationClaim(
   }
 
   const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-  await store.put(
-    params.rkey,
-    encryptClaim(params.encKey, {
-      seq: nextSeq,
-      groupId: claim.groupId,
-      epoch: claim.epoch,
-      nonce,
-      createdAt: new Date().toISOString(),
-    }),
-  );
+  const payload = encryptClaim(params.encKey, {
+    seq: nextSeq,
+    groupId: claim.groupId,
+    epoch: claim.epoch,
+    nonce,
+    createdAt: new Date().toISOString(),
+  });
 
-  // putRecord 无原子 CAS（last-write-wins）：回读比对 nonce，
-  // 把并发双写窗口从「poll 间隔」压缩到一个网络往返
+  // CAS 写入（原子仲裁）：槽位为空走 createRecord 显式 rkey 的
+  // create-if-absent；槽位已有记录走 putRecord swapRecord 比对读到的 CID。
+  // 并发双写时服务端只让先到者成功，落败方拿到 false → taken（fail-closed），
+  // 「双端同时通过」在服务端串行化下不再可能。
+  const written = await store.put(params.rkey, payload, existingCid);
+  if (!written) return { verdict: 'taken', seq: nextSeq };
+
+  // 兜底回读比 nonce：防 PDS 实现忽略 swapRecord（CAS 未生效）
   const verify = await readClaim(params, store);
-  if (!verify || verify.nonce !== nonce) return { verdict: 'taken', seq: nextSeq };
+  if (!verify.claim || verify.claim.nonce !== nonce) return { verdict: 'taken', seq: nextSeq };
   return { verdict: 'acquired', seq: nextSeq };
 }
 
@@ -242,7 +275,11 @@ export async function releaseRotationClaim(
   store: RotationClaimStore,
 ): Promise<void> {
   try {
-    await store.del(params.rkey);
+    // CAS 删除：先读当前记录 CID，仅当记录未被兄弟端改写时才删——
+    // 若并发期间兄弟端已落新高水位，CAS 失败、其记录原样保留
+    const { cid } = await readClaim(params, store);
+    if (cid === null) return;
+    await store.del(params.rkey, cid);
   } catch {
     // 删除失败无碍：崩溃残留由「同会话 epoch 未超前」判别 + TTL 兜底
   }
@@ -291,7 +328,8 @@ export async function acquireBackupLock(
   store: RotationClaimStore,
 ): Promise<BackupLockOutcome> {
   const previousPayload = await store.get(params.rkey);
-  const existing = previousPayload === null ? null : decryptClaim(params.encKey, previousPayload);
+  const existing = previousPayload === null ? null : decryptClaim(params.encKey, previousPayload.payload);
+  const existingCid = previousPayload?.cid ?? null;
 
   if (existing && existing.seq > localSeq) {
     const age = Date.now() - Date.parse(existing.createdAt);
@@ -309,24 +347,30 @@ export async function acquireBackupLock(
 
   // seq <= localSeq（一致或残留旧锁）→ 允许备份，持锁挡窗
   const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-  await store.put(
-    params.rkey,
-    encryptClaim(params.encKey, {
-      seq: localSeq + 1, // 仅作为互斥信号；释放时恢复原记录，不保留
-      groupId: 'backup',
-      epoch: 0,
-      nonce,
-      createdAt: new Date().toISOString(),
-    }),
-  );
+  const lockPayload = encryptClaim(params.encKey, {
+    seq: localSeq + 1, // 仅作为互斥信号；释放时恢复原记录，不保留
+    groupId: 'backup',
+    epoch: 0,
+    nonce,
+    createdAt: new Date().toISOString(),
+  });
 
-  // putRecord 无原子 CAS：回读比对 nonce，压缩并发双写窗口
-  const verify = await readClaim(params, store);
-  if (!verify || verify.nonce !== nonce) {
-    // 并发落败：无法安全持锁，按 busy 处理（原记录可能已被改写，也无法恢复）
-    return { verdict: 'busy', seq: verify?.seq ?? localSeq + 1 };
+  // CAS 写入：与 commit 宣言同款原子仲裁，并发落败 → busy
+  const written = await store.put(params.rkey, lockPayload, existingCid);
+  if (!written) {
+    return { verdict: 'busy', seq: existing?.seq ?? localSeq + 1 };
   }
-  return { verdict: 'acquired', handle: { params, nonce, previousPayload } };
+
+  // 兜底回读比 nonce：防 PDS 实现忽略 swapRecord
+  const verify = await readClaim(params, store);
+  if (!verify.claim || verify.claim.nonce !== nonce) {
+    // 并发落败：无法安全持锁，按 busy 处理（原记录可能已被改写，也无法恢复）
+    return { verdict: 'busy', seq: verify.claim?.seq ?? localSeq + 1 };
+  }
+  return {
+    verdict: 'acquired',
+    handle: { params, nonce, previousPayload: previousPayload?.payload ?? null },
+  };
 }
 
 /**
@@ -339,14 +383,17 @@ export async function releaseBackupLock(
   store: RotationClaimStore,
 ): Promise<void> {
   try {
-    const currentPayload = await store.get(handle.params.rkey);
-    if (currentPayload === null) return; // 已被外力删除，无可恢复
-    const current = decryptClaim(handle.params.encKey, currentPayload);
+    const currentRecord = await store.get(handle.params.rkey);
+    if (currentRecord === null) return; // 已被外力删除，无可恢复
+    const current = decryptClaim(handle.params.encKey, currentRecord.payload);
     if (!current || current.nonce !== handle.nonce) return; // 已易主，保留现状
     if (handle.previousPayload === null) {
-      await store.del(handle.params.rkey);
+      // CAS 删除：期间兄弟端落了新高水位则失败、其记录原样保留
+      await store.del(handle.params.rkey, currentRecord.cid);
     } else {
-      await store.put(handle.params.rkey, handle.previousPayload);
+      // CAS 恢复占用前的记录内容：期间被改写则失败、保留改写者记录
+      const restored = await store.put(handle.params.rkey, handle.previousPayload, currentRecord.cid);
+      void restored;
     }
   } catch {
     // 释放失败最坏后果：锁记录 TTL 后过期，epoch=0 被判别为崩溃残留抢占

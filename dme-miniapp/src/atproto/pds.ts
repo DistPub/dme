@@ -13,6 +13,7 @@ import { DME_ENVELOPE_NSID } from '../protocol/index';
 import { DME_BACKUP_NSID } from '../protocol/types';
 import type { IdentityBackupRecord, RotationClaimRecord } from '../protocol/types';
 import { DME_ROTATION_CLAIM_NSID } from '../protocol/types';
+import { isClaimCasConflict, type ClaimSlotRecord } from '../crypto/rotation-claim';
 import { joinUrl, xrpcGetJson, xrpcPostBytes, xrpcPostJson } from '../platform/http';
 import { isUnauthorized, type DmeSession } from './session';
 import { HttpError } from '../platform/http';
@@ -261,34 +262,62 @@ export class DmePds {
   // -----------------------------------------------------------------------
 
   /**
-   * 写入/覆盖轮换宣言记录（upsert，rkey 由 pre-commit exporterSecret 派生）。
-   * 注意：atproto putRecord 是 last-write-wins、无原子 CAS，并发双写由
-   * rotation-claim 的回读比对 nonce 兑底。
+   * CAS 写入轮换宣言记录（小程序手写 XRPC 版）。
+   * - expectedCid === null：槽位应为空 → createRecord 显式 rkey（原子
+   *   create-if-absent，槽位已被并发写入时服务端报错）；
+   * - 否则：putRecord + swapRecord=expectedCid（仅当当前记录 CID 未变才写入）。
+   *
+   * 返回 false = 并发落败（CAS 失败，他端先写了）——调用方必须按 taken
+   * 处理、fail-closed 放弃本周期；网络等未知错误 throw（fail-closed）。
    */
-  async putRotationClaim(rkey: string, payload: string): Promise<void> {
-    await this.authedPost(
-      joinUrl(this.session.pdsUrlStr, 'xrpc/com.atproto.repo.putRecord'),
-      {
-        repo: this.session.did,
-        collection: DME_ROTATION_CLAIM_NSID,
-        rkey,
-        record: {
-          $type: DME_ROTATION_CLAIM_NSID,
-          payload,
-          createdAt: new Date().toISOString(),
-        },
-      },
-    );
+  async putRotationClaim(rkey: string, payload: string, expectedCid: string | null): Promise<boolean> {
+    const record = {
+      $type: DME_ROTATION_CLAIM_NSID,
+      payload,
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      if (expectedCid === null) {
+        await this.authedPost(
+          joinUrl(this.session.pdsUrlStr, 'xrpc/com.atproto.repo.createRecord'),
+          {
+            repo: this.session.did,
+            collection: DME_ROTATION_CLAIM_NSID,
+            rkey,
+            record,
+          },
+        );
+      } else {
+        await this.authedPost(
+          joinUrl(this.session.pdsUrlStr, 'xrpc/com.atproto.repo.putRecord'),
+          {
+            repo: this.session.did,
+            collection: DME_ROTATION_CLAIM_NSID,
+            rkey,
+            record,
+            // atproto 原生 CAS：当前记录 CID 与 swapRecord 不一致即拒绝写入
+            swapRecord: expectedCid,
+          },
+        );
+      }
+      return true;
+    } catch (err) {
+      if (isClaimCasConflict(err)) return false;
+      throw err;
+    }
   }
 
   /**
-   * 读取轮换宣言密文。记录不存在返回 null；网络/鉴权等未知错误抛出
-   * （调用方 fail-closed：宣言不可用时不 commit）。仅「确认记录不存在」
-   * 的 XRPC 错误（400/404）折叠为 null。
+   * 读取轮换宣言密文 + 记录 CID（供 CAS 写入）。记录不存在返回 null；
+   * 网络/鉴权等未知错误抛出（调用方 fail-closed：宣言不可用时不 commit）。
+   * 仅「确认记录不存在」的 XRPC 错误（400/404）折叠为 null。
    */
-  async getRotationClaim(rkey: string): Promise<string | null> {
+  async getRotationClaim(rkey: string): Promise<ClaimSlotRecord | null> {
     try {
-      const result = await this.authedGet<{ value: RotationClaimRecord }>(
+      const result = await this.authedGet<{
+        cid?: string;
+        value?: RotationClaimRecord;
+      }>(
         joinUrl(
           this.session.pdsUrlStr,
           'xrpc/com.atproto.repo.getRecord?repo=' +
@@ -299,7 +328,9 @@ export class DmePds {
             encodeURIComponent(rkey),
         ),
       );
-      return result.value?.payload ?? null;
+      if (!result.value?.payload) return null;
+      // cid 理论上必在；缺省给空串 → CAS 比对必失败 → taken（fail-closed 安全）
+      return { payload: result.value.payload, cid: result.cid ?? '' };
     } catch (err) {
       if (err instanceof HttpError && (err.status === 400 || err.status === 404)) {
         return null;
@@ -308,8 +339,12 @@ export class DmePds {
     }
   }
 
-  /** 删除轮换宣言记录（尽力而为，不存在时静默忽略）。 */
-  async deleteRotationClaim(rkey: string): Promise<void> {
+  /**
+   * CAS 删除轮换宣言记录：仅当当前记录仍是 expectedCid 对应的那条才删除，
+   * 防止误删兄弟端刚落的高水位（并发写入后本端回滚删槽的场景）。
+   * 尽力而为，不存在/已易主/网络失败均静默忽略。
+   */
+  async deleteRotationClaim(rkey: string, expectedCid: string): Promise<void> {
     try {
       await this.authedPost(
         joinUrl(this.session.pdsUrlStr, 'xrpc/com.atproto.repo.deleteRecord'),
@@ -317,10 +352,11 @@ export class DmePds {
           repo: this.session.did,
           collection: DME_ROTATION_CLAIM_NSID,
           rkey,
+          swapRecord: expectedCid,
         },
       );
     } catch {
-      // 尽力而为：epoch 换代后槽位不再被读取，删除失败无碍
+      // 尽力而为：删除失败时残留记录由「同会话 epoch 未超前」判别 + TTL 兜底
     }
   }
 

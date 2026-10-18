@@ -915,15 +915,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, [storage, backupIdentity]);
 
   /**
-   * 宣言存储（rotation-claim.ts v2）：槽位由身份签名公钥稳定派生，
-   * 账号级恒定，全端共享这一份读写入口。
+   * 宣言存储（rotation-claim.ts v2，CAS 仲裁）：槽位由身份签名公钥稳定
+   * 派生，账号级恒定，全端共享这一份读写入口。put/del 走 atproto 原生
+   * CAS（swapRecord / createRecord-if-absent），并发双写服务端只让先到者
+   * 成功，落败方 fail-closed。
    */
   const claimStore = useMemo<RotationClaimStore | null>(() => {
     if (!pds) return null;
     return {
       get: (rkey) => pds.getRotationClaim(rkey),
-      put: (rkey, payload) => pds.putRotationClaim(rkey, payload),
-      del: (rkey) => pds.deleteRotationClaim(rkey),
+      put: (rkey, payload, expectedCid) => pds.putRotationClaim(rkey, payload, expectedCid),
+      del: (rkey, expectedCid) => pds.deleteRotationClaim(rkey, expectedCid),
     };
   }, [pds]);
 

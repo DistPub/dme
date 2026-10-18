@@ -1138,6 +1138,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await activeStorage.setBlockList(data.blockList);
       setBlockList(data.blockList);
 
+      await activeStorage.setCommitSeq(data.commitSeq ?? 0);
+
+      // 缺口⑨修复：恢复后状态整体重建，旧的脱钩/兄弟轮换标记作废；
+      // 必须在 setChatListVersion 之前清，否则 chat-list 页面 effect 监听
+      // chatListVersion 首次跑会读到 storage 旧标记写进 React state，之
+      // 后没人再触发 setChatListVersion 重跑（收发正常路径不触发）→ 横
+      // 幅永久卡住直到下次输密码恢复
+      await activeStorage.clearAllSessionIssues();
+
       setGroups(Object.keys(data.mlsSessions));
       setChatListVersion((v) => v + 1);
 
@@ -1149,12 +1158,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setReceivedGroupInvites(
         reconciledInvites.filter((i) => i.inviteeDid === (sessionRef.current ?? session)?.did),
       );
-      // 恢复后状态整体重建，旧的脱钩/兄弟轮换标记作废；
       // 1.2：恢复时也输过密码，同样记住（用户拍板）
       await saveBackupPassword(password);
       await activeStorage.setBackupRequired(false);
       setBackupRequiredState(false);
-      await activeStorage.clearAllSessionIssues();
 
       return true;
     },

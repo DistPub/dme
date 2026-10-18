@@ -1073,6 +1073,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.setBlockList(data.blockList);
     setBlockList(data.blockList);
 
+    // 恢复账号级 commit 高水位（宣言 v2 比对基准；旧备份无此字段 → 0）
+    await storage.setCommitSeq(data.commitSeq ?? 0);
+    // 缺口⑨修复：恢复后状态整体重建（会话来自备份），旧的脱钩/兄弟轮换
+    // 标记作废——必须在 setChatListVersion 之前清，否则 ChatListScreen
+    // effect 监听 chatListVersion 首次跑会读到 storage 旧标记写进 React
+    // state，之后没人再触发 setChatListVersion 重跑（收发正常路径不触发）
+    // → 横幅永久卡住直到下次输密码恢复
+    await storage.clearAllSessionIssues();
+
     // 更新会话列表
     setGroups(Object.keys(data.mlsSessions));
     setChatListVersion((v) => v + 1);
@@ -1086,10 +1095,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await saveBackupPassword(password);
     await storage.setBackupRequired(false);
     setBackupRequiredState(false);
-    // 恢复账号级 commit 高水位（宣言 v2 比对基准；旧备份无此字段 → 0）
-    await storage.setCommitSeq(data.commitSeq ?? 0);
-    // 恢复后状态整体重建（会话来自备份），旧的脱钩/兄弟轮换标记作废
-    await storage.clearAllSessionIssues();
 
     return true;
   }, [pds, storage, poller, session]);

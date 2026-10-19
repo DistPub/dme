@@ -62,7 +62,8 @@ import {
 } from '../crypto/keypackage';
 import type { KeyPackagePair } from '../crypto/keypackage';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
-import { encryptBackup, decryptBackup, type FullBackupData } from '../crypto/backup';
+import { encryptBackup, decryptBackup, computeSessionFingerprints, cloudHasUnknownSessions, type FullBackupData } from '../crypto/backup';
+import { getOrCreateDeviceId, getPlatformLabel, formatDeviceLabel } from '../utils/device-id';
 import { bytesToBase64url, base64urlToBytes, bytesToHex, hexToBytes } from '../crypto/utils';
 import {
   generateFileId,
@@ -84,6 +85,7 @@ import type {
   FileMeta,
 } from '../protocol/types';
 import { FILE_MANIFEST_TYPE } from '../protocol/types';
+import type { BackupMeta } from '../protocol/types';
 import type { ReactionMessage } from '../protocol/reaction';
 import { playMessageSound } from '../utils/sound';
 import {
@@ -243,6 +245,13 @@ interface AppActions {
   setupIdentity: () => Promise<void>;
   declareKeys: (plcToken: string) => Promise<void>;
   backupIdentity: (password: string) => Promise<void>;
+  /**
+   * 覆盖提示（方案C，只提示不阻断）：读取云端备份外层元数据，判断
+   * 「云端有本机没有的会话」差异。返回 null = 云端无备份/元数据缺失/
+   * 读取失败（提示是尽力而为，绝不因此阻断备份）；conflict=true 时
+   * UI 弹确认，用户确认后仍正常备份。
+   */
+  peekBackupConflict: () => Promise<{ conflict: boolean; deviceLabel: string; writtenAt: string } | null>;
   backupIdentityGuarded: (password: string) => Promise<void>;
   backupIdentityForced: (password: string) => Promise<void>;
   restoreIdentityFromBackup: (password: string) => Promise<boolean>;
@@ -919,7 +928,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       };
 
       const encryptedData = encryptBackup(data, password);
-      await activePds.putIdentityBackup(encryptedData);
+      // 方案C外层元数据：设备短码 + 平台 + 会话指纹。只供覆盖提示与展示，
+      // 恢复流程不读它；构建失败不应阻断备份本体（元数据尽力而为）。
+      let meta: BackupMeta | undefined;
+      try {
+        meta = {
+          deviceId: await getOrCreateDeviceId(),
+          platform: getPlatformLabel(),
+          sessionFps: computeSessionFingerprints(groupIds, activeKeys.signing.privateKey),
+        };
+      } catch (metaErr) {
+        console.warn('[dme:backup] 构建 meta 失败，降级无 meta 写入:', metaErr);
+      }
+      await activePds.putIdentityBackup(encryptedData, meta);
 
       // 1.2：备份成功即记住密码（小程序仅会话内存），供轮换后静默刷新备份（1.5）；
       // 并清除「必须备份」强提示标记
@@ -936,10 +957,35 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const triggerBackupAfterAdvance = useCallback(
     async (tag: string): Promise<void> => {
       const activeStorage = storageRef.current ?? storage;
-      if (!activeStorage) return;
+      const activePds = pdsRef.current ?? pds;
+      const activeKeys = identityKeysRef.current ?? identityKeys;
+      if (!activeStorage || !activePds || !activeKeys) return;
       try {
         const cachedPassword = await getBackupPassword();
         if (cachedPassword) {
+          // 方案C：写入前比对外层元数据指纹——云端有本机没有的会话时跳过
+          // 自动写入（无人值守场景不能覆盖掉兄弟端刚写的新备份），置
+          // backupRequired 引导手动备份（手动入口有确认弹窗把关）。
+          // 无差异 / 云端是自己写的 / 元数据缺失（旧记录或读取失败）→
+          // 正常写入，绝不阻断。比对失败也放行（尽力而为）。
+          try {
+            const record = await activePds.getIdentityBackupRecord();
+            const meta = record?.meta;
+            if (
+              meta &&
+              meta.deviceId !== (await getOrCreateDeviceId()) &&
+              cloudHasUnknownSessions(meta, await activeStorage.listGroups(), activeKeys.signing.privateKey)
+            ) {
+              console.warn(
+                `[dme:backup] 云端备份（由 ${formatDeviceLabel(meta)} 写入）含本机没有的会话，${tag} 后自动刷新跳过，待手动处理`,
+              );
+              await activeStorage.setBackupRequired(true);
+              setBackupRequiredState(true);
+              return;
+            }
+          } catch (peekErr) {
+            console.warn('[dme:backup] 覆盖提示比对失败，继续自动备份:', peekErr);
+          }
           await backupIdentity(cachedPassword);
           console.log(`[dme:backup] ${tag} 后已静默刷新备份`);
         } else {
@@ -953,6 +999,32 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
     },
     [storage, backupIdentity],
+  );
+
+  /** 覆盖提示（方案C）：见 AppActions.peekBackupConflict 注释。 */
+  const peekBackupConflict = useCallback(
+    async (): Promise<{ conflict: boolean; deviceLabel: string; writtenAt: string } | null> => {
+      const activeStorage = storageRef.current ?? storage;
+      const activePds = pdsRef.current ?? pds;
+      const activeKeys = identityKeysRef.current ?? identityKeys;
+      if (!activeStorage || !activePds || !activeKeys) return null;
+      try {
+        const record = await activePds.getIdentityBackupRecord();
+        const meta = record?.meta;
+        if (!meta) return null; // 旧记录 / 无元数据：无从判断，降级放行
+        const conflict =
+          meta.deviceId !== (await getOrCreateDeviceId()) &&
+          cloudHasUnknownSessions(meta, await activeStorage.listGroups(), activeKeys.signing.privateKey);
+        return {
+          conflict,
+          deviceLabel: formatDeviceLabel(meta),
+          writtenAt: record?.createdAt ?? '',
+        };
+      } catch {
+        return null; // 读取失败：提示尽力而为，绝不阻断
+      }
+    },
+    [pds, identityKeys, storage],
   );
 
   /**
@@ -3544,6 +3616,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       declareKeys: declareKeysAction,
       backupIdentity,
       backupIdentityGuarded,
+      peekBackupConflict,
       backupIdentityForced,
       restoreIdentityFromBackup,
       hasIdentityBackup,

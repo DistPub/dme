@@ -65,6 +65,7 @@ export default function SettingsPage(): React.JSX.Element {
     setSoundEnabled,
     backupIdentity,
     backupIdentityGuarded,
+    peekBackupConflict,
     backupIdentityForced,
     restoreIdentityFromBackup,
   } = useApp();
@@ -163,6 +164,23 @@ export default function SettingsPage(): React.JSX.Element {
       setError(t('settings.passwordMismatch'));
       return;
     }
+    // 方案C覆盖提示（只提示不阻断）：云端有本机没有的会话时先弹原生
+    // confirm，用户确认后才继续。提示读取失败不阻断，直接备份。
+    try {
+      const hint = await peekBackupConflict();
+      if (hint?.conflict) {
+        const time = hint.writtenAt ? new Date(hint.writtenAt).toLocaleString() : '';
+        const res = await Taro.showModal({
+          title: t('settings.coverConfirmTitle'),
+          content: t('settings.coverWarning', { device: hint.deviceLabel, time }),
+          confirmText: t('settings.coverConfirm'),
+          cancelText: t('common.cancel'),
+        });
+        if (!res.confirm) return;
+      }
+    } catch {
+      // 尽力而为
+    }
     setBusy(true);
     try {
       // ⚠️ 先展示原生 loading 再进入 backupIdentity：
@@ -194,7 +212,7 @@ export default function SettingsPage(): React.JSX.Element {
       Taro.hideLoading();
       setBusy(false);
     }
-  }, [password, confirmPassword, backupIdentityGuarded, t]);
+  }, [password, confirmPassword, backupIdentityGuarded, peekBackupConflict, t]);
 
   // ---- 强制备份（接管高水位，对应 web handleForceBackup） ----------------
   // 仅当产生高水位的设备已丢失且密钥材料未备份时使用。两段确认：第一段

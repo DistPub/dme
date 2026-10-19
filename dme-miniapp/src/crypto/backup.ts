@@ -19,11 +19,13 @@
 import { gcm } from '@noble/ciphers/aes';
 import { pbkdf2 } from '@noble/hashes/pbkdf2';
 import { sha256 } from '@noble/hashes/sha256';
+import { hmac } from '@noble/hashes/hmac';
 import { utf8ToBytes } from '@noble/hashes/utils';
 import { bytesToBase64url, base64urlToBytes } from './utils';
 import type { IdentityKeys } from './identity';
 import type { KeyPackagePoolEntry } from '../storage/db';
 import type { GroupInfo } from '../protocol/group-message';
+import type { BackupMeta } from '../protocol/types';
 
 /** PBKDF2 迭代次数。 */
 const PBKDF2_ITERATIONS = 100000;
@@ -182,4 +184,25 @@ export function decryptBackup(encryptedData: string, password: string): FullBack
 
   const json = new TextDecoder().decode(plaintext);
   return deserializeFullBackupData(json);
+}
+
+/**
+ * 会话指纹（外层元数据用）：groupId 经 HMAC-SHA256 后截短编码。
+ * key 用身份签名私钥（Ed25519 seed）——账号级稳定、不依赖备份密码，
+ * 云端只能比对「是否包含某会话」，无法从指纹还原 groupId 列表。
+ */
+export function computeSessionFingerprints(groupIds: string[], signingPrivateKey: Uint8Array): string[] {
+  return groupIds.map((gid) =>
+    bytesToBase64url(hmac(sha256, signingPrivateKey, utf8ToBytes(gid)).slice(0, 10)),
+  );
+}
+
+/**
+ * 云端备份元数据是否包含本机没有的会话（覆盖提示依据）。
+ * 只看「云端有、本机无」一个方向：本机比云端多的会话是本机新进的，
+ * 覆盖正是传播它，无需提示。纯外层比对，不解密、不依赖备份密码。
+ */
+export function cloudHasUnknownSessions(meta: BackupMeta, localGroupIds: string[], signingPrivateKey: Uint8Array): boolean {
+  const localFps = new Set(computeSessionFingerprints(localGroupIds, signingPrivateKey));
+  return (meta.sessionFps ?? []).some((fp) => !localFps.has(fp));
 }

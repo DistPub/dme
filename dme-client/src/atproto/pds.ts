@@ -15,7 +15,7 @@ import type { Agent } from '@atproto/api';
 import type { DmeEnvelope } from '../protocol/index';
 import { DME_ENVELOPE_NSID } from '../protocol/index';
 import { DME_BACKUP_NSID } from '../protocol/types';
-import type { IdentityBackupRecord, RotationClaimRecord } from '../protocol/types';
+import type { IdentityBackupRecord, RotationClaimRecord, BackupMeta } from '../protocol/types';
 import { DME_ROTATION_CLAIM_NSID } from '../protocol/types';
 import { isClaimCasConflict, type ClaimSlotRecord } from '../crypto/rotation-claim';
 
@@ -133,8 +133,10 @@ export class DmePds {
 
   /**
    * 将加密的身份私钥备份写入 PDS（upsert，rkey 固定为 "self"）。
+   * meta 为外层明文元数据（设备短码 / 平台 / 会话指纹），仅供展示与
+   * 覆盖提示，恢复流程不读它；缺省时不写字段（向后兼容旧记录）。
    */
-  async putIdentityBackup(encryptedData: string): Promise<void> {
+  async putIdentityBackup(encryptedData: string, meta?: BackupMeta): Promise<void> {
     await this.agent.com.atproto.repo.putRecord({
       repo: this.agent.assertDid,
       collection: DME_BACKUP_NSID,
@@ -143,6 +145,7 @@ export class DmePds {
         $type: DME_BACKUP_NSID,
         encryptedData,
         createdAt: new Date().toISOString(),
+        ...(meta ? { meta } : {}),
       },
     });
   }
@@ -159,6 +162,23 @@ export class DmePds {
       });
       const record = result.data.value as IdentityBackupRecord;
       return record.encryptedData;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 读取完整备份记录（含外层明文元数据，供覆盖提示比对）。
+   * 不存在或读取失败时返回 null——提示是尽力而为，绝不阻断备份。
+   */
+  async getIdentityBackupRecord(): Promise<IdentityBackupRecord | null> {
+    try {
+      const result = await this.agent.com.atproto.repo.getRecord({
+        repo: this.agent.assertDid,
+        collection: DME_BACKUP_NSID,
+        rkey: 'self',
+      });
+      return result.data.value as IdentityBackupRecord;
     } catch {
       return null;
     }

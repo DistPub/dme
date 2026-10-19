@@ -120,10 +120,26 @@ export const ENVELOPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const DME_BACKUP_NSID = 'dme.backup.identity' as const;
 
 /** PDS record storing password-encrypted identity private keys. */
+/**
+ * 备份记录外层明文元数据：只做展示与覆盖提示，不做机器方向判定，
+ * 恢复流程完全不读它（永不随恢复流转）。会话指纹用身份签名私钥派生
+ * 的 HMAC key 计算，云端只能比对「是否包含某会话」，不泄露 groupId。
+ */
+export interface BackupMeta {
+  /** 设备短码（安装期随机生成、持久化于本机 storage，不进加密载荷）。 */
+  deviceId: string;
+  /** 平台标签：web / ios / android / miniapp。 */
+  platform: string;
+  /** 全部本机会话的 HMAC 指纹（与加密载荷内的会话集合一致）。 */
+  sessionFps: string[];
+}
+
 export interface IdentityBackupRecord {
   $type: 'dme.backup.identity';
   encryptedData: string;
   createdAt: string;
+  /** 外层明文元数据（2026-10-19 起）。旧记录无此字段 → 视为 unknown，提示逻辑降级放行。 */
+  meta?: BackupMeta;
 }
 
 /** Lexicon NSID for the key-rotation claim record. */

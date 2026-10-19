@@ -100,19 +100,13 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     await app.setKeyRotationIntervalMs(ms);
   };
 
-  const handleBackup = async (): Promise<void> => {
-    setBackupError(null);
-    if (!backupPwd) {
-      setBackupError(t('settings.enterPassword'));
-      return;
-    }
-    if (backupPwd !== backupPwdConfirm) {
-      setBackupError(t('settings.passwordMismatch'));
-      return;
-    }
+  const [coverWarning, setCoverWarning] = useState<{ deviceLabel: string; writtenAt: string } | null>(null);
+
+  const doBackup = async (): Promise<void> => {
     setBackupStatus('backing_up');
     try {
       await app.backupIdentityGuarded(backupPwd);
+      setCoverWarning(null);
       setBackupStatus('done');
       setBackupPwd('');
       setBackupPwdConfirm('');
@@ -132,6 +126,35 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       setBackupStatus('error');
       setTimeout(() => setBackupStatus('idle'), 2000);
     }
+  };
+
+  const handleBackup = async (): Promise<void> => {
+    setBackupError(null);
+    if (!backupPwd) {
+      setBackupError(t('settings.enterPassword'));
+      return;
+    }
+    if (backupPwd !== backupPwdConfirm) {
+      setBackupError(t('settings.passwordMismatch'));
+      return;
+    }
+    // 方案C覆盖提示（只提示不阻断）：云端有本机没有的会话时先展示警告，
+    // 二次确认才执行。提示失败（网络等）不阻断，直接备份。
+    if (coverWarning) {
+      setCoverWarning(null);
+      await doBackup();
+      return;
+    }
+    try {
+      const hint = await app.peekBackupConflict();
+      if (hint?.conflict) {
+        setCoverWarning(hint);
+        return;
+      }
+    } catch {
+      // 尽力而为
+    }
+    await doBackup();
   };
 
   // 强制备份（接管高水位）：仅当产生高水位的设备已丢失且密钥材料未备份时
@@ -390,6 +413,23 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         />
         {backupError ? (
           <Text style={styles.error}>{backupError}</Text>
+        ) : null}
+
+        {coverWarning ? (
+          <View style={styles.forceBackupWrap}>
+            <Text style={styles.hint}>
+              {t('settings.coverWarning', {
+                device: coverWarning.deviceLabel,
+                time: coverWarning.writtenAt ? new Date(coverWarning.writtenAt).toLocaleString() : '',
+              })}
+            </Text>
+            <Button
+              label={t('settings.coverConfirm')}
+              onPress={handleBackup}
+              variant="secondary"
+              style={styles.fullButton}
+            />
+          </View>
         ) : null}
 
         {claimStale ? (

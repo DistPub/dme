@@ -14,6 +14,7 @@
 
 import { Platform } from 'react-native';
 import { storage } from '../storage/backend';
+import { isEmbedContext } from '../embed/protocol';
 import { bytesToBase64url } from '../crypto/utils';
 
 const DEVICE_ID_KEY = 'dme.deviceId';
@@ -34,9 +35,15 @@ export async function getOrCreateDeviceId(): Promise<string> {
   return id;
 }
 
-/** 平台标签：web / ios / android / miniapp（miniapp 端由自己的实现覆盖）。 */
+/**
+ * 平台标签：web / ios / android。
+ * fatesky iframe 嵌入模式的 web 端单独标记为 fatesky-embed-web——
+ * 它与独立 web 的存储/会话生命周期不同（storage 代管 + token 注入），
+ * 覆盖提示里区分开，测试时一眼可辨。isEmbedContext() 模块加载时求值
+ * 且 iframe 上下文终身不变，无需动态切换。
+ */
 export function getPlatformLabel(): string {
-  return Platform.OS;
+  return isEmbedContext() ? 'fatesky-embed-web' : Platform.OS;
 }
 
 /** 弹窗展示标签，如「ios-M3XP」「web-K7Q2M4XA」。 */

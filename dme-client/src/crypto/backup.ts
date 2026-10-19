@@ -201,31 +201,41 @@ export const BACKUP_COVER_DIFF = 'BACKUP_COVER_DIFF';
  * 本机比对，防止本机用缺失会话的旧状态覆盖云端新备份（缺口②：宣言
  * 水位只度量 commit，看不见「备份内容变了但水位没动」）。
  *
- * 三分支规则：
+ * 分支规则：
  *   - 云端有、本机无、本机有墓碑   → 本机领先（我删的），放行；
- *   - 云端有、本机无、本机无墓碑   → 本机落后，抛 BACKUP_COVER_DIFF（引导恢复）；
+ *   - 云端有、本机无、本机无墓碑：
+ *     · 本机 commitSeq > 云端备份 commitSeq → 云端备份是过期快照（其会话
+ *       集合停留在更早的 commit 时期），本机 commit 历史更新，放行覆盖。
+ *       与宣言 v2「单调高水位，高水位状态权威」同一仲裁方向。实测死锁：
+ *       历史删除（墓碑功能上线前）+ 兄弟端旧状态回写云端 → cloud-only
+ *       永远无墓碑 → 拦下引导恢复 → 恢复清掉本机新会话 → 死循环。
+ *     · 否则（seq 相等或更低）→ 本机可能落后，抛 BACKUP_COVER_DIFF。
  *   - 本机有、云端无、云端有墓碑   → 其他设备已删除，本机落后，抛 BACKUP_COVER_DIFF；
  *   - 本机有、云端无、云端无墓碑   → 本机领先（新会话），放行（全量收敛负责传播）。
  *
  * @param cloud            - 解密后的云端现有备份（调用方负责先 decrypt）。
  * @param localGroupIds    - 本机当前会话列表。
  * @param localTombstones  - 本机墓碑列表。
- * @throws Error(BACKUP_COVER_DIFF) 集合分叉且无法用墓碑解释时。
+ * @param localCommitSeq   - 本机账号级 commit 高水位（旧实现无此参数前默认 0 语义由调用方保证）。
+ * @throws Error(BACKUP_COVER_DIFF) 集合分叉且无法用墓碑 / 水位解释时。
  */
 export function checkBackupCoverage(
   cloud: FullBackupData,
   localGroupIds: string[],
   localTombstones: Tombstone[],
+  localCommitSeq: number,
 ): void {
   const cloudGroupIds = Object.keys(cloud.mlsSessions);
   const localSet = new Set(localGroupIds);
   const localTombstoned = new Set(localTombstones.map((t) => t.groupId));
   const cloudTombstoned = new Set((cloud.tombstones ?? []).map((t) => t.groupId));
+  // 旧备份无 commitSeq 字段 → 视为 0（本机任何 commit 历史都算更新）。
+  const cloudCommitSeq = cloud.commitSeq ?? 0;
 
   for (const gid of cloudGroupIds) {
-    if (!localSet.has(gid) && !localTombstoned.has(gid)) {
-      throw new Error(BACKUP_COVER_DIFF);
-    }
+    if (localSet.has(gid) || localTombstoned.has(gid)) continue;
+    if (localCommitSeq > cloudCommitSeq) continue; // 云端备份过期，本机状态更权威
+    throw new Error(BACKUP_COVER_DIFF);
   }
   for (const gid of localGroupIds) {
     if (!cloudGroupIds.includes(gid) && cloudTombstoned.has(gid)) {

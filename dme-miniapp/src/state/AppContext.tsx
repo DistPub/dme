@@ -919,7 +919,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const existingEncrypted = await activePds.getIdentityBackup();
       if (existingEncrypted && !opts?.skipCoverageCheck) {
         const cloud = decryptBackup(existingEncrypted, password);
-        checkBackupCoverage(cloud, groupIds, tombstones);
+        checkBackupCoverage(cloud, groupIds, tombstones, await activeStorage.getCommitSeq());
       }
 
       const data: FullBackupData = {

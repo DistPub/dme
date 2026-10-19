@@ -1048,6 +1048,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.putIdentityKeys(data.identity);
     setIdentityKeys(data.identity);
 
+    // 全量收敛：以云端备份为权威快照，删除本机多出来的会话。备份不含
+    // 信令的账号级事实（如单方面删除好友）只能靠备份携带——恢复若只做
+    // 合并，本机残留的会话会让已删好友复活（实测：a 删好友并备份，b 恢复
+    // 后好友仍在列表且仍可解密收发）。连带清理消息、轮换时间戳、poller
+    // 会话与孤儿群元数据；sessionIssue / queueId LRU 下面已有全局清理。
+    const backupGroupIds = new Set(Object.keys(data.mlsSessions));
+    for (const gid of await storage.listGroups()) {
+      if (backupGroupIds.has(gid)) continue;
+      poller.removeSession(gid);
+      await storage.deleteMlsSession(gid);
+      await storage.deleteMessages(gid);
+      await storage.deleteRaw(`rotationAt:${gid}`);
+      console.info('restoreIdentityFromBackup: removed local group not in backup', gid);
+    }
+    for (const info of await storage.listGroupInfos()) {
+      if (!backupGroupIds.has(info.groupId)) {
+        await storage.deleteGroupInfo(info.groupId);
+      }
+    }
+
     // 恢复 MLS sessions 并加载到 poller；同时写回轮换时间戳——否则多端
     // 同时恢复后 lastRotationAt 全部归零，又同时到期、同时轮换、再撞槽
     for (const [groupId, serialized] of Object.entries(data.mlsSessions)) {

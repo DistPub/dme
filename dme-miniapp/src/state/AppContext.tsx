@@ -1110,6 +1110,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await activeStorage.putIdentityKeys(data.identity);
       putIdentityKeys(data.identity);
 
+      // 全量收敛：以云端备份为权威快照，删除本机多出来的会话。备份不含
+      // 信令的账号级事实（如单方面删除好友）只能靠备份携带——恢复若只做
+      // 合并，本机残留的会话会让已删好友复活（实测：a 删好友并备份，b 恢复
+      // 后好友仍在列表且仍可解密收发）。连带清理消息、轮换时间戳、poller
+      // 会话与孤儿群元数据；sessionIssue / queueId LRU 下面已有全局清理。
+      const backupGroupIds = new Set(Object.keys(data.mlsSessions));
+      for (const gid of await activeStorage.listGroups()) {
+        if (backupGroupIds.has(gid)) continue;
+        activePoller.removeSession(gid);
+        await activeStorage.deleteMlsSession(gid);
+        await activeStorage.deleteMessages(gid);
+        await activeStorage.deleteRaw(`rotationAt:${gid}`);
+        console.info('restoreIdentityFromBackup: removed local group not in backup', gid);
+      }
+      for (const info of await activeStorage.listGroupInfos()) {
+        if (!backupGroupIds.has(info.groupId)) {
+          await activeStorage.deleteGroupInfo(info.groupId);
+        }
+      }
+
       // 恢复账号级 commit 高水位（宣言 v2 比对基准；旧备份无此字段 → 0）
       await activeStorage.setCommitSeq(data.commitSeq ?? 0);
 

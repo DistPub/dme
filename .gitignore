@@ -21,5 +21,9 @@ __pycache__/
 *.pyc
 .workbuddy/
 
+# 构建时生成（scripts/generate-build-info.mjs），设置页展示 commit sha 用
+/dme-client/src/generated/
+/dme-miniapp/src/generated/
+
 # 本地需求文档（保留在本地，不入库）
 /FATESKY_BLOB_STORAGE_REQUIREMENTS.md

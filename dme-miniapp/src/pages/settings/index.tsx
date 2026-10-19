@@ -35,6 +35,7 @@ import type { Language } from '../../i18n/translations';
 import { LANGUAGES } from '../../i18n/translations';
 import { useWebTitle } from '../../utils/web-title';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../../config';
+import { BUILD_COMMIT_SHA, BUILD_DIRTY, BUILD_TIME } from '../../generated/build-info';
 import './index.scss';
 
 const ROTATION_OPTIONS: {
@@ -465,6 +466,13 @@ export default function SettingsPage(): React.JSX.Element {
         >
           {t('settings.about')}
         </Button>
+
+        {/* 9. 构建信息（与 web 设置页底部对齐）：多端测试时对齐各设备
+            跑的是哪个构建，防止体验版/本地缓存版本误导。selectable 方便
+            长按复制 sha。 */}
+        <Text className="settings__buildInfo" userSelect>
+          {`build ${BUILD_COMMIT_SHA}${BUILD_DIRTY ? '-dirty' : ''} · ${BUILD_TIME}`}
+        </Text>
       </ScrollView>
     </View>
   );

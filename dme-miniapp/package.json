@@ -9,9 +9,9 @@
     "css": "sass"
   },
   "scripts": {
-    "build:weapp": "taro build --type weapp",
+    "build:weapp": "node scripts/generate-build-info.mjs && taro build --type weapp",
     "dev:weapp": "npm run build:weapp -- --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node scripts/generate-build-info.mjs && tsc --noEmit",
     "mp:init": "node scripts/deploy.mjs init",
     "mp:build": "node scripts/deploy.mjs build",
     "mp:upload": "node scripts/deploy.mjs upload"

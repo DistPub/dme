@@ -98,6 +98,9 @@ function cmdBuild() {
     console.warn('   本地预览仍可在开发者工具里用「测试号」打开，但上传体验版必须填 AppID。');
     console.warn('   填写方式：node scripts/deploy.mjs init <appid>\n');
   }
+  // 构建信息注入：当前 commit sha 写进 src/generated/build-info.ts，
+  // 设置页最底部展示（多端测试对版本用）。必须在 taro build 之前生成。
+  run('node scripts/generate-build-info.mjs');
   run('npx taro build --type weapp');
   if (!existsSync(resolve(DIST, 'app.json'))) {
     console.error('❌ dist/app.json 不存在，构建可能失败');
@@ -266,7 +269,27 @@ async function cmdUpload() {
   }
 
   const version = String(arg('version', process.env.MP_VERSION ?? JSON.parse(readFileSync(PKG, 'utf8')).version));
-  const desc = String(arg('desc', `DME 小程序 ${version}`));
+
+  /**
+   * 从 src/generated/build-info.ts 读构建时写入的 commit sha（上传描述
+   * 带上 sha，微信后台版本列表里直接可对版本）。--skip-build 时该文件是
+   * 上次构建留下的，仍然有效；缺失时降级 unknown。
+   */
+  function readBuildSha() {
+    const infoPath = resolve(ROOT, 'src/generated/build-info.ts');
+    if (!existsSync(infoPath)) return { sha: 'unknown', dirty: false };
+    const raw = readFileSync(infoPath, 'utf8');
+    const sha = raw.match(/BUILD_COMMIT_SHA = '([^']+)'/)?.[1] ?? 'unknown';
+    const dirty = /BUILD_DIRTY = true/.test(raw);
+    return { sha, dirty };
+  }
+
+  const buildInfo = readBuildSha();
+  const buildTag = `${buildInfo.sha}${buildInfo.dirty ? '-dirty' : ''}`;
+  // 用户显式传了 --desc 则原样使用；否则默认描述末尾带上 commit sha
+  const desc = hasFlag('desc')
+    ? String(arg('desc', `DME 小程序 ${version}`))
+    : `DME 小程序 ${version} (${buildTag})`;
 
   // miniprogram-ci 是 CJS 包：具名导出在模块顶层（无 default）。
   // ESM 动态 import 时 CJS 的具名导出可能落在 `.default` 上，这里两种都兼容。
@@ -306,6 +329,7 @@ async function cmdUpload() {
 
   console.log(`\n📦 上传中：appid=${appid} version=${version}`);
   console.log(`   描述：${desc}`);
+  console.log(`   构建：${buildTag}`);
   console.log(`   启动页：${entryPage}`);
 
   const result = await ci.upload({

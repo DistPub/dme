@@ -177,4 +177,16 @@
       margin-bottom: 16px;
     }
   }
+
+  /* 构建信息：设置页最底部小字（与 web SettingsScreen buildInfo 对齐），
+     展示 commit sha + 构建时间，多端测试对版本用 */
+  &__buildInfo {
+    display: block;
+    font-size: 24px;
+    line-height: 34px;
+    color: #8a8a8e;
+    text-align: center;
+    margin-top: 48px;
+    word-break: break-all;
+  }
 }

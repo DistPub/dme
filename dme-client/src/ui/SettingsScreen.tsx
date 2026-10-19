@@ -10,6 +10,7 @@ import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '
 import type { RootStackParamList } from '../types/navigation';
 import { useI18n } from '../i18n/I18nContext';
 import { LANGUAGES } from '../i18n/translations';
+import { BUILD_COMMIT_SHA, BUILD_DIRTY, BUILD_TIME } from '../generated/build-info';
 
 const ROTATION_OPTIONS: { ms: number; labelKey: 'settings.rotation24h' | 'settings.rotation7d' | 'settings.rotation30d' }[] = [
   { ms: 24 * 60 * 60 * 1000, labelKey: 'settings.rotation24h' },
@@ -442,6 +443,11 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           variant="secondary"
           style={styles.fullButton}
         />
+
+        {/* 构建信息：多端测试时对齐各设备跑的是哪个构建（防 web 缓存旧 bundle 误导） */}
+        <Text style={styles.buildInfo} selectable>
+          {`build ${BUILD_COMMIT_SHA}${BUILD_DIRTY ? '-dirty' : ''} · ${BUILD_TIME}`}
+        </Text>
       </ScrollView>
     </View>
   );
@@ -510,6 +516,12 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 48,
     flexShrink: 0,
+  },
+  buildInfo: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.caption,
+    textAlign: 'center',
+    marginTop: theme.spacing.xl,
   },
   restoreTitle: {
     marginTop: theme.spacing.lg,

@@ -4,11 +4,11 @@
   "private": true,
   "main": "index",
   "scripts": {
-    "dev": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "build:web": "expo export -p web && workbox generateSW workbox.config.js",
+    "dev": "node scripts/generate-build-info.mjs && expo start",
+    "android": "node scripts/generate-build-info.mjs && expo start --android",
+    "ios": "node scripts/generate-build-info.mjs && expo start --ios",
+    "web": "node scripts/generate-build-info.mjs && expo start --web",
+    "build:web": "node scripts/generate-build-info.mjs && expo export -p web && workbox generateSW workbox.config.js",
     "build:mp3-worker": "bun run scripts/build-mp3-worker.mjs"
   },
   "dependencies": {

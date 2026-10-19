@@ -62,7 +62,7 @@ import {
 } from '../crypto/keypackage';
 import type { KeyPackagePair } from '../crypto/keypackage';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
-import { encryptBackup, decryptBackup, type FullBackupData } from '../crypto/backup';
+import { encryptBackup, decryptBackup, checkBackupCoverage, type FullBackupData } from '../crypto/backup';
 import { bytesToBase64url, base64urlToBytes, bytesToHex, hexToBytes } from '../crypto/utils';
 import {
   generateFileId,
@@ -879,7 +879,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   // -------------------------------------------------------------------------
 
   const backupIdentity = useCallback(
-    async (password: string): Promise<void> => {
+    async (
+      password: string,
+      opts?: { skipCoverageCheck?: boolean },
+    ): Promise<void> => {
       // 与 setupIdentity 同理：这些 action 常在 await 链里被调用，
       // 读 ref 才能拿到刚装配好的实例，避免误报"未初始化"。
       const activeStorage = storageRef.current ?? storage;
@@ -907,6 +910,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         if (serialized) mlsSessions[gid] = serialized;
         rotationAt[gid] = await activeStorage.getLastRotationAt(gid);
       }
+      const tombstones = await activeStorage.getTombstones();
+
+      // 方案A墓碑：备份写入前与云端现有备份做会话集合比对，防止本机缺失
+      // 会话的旧状态覆盖云端新备份（宣言水位看不见「备份内容变了但水位没
+      // 动」的分叉）。比对在解密后进行，不新增明文元数据。制备份（强制
+      // 接管）显式跳过——其语义就是丢弃其他设备的新状态。
+      const existingEncrypted = await activePds.getIdentityBackup();
+      if (existingEncrypted && !opts?.skipCoverageCheck) {
+        const cloud = decryptBackup(existingEncrypted, password);
+        checkBackupCoverage(cloud, groupIds, tombstones);
+      }
 
       const data: FullBackupData = {
         identity: activeKeys,
@@ -916,6 +930,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         blockList: await activeStorage.getBlockList(),
         rotationAt,
         commitSeq: await activeStorage.getCommitSeq(),
+        tombstones,
       };
 
       const encryptedData = encryptBackup(data, password);
@@ -949,6 +964,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       } catch (err) {
         // 刷新失败仅 log（不影响推进结果）。若是因存在待恢复会话被拒
         // （BACKUP_BLOCKED_STALE），sibling-rotated 横幅本就在引导恢复。
+        // 会话集合分叉（BACKUP_COVER_DIFF，方案A墓碑比对）则置强提示：
+        // 云端有本机没有/已删除的会话，静默跳过会让备份长期落后。
+        if (err instanceof Error && err.message === 'BACKUP_COVER_DIFF') {
+          await activeStorage.setBackupRequired(true);
+          setBackupRequiredState(true);
+        }
         console.warn(`[dme:backup] ${tag} 后备份刷新失败:`, err);
       }
     },
@@ -1015,7 +1036,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * PDS 不可用 fail-closed：无法仲裁时宁可不备份。
    */
   const backupIdentityGuarded = useCallback(
-    async (password: string): Promise<void> => {
+    async (password: string, opts?: { skipCoverageCheck?: boolean }): Promise<void> => {
       const activeStorage = storageRef.current ?? storage;
       const activePds = pdsRef.current ?? pds;
       const activeKeys = identityKeysRef.current ?? identityKeys;
@@ -1034,7 +1055,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
       const { handle } = outcome;
       try {
-        await backupIdentity(password);
+        await backupIdentity(password, opts);
       } finally {
         await releaseBackupLock(handle, store);
       }
@@ -1067,7 +1088,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await activeStorage.setCommitSeq(cloudSeq);
         console.warn('[dme:claim] forced backup: adopted PDS high watermark', cloudSeq);
       }
-      await backupIdentityGuarded(password);
+      // skipCoverageCheck：制备份的语义就是用户确认丢弃其他设备的新状态，
+      // 会话集合分叉正是它要覆盖的对象，不能被墓碑比对拦下（仍持备份锁）。
+      await backupIdentityGuarded(password, { skipCoverageCheck: true });
     },
     [storage, pds, identityKeys, backupIdentityGuarded],
   );
@@ -1175,6 +1198,20 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // a 端解不开。清空后 b 端重新 decrypt 这些 envelope：commit
       // wrapper 推进 mlsSession（自愈），群消息正常入屏。
       await activeStorage.clearQueueIdLru();
+
+      // 方案A墓碑收敛：云端墓碑全部采纳（其他设备的删除对本机生效——
+      // 本机对应会话已在上面的全量收敛中被清掉）；本机墓碑若其会话已随
+      // 备份恢复（云端正持有/重新添加）则作废，否则保留（本机删除尚未上云）。
+      const restoredIds = new Set(Object.keys(data.mlsSessions));
+      const cloudTombstones = data.tombstones ?? [];
+      const localTombstones = await activeStorage.getTombstones();
+      const mergedTombstones = [...cloudTombstones];
+      for (const t of localTombstones) {
+        if (!restoredIds.has(t.groupId) && !cloudTombstones.some((c) => c.groupId === t.groupId)) {
+          mergedTombstones.push(t);
+        }
+      }
+      await activeStorage.setTombstones(mergedTombstones);
 
       setGroups(Object.keys(data.mlsSessions));
       setChatListVersion((v) => v + 1);
@@ -1377,6 +1414,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
       poller.addSession(result.groupId, result.mlsSession);
+      // 会话（重新）建立即作废旧墓碑：同 groupId 删除后重新添加时，防止
+      // 比对把云端的会话误判为「我删的」而覆盖掉
+      await storage.removeTombstone(result.groupId);
       await storage.setCommitSeq(claimSeq);
 
       // 缺口①：握手推进了会话状态，立即联动备份——保证兄弟端之后恢复
@@ -1440,6 +1480,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       await activeStorage.putMlsSession(result.groupId, result.mlsSession.serialize());
       activePoller.addSession(result.groupId, result.mlsSession);
+      // 会话建立即作废旧墓碑（同 groupId 删后再加的防线，同 acceptInviteQr）
+      await activeStorage.removeTombstone(result.groupId);
 
       // 缺口①：接会话推进了状态，立即联动备份（同 acceptInviteQr）
       await triggerBackupAfterAdvance(`processWelcome ${result.groupId}`);
@@ -1731,6 +1773,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   }
                   const newSession = await MlsSession.joinViaWelcome(m.welcome, pair, impl);
                   await msgStorage.putMlsSession(welcome.groupId, newSession.serialize());
+                  // 会话建立即作废旧墓碑（同 groupId 删后再加的防线）
+                  await msgStorage.removeTombstone(welcome.groupId);
                   poller.addSession(welcome.groupId, newSession);
                   joined = true;
                   // KP 一次性：join 成功才标记池条目 consumed（welcome 未到达时
@@ -2714,6 +2758,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       poller.removeSession(groupId);
       await storage.deleteMlsSession(groupId);
       await storage.deleteMessages(groupId);
+      // 方案A墓碑：删除不影响任何端解密能力（非备份点，不触发备份、不动
+      // 水位），但删除要经备份传播到兄弟端——墓碑随下次备份携带，备份前
+      // 的会话集合比对据此区分「我删的（放行覆盖）」与「我落后（先恢复）」。
+      await storage.putTombstone(groupId);
 
       setGroups((prev) => prev.filter((g) => g !== groupId));
       setChatListVersion((v) => v + 1);
@@ -3034,6 +3082,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       try {
       await storage.putMlsSession(groupId, newSession.serialize());
       poller.addSession(groupId, newSession);
+      // 会话建立即作废旧墓碑（同 groupId 删后再加的防线，同 acceptInviteQr）
+      await storage.removeTombstone(groupId);
 
       const memberList: GroupMember[] = [
         { did: session.did, displayName: session.did, role: 'creator' },

@@ -22,7 +22,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { utf8ToBytes } from '@noble/hashes/utils';
 import { bytesToBase64url, base64urlToBytes } from './utils';
 import type { IdentityKeys } from './identity';
-import type { KeyPackagePoolEntry } from '../storage/db';
+import type { KeyPackagePoolEntry, Tombstone } from '../storage/db';
 import type { GroupInfo } from '../protocol/group-message';
 
 /** PBKDF2 迭代次数。 */
@@ -55,6 +55,12 @@ export interface FullBackupData {
    * commit 前与 PDS 宣言比对检测备份分叉。旧备份无此字段 → 视为 0。
    */
   commitSeq?: number;
+  /**
+   * 删除墓碑（方案A）：本机已删除会话的标记，随备份携带。备份前做会话
+   * 集合比对时，用于区分「本机领先（我删的）」与「本机落后（别人还有）」。
+   * 旧备份无此字段 → 视为空。
+   */
+  tombstones?: Tombstone[];
 }
 
 /** JSON 序列化时的中间结构（Uint8Array 转 base64url）。 */
@@ -69,6 +75,7 @@ interface SerializedBackup {
   blockList: string[];
   rotationAt?: Record<string, number>;
   commitSeq?: number;
+  tombstones?: Tombstone[];
 }
 
 /**
@@ -93,6 +100,7 @@ function serializeFullBackupData(data: FullBackupData): string {
     blockList: data.blockList,
     rotationAt: data.rotationAt,
     commitSeq: data.commitSeq,
+    tombstones: data.tombstones,
   };
   return JSON.stringify(serialized);
 }
@@ -120,6 +128,7 @@ function deserializeFullBackupData(json: string): FullBackupData {
     blockList: obj.blockList ?? [],
     rotationAt: obj.rotationAt,
     commitSeq: obj.commitSeq,
+    tombstones: obj.tombstones,
   };
 }
 
@@ -182,4 +191,45 @@ export function decryptBackup(encryptedData: string, password: string): FullBack
 
   const json = new TextDecoder().decode(plaintext);
   return deserializeFullBackupData(json);
+}
+
+/** 覆盖比对失败的错误码（UI 据此提示「先恢复备份」）。 */
+export const BACKUP_COVER_DIFF = 'BACKUP_COVER_DIFF';
+
+/**
+ * 备份覆盖比对（方案A墓碑）：备份写入前，将云端现有备份的会话集合与
+ * 本机比对，防止本机用缺失会话的旧状态覆盖云端新备份（缺口②：宣言
+ * 水位只度量 commit，看不见「备份内容变了但水位没动」）。
+ *
+ * 三分支规则：
+ *   - 云端有、本机无、本机有墓碑   → 本机领先（我删的），放行；
+ *   - 云端有、本机无、本机无墓碑   → 本机落后，抛 BACKUP_COVER_DIFF（引导恢复）；
+ *   - 本机有、云端无、云端有墓碑   → 其他设备已删除，本机落后，抛 BACKUP_COVER_DIFF；
+ *   - 本机有、云端无、云端无墓碑   → 本机领先（新会话），放行（全量收敛负责传播）。
+ *
+ * @param cloud            - 解密后的云端现有备份（调用方负责先 decrypt）。
+ * @param localGroupIds    - 本机当前会话列表。
+ * @param localTombstones  - 本机墓碑列表。
+ * @throws Error(BACKUP_COVER_DIFF) 集合分叉且无法用墓碑解释时。
+ */
+export function checkBackupCoverage(
+  cloud: FullBackupData,
+  localGroupIds: string[],
+  localTombstones: Tombstone[],
+): void {
+  const cloudGroupIds = Object.keys(cloud.mlsSessions);
+  const localSet = new Set(localGroupIds);
+  const localTombstoned = new Set(localTombstones.map((t) => t.groupId));
+  const cloudTombstoned = new Set((cloud.tombstones ?? []).map((t) => t.groupId));
+
+  for (const gid of cloudGroupIds) {
+    if (!localSet.has(gid) && !localTombstoned.has(gid)) {
+      throw new Error(BACKUP_COVER_DIFF);
+    }
+  }
+  for (const gid of localGroupIds) {
+    if (!cloudGroupIds.includes(gid) && cloudTombstoned.has(gid)) {
+      throw new Error(BACKUP_COVER_DIFF);
+    }
+  }
 }

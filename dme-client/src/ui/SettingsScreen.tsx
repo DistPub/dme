@@ -126,11 +126,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             ? t('settings.backupClaimStale')
             : msg === 'BACKUP_CLAIM_BUSY'
               ? t('settings.backupClaimBusy')
-              : msg === 'BACKUP_COVER_DIFF'
-                ? t('settings.backupCoverDiff')
-                : msg === 'BACKUP_COVER_UNVERIFIED'
-                  ? t('settings.backupCoverUnverified')
-                  : msg || t('settings.backupFailed'),
+              : msg || t('settings.backupFailed'),
       );
       if (msg === 'BACKUP_CLAIM_STALE') setClaimStale(true);
       setBackupStatus('error');

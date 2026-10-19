@@ -22,7 +22,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { utf8ToBytes } from '@noble/hashes/utils';
 import { bytesToBase64url, base64urlToBytes } from './utils';
 import type { IdentityKeys } from './identity';
-import type { KeyPackagePoolEntry, Tombstone } from '../storage/db';
+import type { KeyPackagePoolEntry } from '../storage/db';
 import type { GroupInfo } from '../protocol/group-message';
 
 /** PBKDF2 迭代次数。 */
@@ -55,12 +55,6 @@ export interface FullBackupData {
    * commit 前与 PDS 宣言比对检测备份分叉。旧备份无此字段 → 视为 0。
    */
   commitSeq?: number;
-  /**
-   * 删除墓碑（方案A）：本机已删除会话的标记，随备份携带。备份前做会话
-   * 集合比对时，用于区分「本机领先（我删的）」与「本机落后（别人还有）」。
-   * 旧备份无此字段 → 视为空。
-   */
-  tombstones?: Tombstone[];
 }
 
 /** JSON 序列化时的中间结构（Uint8Array 转 base64url）。 */
@@ -75,7 +69,6 @@ interface SerializedBackup {
   blockList: string[];
   rotationAt?: Record<string, number>;
   commitSeq?: number;
-  tombstones?: Tombstone[];
 }
 
 /**
@@ -100,7 +93,6 @@ function serializeFullBackupData(data: FullBackupData): string {
     blockList: data.blockList,
     rotationAt: data.rotationAt,
     commitSeq: data.commitSeq,
-    tombstones: data.tombstones,
   };
   return JSON.stringify(serialized);
 }
@@ -128,7 +120,6 @@ function deserializeFullBackupData(json: string): FullBackupData {
     blockList: obj.blockList ?? [],
     rotationAt: obj.rotationAt,
     commitSeq: obj.commitSeq,
-    tombstones: obj.tombstones,
   };
 }
 
@@ -191,60 +182,4 @@ export function decryptBackup(encryptedData: string, password: string): FullBack
 
   const json = new TextDecoder().decode(plaintext);
   return deserializeFullBackupData(json);
-}
-
-/** 覆盖比对失败的错误码（UI 据此提示「先恢复备份」）。 */
-export const BACKUP_COVER_DIFF = 'BACKUP_COVER_DIFF';
-
-/**
- * 备份与云端现有备份调和（方案A墓碑 v2）：备份写入前调用。核心语义是
- * **备份永不丢数据**——本机缺失且无墓碑的云端会话原样并入本次备份，
- * 删除只通过墓碑传播（有墓碑的会话不并入，随备份携带）。
- *
- * 规则：
- *   - 云端有、本机无、本机有墓碑   → 我删的，不并入（墓碑继续随备份传播删除）；
- *   - 云端有、本机无、本机无墓碑   → 并入本次备份（mlsSession / rotationAt /
- *     groupInfo 原样保留）。不再拦截：云端可能是过期快照（历史删除发生在
- *     墓碑功能上线前、或兄弟端旧状态回写过云端），「拦下引导恢复」会形成
- *     死循环（实测：恢复清掉本机新会话 → 再加好友 → 再拦）。
- *   - 本机有、云端无、云端有墓碑   → 其他设备已删除，本机落后于删除事实，
- *     抛 BACKUP_COVER_DIFF（引导恢复；制备份跳过本函数时由用户显式接管）。
- *
- * data 会被就地修改（并入云端独有会话）。
- *
- * @param data             - 本机构建的待写入备份数据（可变，可能被并入）。
- * @param cloud            - 解密后的云端现有备份（调用方负责先 decrypt）。
- * @param localTombstones  - 本机墓碑列表。
- * @throws Error(BACKUP_COVER_DIFF) 本机持有其他设备已删除的会话时。
- */
-export function reconcileBackupWithCloud(
-  data: FullBackupData,
-  cloud: FullBackupData,
-  localTombstones: Tombstone[],
-): void {
-  const localSet = new Set(Object.keys(data.mlsSessions));
-  const localTombstoned = new Set(localTombstones.map((t) => t.groupId));
-  const cloudTombstoned = new Set((cloud.tombstones ?? []).map((t) => t.groupId));
-
-  // 本机持有其他设备已删除的会话 → 本机落后于删除事实，引导恢复。
-  for (const gid of Object.keys(data.mlsSessions)) {
-    if (cloudTombstoned.has(gid)) {
-      throw new Error(BACKUP_COVER_DIFF);
-    }
-  }
-
-  // 云端独有且本机未删的会话：原样并入，保证云端备份状态永不回退丢失。
-  const merged = new Set(Object.keys(data.mlsSessions));
-  for (const [gid, serialized] of Object.entries(cloud.mlsSessions)) {
-    if (localSet.has(gid) || localTombstoned.has(gid) || merged.has(gid)) continue;
-    data.mlsSessions[gid] = serialized;
-    if (!data.rotationAt) data.rotationAt = {};
-    data.rotationAt[gid] = cloud.rotationAt?.[gid] ?? 0;
-    merged.add(gid);
-  }
-  for (const info of cloud.groupInfos ?? []) {
-    if (merged.has(info.groupId) && !data.groupInfos.some((i) => i.groupId === info.groupId)) {
-      data.groupInfos.push(info);
-    }
-  }
 }

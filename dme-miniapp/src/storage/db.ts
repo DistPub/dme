@@ -51,16 +51,6 @@ export interface PendingWelcome {
   createdAt: string;
 }
 
-/**
- * 删除墓碑：标记某会话已在本机被删除。随备份携带（FullBackupData.tombstones），
- * 用于备份前与会话集合比对——区分「本机领先（我删的，放行覆盖）」与
- * 「本机落后（别人还有，应先恢复）」。非备份点：写墓碑不触发备份、不动水位。
- */
-export interface Tombstone {
-  groupId: string;
-  deletedAt: string;
-}
-
 /** 本地 KeyPackage 池条目。 */
 export interface KeyPackagePoolEntry {
   id: string;
@@ -429,44 +419,6 @@ export class DmeStorage {
 
   async deletePendingWelcome(queueId: string): Promise<void> {
     await AsyncStorage.removeItem(this.prefix + `pendingWelcome:${queueId}`);
-  }
-
-  // -----------------------------------------------------------------------
-  // 删除墓碑（方案A：删除经备份传播的标记）
-  // -----------------------------------------------------------------------
-
-  async putTombstone(groupId: string): Promise<void> {
-    const entry: Tombstone = { groupId, deletedAt: new Date().toISOString() };
-    await AsyncStorage.setItem(this.prefix + `tombstone:${groupId}`, JSON.stringify(entry));
-  }
-
-  async getTombstones(): Promise<Tombstone[]> {
-    const keys = await AsyncStorage.getAllKeys();
-    const prefix = this.prefix + 'tombstone:';
-    const results: Tombstone[] = [];
-    for (const k of keys) {
-      if (!k.startsWith(prefix)) continue;
-      const raw = await AsyncStorage.getItem(k);
-      if (raw) results.push(JSON.parse(raw) as Tombstone);
-    }
-    return results;
-  }
-
-  async removeTombstone(groupId: string): Promise<void> {
-    await AsyncStorage.removeItem(this.prefix + `tombstone:${groupId}`);
-  }
-
-  /** 全量替换（恢复收敛用）：先清空再写入。 */
-  async setTombstones(entries: Tombstone[]): Promise<void> {
-    const keys = await AsyncStorage.getAllKeys();
-    const prefix = this.prefix + 'tombstone:';
-    const olds = keys.filter((k) => k.startsWith(prefix));
-    if (olds.length > 0) {
-      await Promise.all(olds.map((key) => AsyncStorage.removeItem(key)));
-    }
-    for (const t of entries) {
-      await AsyncStorage.setItem(this.prefix + `tombstone:${t.groupId}`, JSON.stringify(t));
-    }
   }
 
   // -----------------------------------------------------------------------

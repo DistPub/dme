@@ -47,7 +47,7 @@ import {
 } from '../crypto/keypackage';
 import type { KeyPackagePair } from '../crypto/keypackage';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
-import { encryptBackup, decryptBackup, checkBackupCoverage, type FullBackupData } from '../crypto/backup';
+import { encryptBackup, decryptBackup, reconcileBackupWithCloud, type FullBackupData } from '../crypto/backup';
 import { bytesToBase64url, base64urlToBytes, bytesToBase64, hexToBytes, bytesToHex, base64ToBytes } from '../crypto/utils';
 import {
   generateFileId,
@@ -872,16 +872,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const blockList = await storage.getBlockList();
     const tombstones = await storage.getTombstones();
 
-    // 方案A墓碑：备份写入前与云端现有备份做会话集合比对，防止本机缺失
-    // 会话的旧状态覆盖云端新备份（宣言水位看不见「备份内容变了但水位没
-    // 动」的分叉）。比对在解密后进行，不新增明文元数据。制备份（强制
-    // 接管）显式跳过——其语义就是丢弃其他设备的新状态。
-    const existingEncrypted = await pds.getIdentityBackup();
-    if (existingEncrypted && !opts?.skipCoverageCheck) {
-      const cloud = decryptBackup(existingEncrypted, password);
-      checkBackupCoverage(cloud, groupIds, tombstones, await storage.getCommitSeq());
-    }
-
     const data: FullBackupData = {
       identity: identityKeys,
       mlsSessions,
@@ -892,6 +882,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       commitSeq: await storage.getCommitSeq(),
       tombstones,
     };
+
+    // 方案A墓碑 v2：与云端现有备份调和——备份永不丢数据。云端独有且本机
+    // 未删的会话原样并入本次备份（云端可能是过期快照，拦截会死锁，实测踩过）；
+    // 本机持有其他设备已删除的会话时抛 BACKUP_COVER_DIFF 引导恢复。制备份
+    // （强制接管）显式跳过——其语义就是丢弃云端状态、以本机为准。
+    const existingEncrypted = await pds.getIdentityBackup();
+    if (existingEncrypted && !opts?.skipCoverageCheck) {
+      const cloud = decryptBackup(existingEncrypted, password);
+      reconcileBackupWithCloud(data, cloud, tombstones);
+    }
 
     const encryptedData = encryptBackup(data, password);
     await pds.putIdentityBackup(encryptedData);

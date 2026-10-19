@@ -197,49 +197,54 @@ export function decryptBackup(encryptedData: string, password: string): FullBack
 export const BACKUP_COVER_DIFF = 'BACKUP_COVER_DIFF';
 
 /**
- * 备份覆盖比对（方案A墓碑）：备份写入前，将云端现有备份的会话集合与
- * 本机比对，防止本机用缺失会话的旧状态覆盖云端新备份（缺口②：宣言
- * 水位只度量 commit，看不见「备份内容变了但水位没动」）。
+ * 备份与云端现有备份调和（方案A墓碑 v2）：备份写入前调用。核心语义是
+ * **备份永不丢数据**——本机缺失且无墓碑的云端会话原样并入本次备份，
+ * 删除只通过墓碑传播（有墓碑的会话不并入，随备份携带）。
  *
- * 分支规则：
- *   - 云端有、本机无、本机有墓碑   → 本机领先（我删的），放行；
- *   - 云端有、本机无、本机无墓碑：
- *     · 本机 commitSeq > 云端备份 commitSeq → 云端备份是过期快照（其会话
- *       集合停留在更早的 commit 时期），本机 commit 历史更新，放行覆盖。
- *       与宣言 v2「单调高水位，高水位状态权威」同一仲裁方向。实测死锁：
- *       历史删除（墓碑功能上线前）+ 兄弟端旧状态回写云端 → cloud-only
- *       永远无墓碑 → 拦下引导恢复 → 恢复清掉本机新会话 → 死循环。
- *     · 否则（seq 相等或更低）→ 本机可能落后，抛 BACKUP_COVER_DIFF。
- *   - 本机有、云端无、云端有墓碑   → 其他设备已删除，本机落后，抛 BACKUP_COVER_DIFF；
- *   - 本机有、云端无、云端无墓碑   → 本机领先（新会话），放行（全量收敛负责传播）。
+ * 规则：
+ *   - 云端有、本机无、本机有墓碑   → 我删的，不并入（墓碑继续随备份传播删除）；
+ *   - 云端有、本机无、本机无墓碑   → 并入本次备份（mlsSession / rotationAt /
+ *     groupInfo 原样保留）。不再拦截：云端可能是过期快照（历史删除发生在
+ *     墓碑功能上线前、或兄弟端旧状态回写过云端），「拦下引导恢复」会形成
+ *     死循环（实测：恢复清掉本机新会话 → 再加好友 → 再拦）。
+ *   - 本机有、云端无、云端有墓碑   → 其他设备已删除，本机落后于删除事实，
+ *     抛 BACKUP_COVER_DIFF（引导恢复；制备份跳过本函数时由用户显式接管）。
  *
+ * data 会被就地修改（并入云端独有会话）。
+ *
+ * @param data             - 本机构建的待写入备份数据（可变，可能被并入）。
  * @param cloud            - 解密后的云端现有备份（调用方负责先 decrypt）。
- * @param localGroupIds    - 本机当前会话列表。
  * @param localTombstones  - 本机墓碑列表。
- * @param localCommitSeq   - 本机账号级 commit 高水位（旧实现无此参数前默认 0 语义由调用方保证）。
- * @throws Error(BACKUP_COVER_DIFF) 集合分叉且无法用墓碑 / 水位解释时。
+ * @throws Error(BACKUP_COVER_DIFF) 本机持有其他设备已删除的会话时。
  */
-export function checkBackupCoverage(
+export function reconcileBackupWithCloud(
+  data: FullBackupData,
   cloud: FullBackupData,
-  localGroupIds: string[],
   localTombstones: Tombstone[],
-  localCommitSeq: number,
 ): void {
-  const cloudGroupIds = Object.keys(cloud.mlsSessions);
-  const localSet = new Set(localGroupIds);
+  const localSet = new Set(Object.keys(data.mlsSessions));
   const localTombstoned = new Set(localTombstones.map((t) => t.groupId));
   const cloudTombstoned = new Set((cloud.tombstones ?? []).map((t) => t.groupId));
-  // 旧备份无 commitSeq 字段 → 视为 0（本机任何 commit 历史都算更新）。
-  const cloudCommitSeq = cloud.commitSeq ?? 0;
 
-  for (const gid of cloudGroupIds) {
-    if (localSet.has(gid) || localTombstoned.has(gid)) continue;
-    if (localCommitSeq > cloudCommitSeq) continue; // 云端备份过期，本机状态更权威
-    throw new Error(BACKUP_COVER_DIFF);
-  }
-  for (const gid of localGroupIds) {
-    if (!cloudGroupIds.includes(gid) && cloudTombstoned.has(gid)) {
+  // 本机持有其他设备已删除的会话 → 本机落后于删除事实，引导恢复。
+  for (const gid of Object.keys(data.mlsSessions)) {
+    if (cloudTombstoned.has(gid)) {
       throw new Error(BACKUP_COVER_DIFF);
+    }
+  }
+
+  // 云端独有且本机未删的会话：原样并入，保证云端备份状态永不回退丢失。
+  const merged = new Set(Object.keys(data.mlsSessions));
+  for (const [gid, serialized] of Object.entries(cloud.mlsSessions)) {
+    if (localSet.has(gid) || localTombstoned.has(gid) || merged.has(gid)) continue;
+    data.mlsSessions[gid] = serialized;
+    if (!data.rotationAt) data.rotationAt = {};
+    data.rotationAt[gid] = cloud.rotationAt?.[gid] ?? 0;
+    merged.add(gid);
+  }
+  for (const info of cloud.groupInfos ?? []) {
+    if (merged.has(info.groupId) && !data.groupInfos.some((i) => i.groupId === info.groupId)) {
+      data.groupInfos.push(info);
     }
   }
 }

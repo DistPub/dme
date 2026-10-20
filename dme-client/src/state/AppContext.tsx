@@ -1759,31 +1759,47 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               msg.senderDid === userDid &&
               existing.inviteeDid === userDid &&
               !(existing.ownKeyPackagePoolId || existing.ownKeyPackagePairSerialized);
-            let updated: PendingInvite;
-            if (!resp.accepted) {
-              updated = { ...existing, status: 'rejected' };
-            } else if (ownReplayWithoutPair) {
-              // 本机是受邀方但无 pair（恢复备份后重放「过去某个自己」的确认，
-              // 或多端另一台设备接受的）：welcome 对本机数学上解不开（KP 私钥
-              // 不在本机）。把状态收敛为 accepted，避免会话列表/私聊卡片永远
-              // pending；同时标记 issue，引导用户从其他设备的最新备份恢复。
-              updated = { ...existing, status: 'accepted' };
-              await msgStorage.setSessionIssue(existing.groupId, 'sibling-rotated');
-              setChatListVersion((v) => v + 1);
+            // 2026-10-20 状态机护栏：响应只允许把 pending 推向终态。cancelled
+            // 是终态——群主兄弟端已凭 group_metadata_update 收敛（兄弟端建群
+            // 成功，见 metadata 分支 2026-10-16 收敛），迟到的 accept_response
+            // 不得把建群卡片复活成 accepted（实测：a 端点创建后，b 端因 1v1
+            // 对端叶子代际落后、accept_response 晚于 metadata 解密处理，复活
+            // 卡片显示「添加/取消」；c 端响应先于 metadata 处理则一切正常）。
+            // rejected/accepted 同为终态，重复响应幂等跳过。ownReplayWithoutPair
+            // 例外保留：其记录恒为受邀方向（inviteeDid===本机），与 inviter
+            // 方向的 cancelled 天然不相交，不受此护栏影响。
+            if (existing.status !== 'pending' && !ownReplayWithoutPair) {
+              console.log(
+                'handleIncomingMessage: group_invite_response on final-state record, keeping',
+                resp.inviteId, existing.status,
+              );
             } else {
-              // 接受响应如实记账：① 群主收到受邀人的接受（inviteeDid ≠ 本机，
-              // 建群前置状态；keyPackageSerialized 是 createGroupFromPendingInvites
-              // 的必要输入）；② 受邀方自己的确认镜像（有 pair），与
-              // respondToGroupInvite 的本地收敛一致
-              updated = { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized };
+              let updated: PendingInvite;
+              if (!resp.accepted) {
+                updated = { ...existing, status: 'rejected' };
+              } else if (ownReplayWithoutPair) {
+                // 本机是受邀方但无 pair（恢复备份后重放「过去某个自己」的确认，
+                // 或多端另一台设备接受的）：welcome 对本机数学上解不开（KP 私钥
+                // 不在本机）。把状态收敛为 accepted，避免会话列表/私聊卡片永远
+                // pending；同时标记 issue，引导用户从其他设备的最新备份恢复。
+                updated = { ...existing, status: 'accepted' };
+                await msgStorage.setSessionIssue(existing.groupId, 'sibling-rotated');
+                setChatListVersion((v) => v + 1);
+              } else {
+                // 接受响应如实记账：① 群主收到受邀人的接受（inviteeDid ≠ 本机，
+                // 建群前置状态；keyPackageSerialized 是 createGroupFromPendingInvites
+                // 的必要输入）；② 受邀方自己的确认镜像（有 pair），与
+                // respondToGroupInvite 的本地收敛一致
+                updated = { ...existing, status: 'accepted', keyPackageSerialized: resp.keyPackageSerialized };
+              }
+              await msgStorage.putPendingInvite(updated);
+              setPendingInvites((prev) =>
+                prev.map((i) => i.inviteId === resp.inviteId ? updated : i),
+              );
+              setReceivedGroupInvites((prev) =>
+                prev.map((i) => (i.inviteId === resp.inviteId ? updated : i)),
+              );
             }
-            await msgStorage.putPendingInvite(updated);
-            setPendingInvites((prev) =>
-              prev.map((i) => i.inviteId === resp.inviteId ? updated : i),
-            );
-            setReceivedGroupInvites((prev) =>
-              prev.map((i) => (i.inviteId === resp.inviteId ? updated : i)),
-            );
           }
           const senderHandle = await resolveHandleCached(msg.senderDid);
           await msgStorage.putMessage({

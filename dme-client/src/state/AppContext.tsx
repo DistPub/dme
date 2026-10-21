@@ -326,7 +326,7 @@ interface AppActions {
   peekBackupConflict: () => Promise<{ conflict: boolean; deviceLabel: string; writtenAt: string } | null>;
   backupIdentityGuarded: (password: string) => Promise<void>;
   backupIdentityForced: (password: string) => Promise<void>;
-  restoreIdentityFromBackup: (password: string) => Promise<boolean>;
+  restoreIdentityFromBackup: (password: string, forceRestore?: boolean) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
   sendPostMessage: (groupId: string, post: { uri: string; url: string; html?: string }) => Promise<void>;
@@ -1079,7 +1079,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await backupIdentityGuarded(password);
   }, [storage, identityKeys, claimStore, backupIdentityGuarded]);
 
-  const restoreIdentityFromBackup = useCallback(async (password: string): Promise<boolean> => {
+  const restoreIdentityFromBackup = useCallback(async (
+    password: string,
+    forceRestore = false,
+  ): Promise<boolean> => {
     if (!pds) throw new Error('restoreIdentityFromBackup: pds not initialized');
     if (!storage) throw new Error('restoreIdentityFromBackup: storage not initialized');
     if (!poller) throw new Error('restoreIdentityFromBackup: poller not initialized');
@@ -1105,7 +1108,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         staleGroupIds.push(gid);
       }
     }
-    if (staleGroupIds.length > 0) {
+    // 强制恢复（2026-10-21，场景二：已推进的设备丢失）：跳过 stale 护栏，
+    // 其余逻辑与正常恢复完全一致。用户在确认框里已被告知后果——这些会话
+    // 的新熵只存在于丢失的设备上，恢复后仍无法收发，需重新握手/重建。
+    if (!forceRestore && staleGroupIds.length > 0) {
       throw new Error('RESTORE_BACKUP_STALE');
     }
 

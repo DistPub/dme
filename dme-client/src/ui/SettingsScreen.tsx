@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, ScrollView, Switch } from 'react-native';
+import { StyleSheet, Text, View, TextInput, ScrollView, Switch, Alert } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
@@ -48,6 +48,8 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const [restorePwd, setRestorePwd] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<'idle' | 'restoring' | 'done' | 'error'>('idle');
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  // RESTORE_BACKUP_STALE 时展示强制恢复入口（直接警告态，点击即执行）
+  const [restoreStale, setRestoreStale] = useState(false);
 
   const handleSave = async (): Promise<void> => {
     const n = parseInt(draft, 10);
@@ -189,7 +191,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
   // 从备份恢复（key-rotation-plan.md 1.6）：sibling-rotated / 需要回滚时的
   // 唯一恢复路径。用云端最新备份覆盖本机身份与会话状态。
-  const handleRestore = async (): Promise<void> => {
+  const handleRestore = async (forceRestore = false): Promise<void> => {
     setRestoreError(null);
     if (!restorePwd) {
       setRestoreError(t('settings.enterPassword'));
@@ -197,10 +199,11 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     }
     setRestoreStatus('restoring');
     try {
-      const ok = await app.restoreIdentityFromBackup(restorePwd);
+      const ok = await app.restoreIdentityFromBackup(restorePwd, forceRestore);
       if (ok) {
         setRestoreStatus('done');
         setRestorePwd('');
+        setRestoreStale(false);
         setTimeout(() => setRestoreStatus('idle'), 2000);
       } else {
         setRestoreError(t('setup.noBackup'));
@@ -209,10 +212,16 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
+      if (msg === 'RESTORE_BACKUP_STALE') {
+        // 场景二逃生舱（已推进的设备丢失）：不弹窗，恢复区下方显示强制恢复
+        // 区块（警告文案 + 一键执行），跳过 stale 护栏按正常恢复逻辑执行
+        setRestoreStale(true);
+        setRestoreError(t('settings.restoreBackupStale'));
+        setRestoreStatus('idle');
+        return;
+      }
       setRestoreError(
-        msg === 'RESTORE_BACKUP_STALE'
-          ? t('settings.restoreBackupStale')
-          : msg || t('setup.restoreFailed'),
+        msg || t('setup.restoreFailed'),
       );
       setRestoreStatus('error');
       setTimeout(() => setRestoreStatus('idle'), 2000);
@@ -475,6 +484,19 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         />
         {restoreError ? (
           <Text style={styles.error}>{restoreError}</Text>
+        ) : null}
+
+        {restoreStale ? (
+          <View style={styles.forceBackupWrap}>
+            <Text style={styles.hint}>{t('settings.forceRestoreWarning')}</Text>
+            <Button
+              label={t('settings.forceRestoreConfirm')}
+              onPress={() => { void handleRestore(true); }}
+              variant="secondary"
+              style={styles.fullButton}
+              disabled={restoreStatus === 'restoring'}
+            />
+          </View>
         ) : null}
 
         <Button

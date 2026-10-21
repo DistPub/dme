@@ -254,7 +254,7 @@ interface AppActions {
   peekBackupConflict: () => Promise<{ conflict: boolean; deviceLabel: string; writtenAt: string } | null>;
   backupIdentityGuarded: (password: string) => Promise<void>;
   backupIdentityForced: (password: string) => Promise<void>;
-  restoreIdentityFromBackup: (password: string) => Promise<boolean>;
+  restoreIdentityFromBackup: (password: string, forceRestore?: boolean) => Promise<boolean>;
   hasIdentityBackup: () => Promise<boolean>;
   sendMessage: (groupId: string, text: string) => Promise<void>;
   deleteMessage: (conversationId: string, messageId: string) => Promise<void>;
@@ -1145,7 +1145,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   );
 
   const restoreIdentityFromBackup = useCallback(
-    async (password: string): Promise<boolean> => {
+    async (password: string, forceRestore = false): Promise<boolean> => {
       const activeStorage = storageRef.current ?? storage;
       const activePds = pdsRef.current ?? pds;
       const activePoller = pollerRef.current ?? poller;
@@ -1175,7 +1175,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           staleGroupIds.push(gid);
         }
       }
-      if (staleGroupIds.length > 0) {
+      // 强制恢复（2026-10-21，与 dme-client 同步，场景二：已推进的设备丢失）：
+      // 跳过 stale 护栏，其余逻辑与正常恢复完全一致。用户在确认框里已被告知
+      // 后果——这些会话的新熵只存在于丢失的设备上，恢复后仍无法收发。
+      if (!forceRestore && staleGroupIds.length > 0) {
         throw new Error('RESTORE_BACKUP_STALE');
       }
 

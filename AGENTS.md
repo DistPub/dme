@@ -546,6 +546,16 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 1. **成员列表收敛广播**：commit 投递成功后，用群会话把现成的 `group_metadata_update`（新成员列表）加密投进群 queueId 空间。其他成员与操作者的兄弟端（自叶扫描）收到后走现成 handler 更新 `GroupInfo.members`；本机凭 own-leaf gen 游标跳过（发送时已推进）不会重复处理；被踢者已不在树中解不开此消息，其通知仍走定向 1v1 `group_member_removed`。best-effort，广播失败不回滚已成功的成员变更。
 2. **备份顺序修正**：`putGroupInfo` 必须先于 `triggerBackupAfterAdvance`——备份快照包含 groupInfos，旧顺序把旧成员列表（含被踢者）备份上云，兄弟端恢复备份后照样显示已移除的成员。
 
+## 强制恢复逃生舱（2026-10-21 落地，双端）
+
+`RESTORE_BACKUP_STALE` 护栏（恢复前比对 sibling-rotated 会话，备份内容 ≠ 本机即拒绝）针对的是「推进设备还在」的场景；**场景二（推进设备丢失，新熵永久丢失）** 需要逃生舱：把身份和其他会话救回来，承认该会话作废。与 `forceBackup`（设备丢失时强制覆盖云端）对称。
+
+**实现（双端同步）：**
+
+- `restoreIdentityFromBackup(password, forceRestore?)`（AppContext）：force 时跳过 stale 护栏 throw，**其余逻辑与正常恢复一字不差**（全量覆盖、全量收敛、清 sessionIssue、清 queueId LRU、恢复 commitSeq），无特殊分支。
+- Settings 页：撞到 stale **不弹窗**（2026-10-21 用户拍板），在恢复区错误文案下方显示强制恢复区块：⚠️ 警告文案（`settings.forceRestoreWarning`）+「确认强制恢复」按钮（`settings.forceRestoreConfirm`），**点击即执行、无两段确认**（同日二次拍板：去掉未确认态）。恢复成功（含强制）后清 `restoreStale`。
+- 预期行为：强恢复后该会话横幅会消失，对端/兄弟端下一条信封到达时 sibling-rotated 重新挂出——「会话已死需重建」的真实反映，不是 bug。
+
 ## 多语言 (i18n)
 
 客户端支持 简体中文 (`zh`) / English (`en`) 双语，运行时切换，无需重启。

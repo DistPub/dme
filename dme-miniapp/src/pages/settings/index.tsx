@@ -96,6 +96,8 @@ export default function SettingsPage(): React.JSX.Element {
   const [restorePassword, setRestorePassword] = useState('');
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  // RESTORE_BACKUP_STALE 时展示强制恢复入口（直接警告态，点击即执行）
+  const [restoreStale, setRestoreStale] = useState(false);
 
   useEffect(() => {
     setBatchDraft(String(pollBatchSize));
@@ -248,7 +250,10 @@ export default function SettingsPage(): React.JSX.Element {
   }, [forceConfirm, password, confirmPassword, backupIdentityForced, t]);
 
   // ---- 从备份恢复（对应 web handleRestore；showLoading 理由同 handleBackup） --
-  const handleRestore = useCallback(async (): Promise<void> => {
+  // 场景二逃生舱（2026-10-21，与 dme-client 同步）：撞到 RESTORE_BACKUP_STALE
+  // 不弹窗，恢复区下方显示强制恢复区块（警告文案 + 一键执行），跳过
+  // stale 护栏按正常恢复逻辑执行
+  const handleRestore = useCallback(async (forceRestore = false): Promise<void> => {
     setRestoreError(null);
     if (!restorePassword) {
       setRestoreError(t('settings.enterPassword'));
@@ -257,10 +262,11 @@ export default function SettingsPage(): React.JSX.Element {
     setRestoreBusy(true);
     try {
       await Taro.showLoading({ title: t('settings.restoring'), mask: true });
-      const ok = await restoreIdentityFromBackup(restorePassword);
+      const ok = await restoreIdentityFromBackup(restorePassword, forceRestore);
       Taro.hideLoading();
       if (ok) {
         setRestorePassword('');
+        setRestoreStale(false);
         await Taro.showToast({ title: t('settings.restoreSucceeded'), icon: 'success' });
       } else {
         setRestoreError(t('setup.noBackup'));
@@ -268,10 +274,13 @@ export default function SettingsPage(): React.JSX.Element {
     } catch (err) {
       Taro.hideLoading();
       const msg = err instanceof Error ? err.message : '';
+      if (msg === 'RESTORE_BACKUP_STALE') {
+        setRestoreStale(true);
+        setRestoreError(t('settings.restoreBackupStale'));
+        return;
+      }
       setRestoreError(
-        msg === 'RESTORE_BACKUP_STALE'
-          ? t('settings.restoreBackupStale')
-          : `${t('setup.restoreFailed')}: ${msg}`,
+        `${t('setup.restoreFailed')}: ${msg}`,
       );
       console.error('恢复失败:', err);
     } finally {
@@ -474,6 +483,20 @@ export default function SettingsPage(): React.JSX.Element {
           {restoreBusy ? t('settings.restoring') : t('settings.restore')}
         </Button>
         {restoreError ? <Text className="settings__error">{restoreError}</Text> : null}
+
+        {/* 7.6 强制恢复（场景二逃生舱）：撞 RESTORE_BACKUP_STALE 后显示，警告 + 一键执行 */}
+        {restoreStale ? (
+          <View className="settings__forceBackup">
+            <Text className="settings__hint">{t('settings.forceRestoreWarning')}</Text>
+            <Button
+              className="settings__fullButton settings__fullButton--ghost"
+              disabled={restoreBusy}
+              onClick={() => void handleRestore(true)}
+            >
+              {t('settings.forceRestoreConfirm')}
+            </Button>
+          </View>
+        ) : null}
 
         {/* 8. 关于（对应 web 的 styles.fullButton + navigation.navigate('About')） */}
         <Button

@@ -26,11 +26,10 @@ import type {
   GroupInfo,
 } from '../protocol/group-message';
 import type { MlsSession } from '../crypto/mls-session';
-import type { IdentityKeys } from '../crypto/identity';
+import type { KeyPackagePair } from '../crypto/keypackage';
 import { createDidCredential } from '../crypto/mls-credential';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import {
-  generateKeyPackageForUser,
   encryptKeyPackage,
   serializeEncryptedKeyPackage,
   encodeKeyPackageToWire,
@@ -119,23 +118,21 @@ export function createRejectResponse(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Generate a fresh KeyPackage and encrypt it with the inviter's X25519 public key.
+ * Encrypt the provided KeyPackage (from the KP pool) with the inviter's
+ * X25519 public key.
  *
- * @param ownDid - Bob's DID.
- * @param ownIdentityKeys - Bob's identity keys.
- * @param inviterEncryptionPublicKey - Alice's X25519 public key (from DID doc).
- * @returns Base64url-encoded serialized encrypted KeyPackage.
+ * KP 池统一消费（rotation-baseline-plan.md 3.2）：pair 由调用方从池内取，
+ * 本函数不再现场生成。
+ *
+ * @param params.keyPackagePair - KP pair from the pool.
+ * @param params.inviterEncryptionPublicKey - Alice's X25519 public key (from DID doc).
+ * @returns Base64url serialized encrypted KeyPackage.
  */
 export async function generateEncryptedKeyPackageForInvite(params: {
-  readonly ownDid: string;
-  readonly ownIdentityKeys: IdentityKeys;
+  readonly keyPackagePair: KeyPackagePair;
   readonly inviterEncryptionPublicKey: Uint8Array;
 }): Promise<{ encryptedKeyPackage: string; keyPackagePairSerialized: string }> {
-  const keyPackagePair = await generateKeyPackageForUser(
-    params.ownDid,
-    params.ownIdentityKeys.signing.privateKey,
-    params.ownIdentityKeys.signing.publicKey,
-  );
+  const keyPackagePair = params.keyPackagePair;
 
   const encrypted = await encryptKeyPackage(
     keyPackagePair.publicPackage,
@@ -235,15 +232,18 @@ export function deserializeOwnKeyPackagePair(
 /**
  * Create an MLS group and add all accepted members.
  *
+ * KP 池统一消费（rotation-baseline-plan.md 3.2）：群主叶子密钥改为从
+ * KP 池取（新鲜度受控、出生时间统一登记），不再现场生成。
+ *
  * @param params.ownerDid - Group creator's DID.
- * @param params.ownerIdentityKeys - Group creator's identity keys.
+ * @param params.ownerKeyPackagePair - Owner's KeyPackage pair from the KP pool.
  * @param params.acceptedMembers - Members who accepted (with KeyPackages).
  * @returns MLS session for the new group.
  */
 export async function createGroupWithMembers(params: {
   readonly groupId: string;
   readonly ownerDid: string;
-  readonly ownerIdentityKeys: IdentityKeys;
+  readonly ownerKeyPackagePair: KeyPackagePair;
   readonly acceptedMembers: readonly {
     readonly did: string;
     readonly keyPackage: KeyPackage;
@@ -257,15 +257,9 @@ export async function createGroupWithMembers(params: {
 
   const impl = await getNobleMlsImpl();
   const ownerCredential = createDidCredential(params.ownerDid);
-  const ownerKeyPackagePair = await generateKeyPackageForUser(
-    params.ownerDid,
-    params.ownerIdentityKeys.signing.privateKey,
-    params.ownerIdentityKeys.signing.publicKey,
-  );
-
   const mlsSession = await MlsSession.createAsFounder(
     ownerCredential,
-    ownerKeyPackagePair,
+    params.ownerKeyPackagePair,
     impl,
   );
 

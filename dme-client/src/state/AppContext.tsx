@@ -85,7 +85,6 @@ import {
   createRejectResponse,
   createGroupWelcome,
   createMetadataUpdate,
-  generateEncryptedKeyPackageForInvite,
   deserializeAcceptedKeyPackage,
 } from '../handshake/group-invite';
 import { playMessageSound } from '../utils/sound';
@@ -140,6 +139,25 @@ function deserializeWithUint8Array<T>(serialized: string): T {
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+/** 从池条目反序列化 KP pair（与 generateInviteQr 既有逻辑一致）。 */
+function deserializePoolPair(entry: KeyPackagePoolEntry): KeyPackagePair {
+  return {
+    publicPackage: deserializeWithUint8Array<KeyPackage>(entry.publicPackageSerialized),
+    privatePackage: deserializeWithUint8Array<PrivateKeyPackage>(entry.privatePackageSerialized),
+  };
+}
+
+/**
+ * KP 池新鲜度（rotation-baseline-plan.md 3.3）：条目年龄 ≤ 当前设置的轮换
+ * 周期。动态读设置值，不引入独立常量——叶子密钥总寿命上界 = KP 年龄 +
+ * 基线推迟的一个周期 = 2× 用户选择的暴露窗口。
+ */
+function isFreshPoolEntry(entry: KeyPackagePoolEntry, intervalMs: number): boolean {
+  const created = Date.parse(entry.createdAt);
+  if (!Number.isFinite(created)) return false;
+  return Date.now() - created <= intervalMs;
 }
 
 /**
@@ -542,6 +560,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const refreshKeyPackagePool = useCallback(async (): Promise<void> => {
     if (!storage || !identityKeys || !session) return;
 
+    // KP 池新鲜度退役（rotation-baseline-plan.md 3.3）：超龄（年龄 > 当前
+    // 设置的轮换周期）未消费且未被 pending invite 预留的条目移除。
+    // 被引用的条目绝不退役——welcome 解密依赖其私钥，删了复现
+    // 「welcome 未到达」死局（2026-10-14 实测踩坑）。
+    const interval = await storage.getKeyRotationIntervalMs();
+    const reservedIds = new Set(
+      (await storage.getPendingInvites())
+        .map((i) => i.ownKeyPackagePoolId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const stale = (await storage.getKeyPackagePool()).filter(
+      (e) =>
+        !e.consumed &&
+        !reservedIds.has(e.id) &&
+        !isFreshPoolEntry(e, interval),
+    );
+    for (const entry of stale) {
+      await storage.removeKeyPackageFromPool(entry.id);
+    }
+
     const pool = await storage.getKeyPackagePool();
     const available = pool.filter((e) => !e.consumed);
     const needed = KEYPACKAGE_POOL_SIZE - available.length;
@@ -562,10 +600,44 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await storage.addKeyPackageToPool(entry);
     }
 
-    if (needed > 0) {
+    if (needed > 0 || stale.length > 0) {
       setKeyPackagePool(await storage.getKeyPackagePool());
     }
   }, [storage, identityKeys, session]);
+
+  /**
+   * 取一个新鲜（年龄 ≤ 当前设置的轮换周期）的未消费池条目并反序列化成
+   * pair；无则 refresh（退役 + 补货，纯本地）后重取（rotation-baseline-plan.md
+   * 3.3）。consume=true 时立即标 consumed（pair 私钥随即进入本机会话，
+   * 无外部解密依赖）；consume=false 用于「预留待 join」路径（如群邀请接受，
+   * join 成功才标 consumed，保证 welcome 未到达时 pair 随备份可恢复）。
+   */
+  const takeFreshPoolPair = useCallback(async (
+    label: string,
+    consume: boolean,
+  ): Promise<{ entry: KeyPackagePoolEntry; pair: KeyPackagePair }> => {
+    if (!storage) throw new Error(`${label}: storage not initialized`);
+
+    const findFresh = async (): Promise<KeyPackagePoolEntry | undefined> => {
+      const interval = await storage.getKeyRotationIntervalMs();
+      return (await storage.getKeyPackagePool()).find(
+        (e) => !e.consumed && isFreshPoolEntry(e, interval),
+      );
+    };
+
+    let entry = await findFresh();
+    if (!entry) {
+      await refreshKeyPackagePool();
+      entry = await findFresh();
+    }
+    if (!entry) throw new Error(`${label}: no fresh KeyPackage available in pool`);
+
+    if (consume) {
+      await storage.markKeyPackageConsumed(entry.id);
+      setKeyPackagePool(await storage.getKeyPackagePool());
+    }
+    return { entry, pair: deserializePoolPair(entry) };
+  }, [storage, refreshKeyPackagePool]);
 
   const setPollBatchSize = useCallback(async (size: number): Promise<void> => {
     if (!storage || !poller) return;
@@ -1302,17 +1374,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw new Error('generateInviteQr: not fully initialized');
     }
 
-    // Ensure pool has entries
-    await refreshKeyPackagePool();
-    const pool = await storage.getKeyPackagePool();
-    const available = pool.find((e) => !e.consumed);
-    if (!available) throw new Error('generateInviteQr: no KeyPackage available in pool');
-
-    // Deserialize KeyPackage pair from pool
-    const pair: KeyPackagePair = {
-      publicPackage: deserializeWithUint8Array<KeyPackage>(available.publicPackageSerialized),
-      privatePackage: deserializeWithUint8Array<PrivateKeyPackage>(available.privatePackageSerialized),
-    };
+    // KP 池统一消费（rotation-baseline-plan.md 3.2/3.3）：取新鲜条目并立即
+    // 标 consumed（QR 生成即外发公钥包，同既有语义）
+    const { pair } = await takeFreshPoolPair('generateInviteQr', true);
 
     // Get Bob's X25519 public key
     const bobEncKey = await getRemoteEncryptionKey(bobDid);
@@ -1329,14 +1393,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const keyPackageSerialized = serializeWithUint8Array(pair);
     const welcomeQueueId = deriveWelcomeQueueId(keyPackageInitKey);
 
-    // Mark pool entry as consumed (QR is generated for this specific invitation)
-    await storage.markKeyPackageConsumed(available.id);
-    setKeyPackagePool(await storage.getKeyPackagePool());
-
     // Pending welcome is NOT tracked here; caller should track it only after
     // the invite post is actually published (see trackInvitePendingWelcome).
     return { qrString, keyPackageInitKey, keyPackageSerialized, welcomeQueueId };
-  }, [storage, identityKeys, session, poller, refreshKeyPackagePool]);
+  }, [storage, identityKeys, session, poller, takeFreshPoolPair]);
 
   const trackInvitePendingWelcome = useCallback(async (
     bobDid: string,
@@ -1382,9 +1442,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw new Error('acceptInviteQr: claim denied (backup restore required or PDS unavailable)');
     }
 
+    // KP 池统一消费（rotation-baseline-plan.md 3.2）：Bob 叶子密钥改吃池，
+    // 宣言通过后才取（失败不浪费池位），立即标 consumed（私钥随即进本机会话）
+    let poolPair: KeyPackagePair;
+    try {
+      poolPair = (await takeFreshPoolPair('acceptInviteQr', true)).pair;
+    } catch (err) {
+      await releaseClaim();
+      throw err;
+    }
+
     let result: Awaited<ReturnType<typeof acceptInvite>>;
     try {
-      result = await acceptInvite(session.did, identityKeys, qrString);
+      result = await acceptInvite(session.did, identityKeys, qrString, poolPair);
     } catch (err) {
       await releaseClaim();
       throw err;
@@ -1411,7 +1481,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     setGroups((prev) => [...prev, result.groupId]);
     setChatListVersion((v) => v + 1);
-  }, [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim]);
+  }, [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim, takeFreshPoolPair]);
 
   // -------------------------------------------------------------------------
   // Process received Welcome (called from poller callback)
@@ -3111,10 +3181,18 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       // 恢复后收到邀请/自己确认/Bob 确认，唯独进不了群）。从 keyPackagePool
       // 取未消费 pair——池已进 FullBackupData：welcome 未到达时 pair 完好随
       // 备份，恢复后直接 join；join 成功才标 consumed（KP 一次性）。
-      let poolEntry = (await storage.getKeyPackagePool()).find((e) => !e.consumed) ?? null;
+      // 新鲜度过滤（rotation-baseline-plan.md 3.3）：只取年龄 ≤ 轮换周期的
+      // 条目；预留路径不标 consumed（ownKeyPackagePoolId 持有至 join 成功）
+      const findFreshEntry = async (): Promise<KeyPackagePoolEntry | undefined> => {
+        const interval = await storage.getKeyRotationIntervalMs();
+        return (await storage.getKeyPackagePool()).find(
+          (e) => !e.consumed && isFreshPoolEntry(e, interval),
+        );
+      };
+      let poolEntry = await findFreshEntry();
       if (!poolEntry) {
         await refreshKeyPackagePool();
-        poolEntry = (await storage.getKeyPackagePool()).find((e) => !e.consumed) ?? null;
+        poolEntry = await findFreshEntry();
       }
       if (!poolEntry) throw new Error('respondToGroupInvite: key package pool exhausted');
 
@@ -3227,12 +3305,22 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     const claimSeq = await acquireClaimForCommit(groupId, 0);
     if (claimSeq === null) return;
 
+    // KP 池统一消费（rotation-baseline-plan.md 3.2）：群主叶子密钥改吃池，
+    // 宣言通过后才取（失败不浪费池位），立即标 consumed（私钥随即进本机会话）
+    let ownerPoolPair: KeyPackagePair;
+    try {
+      ownerPoolPair = (await takeFreshPoolPair('createGroupFromPendingInvites', true)).pair;
+    } catch (err) {
+      await releaseClaim();
+      throw err;
+    }
+
     let created: Awaited<ReturnType<typeof createGroupWithMembers>>;
     try {
       created = await createGroupWithMembers({
         groupId,
         ownerDid: session.did,
-        ownerIdentityKeys: identityKeys,
+        ownerKeyPackagePair: ownerPoolPair,
         acceptedMembers,
       });
     } catch (err) {
@@ -3372,7 +3460,7 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
 
     setGroups((prev) => [...prev, groupId]);
     setChatListVersion((v) => v + 1);
-  }, [session, storage, identityKeys, pds, poller, pendingInvites, language, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim]);
+  }, [session, storage, identityKeys, pds, poller, pendingInvites, language, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim, takeFreshPoolPair]);
 
   const cancelGroupInvite = useCallback(async (inviteId: string): Promise<void> => {
     if (!storage) throw new Error('cancelGroupInvite: storage not initialized');
@@ -3401,11 +3489,9 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       const inviterEncKey = await getRemoteEncryptionKey(friendDid);
     if (!inviterEncKey) throw new Error('addMemberToGroup: friend has no encryption key');
 
-    const keyPackageSerialized = await generateEncryptedKeyPackageForInvite({
-      ownDid: friendDid,
-      ownIdentityKeys: identityKeys,
-      inviterEncryptionPublicKey: inviterEncKey,
-    });
+    // 移除死调用（rotation-baseline-plan.md 3.2 附带清理）：原
+    // generateEncryptedKeyPackageForInvite 的返回值从未被使用——接受方在
+    // respondToGroupInvite 时自取池内 pair，邀请请求不携带 KP。
 
     const groupInfo = await storage.getGroupInfo(groupId);
     if (!groupInfo) throw new Error('addMemberToGroup: group info not found');

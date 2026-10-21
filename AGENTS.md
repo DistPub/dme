@@ -556,6 +556,20 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 - Settings 页：撞到 stale **不弹窗**（2026-10-21 用户拍板），在恢复区错误文案下方显示强制恢复区块：⚠️ 警告文案（`settings.forceRestoreWarning`）+「确认强制恢复」按钮（`settings.forceRestoreConfirm`），**点击即执行、无两段确认**（同日二次拍板：去掉未确认态）。恢复成功（含强制）后清 `restoreStale`。
 - 预期行为：强恢复后该会话横幅会消失，对端/兄弟端下一条信封到达时 sibling-rotated 重新挂出——「会话已死需重建」的真实反映，不是 bug。
 
+## 新会话轮换基线 + KP 池统一消费（2026-10-21 落地，双端，rotation-baseline-plan.md）
+
+修复「新群建完过一会就自动密钥轮换」：根因是新会话 `lastRotationAt=0`（从未轮换）而建群/join/握手成功不写基线，rotation.ts 判 `now-0 ≥ 周期` 立即到期。
+
+**三项改动（双端同步）：**
+
+1. **putMlsSession 护栏**（db.ts）：本设备**首次**持久化某会话（判据 = 会话记录不存在，不是 rotationAt 记录不存在——后者会破坏轮换失败回滚「下周期重试」语义）时同步写 `lastRotationAt = now`。备份恢复路径随后显式覆盖为备份值：旧备份无 rotationAt → 0 → 立即到期（向后兼容保留）。
+2. **KP 池统一消费**（handshake.ts / group-invite.ts / AppContext）：acceptInvite（1v1 Bob）、createGroupWithMembers（群主）不再现场 `generateKeyPackageForUser`，改从池取新鲜 pair；`generateKeyPackageForUser` 全库只剩 `refreshKeyPackagePool` 一个调用方（KP 出生时间单点登记）。`prepareInviteQr` / `generateEncryptedKeyPackageForInvite`（无调用方/死调用）改收 pair 参数保留导出；addMemberToGroup 的死调用已移除。
+3. **池新鲜度 = 当前设置的轮换周期**（动态读 `getKeyRotationIntervalMs()`，无独立常量）：`refreshKeyPackagePool` 补货前退役「超龄 + unconsumed + 未被 PendingInvite.ownKeyPackagePoolId 引用」的条目；消费点（generateInviteQr / respondToGroupInvite / takeFreshPoolPair）只取新鲜条目。语义：叶子密钥总寿命上界 = 2× 用户设置的周期。
+
+**不变量：被 pending invite 预留（ownKeyPackagePoolId 引用）的池条目绝不退役**——welcome 解密依赖其私钥，删了复现「welcome 未到达」数学死局。不做邀请超时（用户拍板，超龄占用知情接受）。own-replay 按 id 精确取回不过滤。
+
+**关键 helper**：AppContext `takeFreshPoolPair(label, consume)`——取新鲜池条目并反序列化；`consume=true` 立即标 consumed（私钥随即进本机会话：QR 生成/1v1 扫码/建群），`consume=false` 预留待 join（群邀请接受，join 成功才标，保证 welcome 未到达时 pair 随备份可恢复）。
+
 ## 多语言 (i18n)
 
 客户端支持 简体中文 (`zh`) / English (`en`) 双语，运行时切换，无需重启。

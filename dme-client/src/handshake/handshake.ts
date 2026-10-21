@@ -21,12 +21,12 @@
 import { decodeMlsMessage, type KeyPackage, type PrivateKeyPackage, type Welcome } from 'ts-mls';
 
 import type { IdentityKeys } from '../crypto/identity';
+import type { KeyPackagePair } from '../crypto/keypackage';
 import { MlsSession } from '../crypto/mls-session';
 import { createDidCredential } from '../crypto/mls-credential';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import {
-  generateKeyPackageForUser,
   encryptKeyPackage,
   serializeEncryptedKeyPackage,
 } from '../crypto/keypackage';
@@ -38,29 +38,25 @@ import { decodeAndDecryptQr } from './qr-decode';
  * Alice-side: Generate the QR payload containing her encrypted KeyPackage.
  *
  * Steps:
- *   1. Generate a KeyPackage pair using Alice's Ed25519 signing key
- *   2. Encrypt the public KeyPackage with Bob's X25519 public key
- *   3. Serialize the encrypted KeyPackage to bytes
- *   4. Encode as QR string
+ *   1. Encrypt the provided KeyPackage (from the KP pool) with Bob's X25519
+ *      public key
+ *   2. Serialize the encrypted KeyPackage to bytes
+ *   3. Encode as QR string
+ *
+ * KP 池统一消费（rotation-baseline-plan.md 3.2）：pair 由调用方从池内取
+ * （新鲜度受控），本函数不再现场生成。当前无调用方（UI 走 AppContext
+ * generateInviteQr），保留为协议完整性入口。
  *
  * @param aliceDid               - Alice's DID.
- * @param aliceIdentityKeys      - Alice's dual identity keys.
- * @param bobDid                 - Bob's DID (for context, not used in encoding).
+ * @param keyPackagePair         - Alice's KeyPackage pair (from the KP pool).
  * @param bobEncryptionPublicKey - Bob's X25519 public key from DID document.
  * @returns QR string and Alice's KeyPackage initKey (for Welcome queueId polling).
  */
 export async function prepareInviteQr(
   aliceDid: string,
-  aliceIdentityKeys: IdentityKeys,
-  bobDid: string,
+  keyPackagePair: KeyPackagePair,
   bobEncryptionPublicKey: Uint8Array,
 ): Promise<{ qrString: string; keyPackageInitKey: Uint8Array }> {
-  const keyPackagePair = await generateKeyPackageForUser(
-    aliceDid,
-    aliceIdentityKeys.signing.privateKey,
-    aliceIdentityKeys.signing.publicKey,
-  );
-
   const encrypted = await encryptKeyPackage(
     keyPackagePair.publicPackage,
     bobEncryptionPublicKey,
@@ -85,14 +81,18 @@ export async function prepareInviteQr(
  *
  * Steps:
  *   1. Decode QR and decrypt Alice's KeyPackage
- *   2. Generate Bob's own KeyPackage (he is the group founder)
- *   3. Create MLS group with Bob as founder
- *   4. Add Alice to the group -> produces Welcome
- *   5. Derive Welcome queueId from Alice's KeyPackage initKey
+ *   2. Create MLS group with Bob as founder (using the pool-provided
+ *      KeyPackage pair)
+ *   3. Add Alice to the group -> produces Welcome
+ *   4. Derive Welcome queueId from Alice's KeyPackage initKey
+ *
+ * KP 池统一消费（rotation-baseline-plan.md 3.2）：Bob 的叶子密钥改为从
+ * KP 池取（新鲜度受控、出生时间统一登记），不再现场生成。
  *
  * @param bobDid            - Bob's DID.
  * @param bobIdentityKeys   - Bob's dual identity keys.
  * @param qrString          - The QR string from scanning Alice's code.
+ * @param bobKeyPackagePair - Bob's KeyPackage pair from the KP pool.
  * @returns MLS session, groupId, Welcome queueId + payload, and Alice's DID.
  * @throws if QR decoding or MLS group creation fails.
  */
@@ -100,6 +100,7 @@ export async function acceptInvite(
   bobDid: string,
   bobIdentityKeys: IdentityKeys,
   qrString: string,
+  bobKeyPackagePair: KeyPackagePair,
 ): Promise<{
   mlsSession: MlsSession;
   groupId: string;
@@ -115,12 +116,6 @@ export async function acceptInvite(
   if (aliceDid === bobDid) {
     throw new Error('Cannot accept an invite from yourself');
   }
-
-  const bobKeyPackagePair = await generateKeyPackageForUser(
-    bobDid,
-    bobIdentityKeys.signing.privateKey,
-    bobIdentityKeys.signing.publicKey,
-  );
 
   const impl = await getNobleMlsImpl();
   const bobCredential = createDidCredential(bobDid);

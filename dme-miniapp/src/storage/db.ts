@@ -135,6 +135,16 @@ export class DmeStorage {
   // -----------------------------------------------------------------------
 
   async putMlsSession(groupId: string, serialized: string): Promise<void> {
+    // 轮换基线护栏（rotation-baseline-plan.md 3.1）：本设备首次持久化该会话
+    // 时同步写轮换基线 = now，否则 rotation.ts 判 lastRotationAt=0 会让新会话
+    // 在第一次轮换检查即"到期"（新群建完过一会就轮换的根因）。
+    // 判据是"会话记录不存在"而非"rotationAt 记录不存在"：
+    //  - 轮换失败回滚、日常更新等路径会话记录已存在 → 不触发，保住
+    //    "投递失败下个周期自然重试"语义；
+    //  - 备份恢复路径随后会用备份值显式覆盖（AppContext restoreIdentity），
+    //    旧备份无 rotationAt → 0 → 立即到期，向后兼容不变。
+    const existed = (await this.getMlsSession(groupId)) !== null;
+    if (!existed) await this.setLastRotationAt(groupId, Date.now());
     await AsyncStorage.setItem(this.prefix + `mlsSession:${groupId}`, serialized);
   }
 

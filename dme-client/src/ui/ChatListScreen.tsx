@@ -471,12 +471,10 @@ const resolveProfiles = useCallback(async (
 
   const navigateToChat = useCallback(
     async (groupId: string, isGroup: boolean): Promise<void> => {
-      // 幽灵群拦截：群会话但无 GroupInfo → welcome 处理失败，需恢复备份
+      // 幽灵群拦截：群会话但无 GroupInfo → welcome 处理失败，需恢复备份。
+      // 2026-10-21 用户拍板：此分支实际不会发生（metadata 不存在就新建已堵住），
+      // 不弹窗，与其他拦截一致静默返回
       if (isGroup && !app.groupInfos.some((g) => g.groupId === groupId)) {
-        Alert.alert(
-          t('chatlist.restoreBackupGroupName'),
-          t('chatview.restoreBackupToContinue'),
-        );
         return;
       }
       // 反向幽灵群（2026-10-17）：有 GroupInfo 无群 mlsSession（群主兄弟端）——
@@ -853,14 +851,24 @@ const resolveProfiles = useCallback(async (
               return allIssues.length > 0 ? (
               <View style={styles.issueBanner}>
                 {allIssues.map(({ groupId, issue, senderDid }) => {
-                  // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）
+                  // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）。
+                  // 2026-10-21 文案改版：区分群聊/私聊并带会话名（与 desynced 横幅同风格）；
+                  // 群名优先取 GroupInfo.groupName——反向幽灵群行的 displayName 是
+                  // 「待恢复备份的群聊」，直接用会变成「群聊待恢复备份的群聊：…」
                   if (issue === 'sibling-rotated') {
+                    const sRow = conversations.find((c) => c.groupId === groupId);
+                    const sGroupName = app.groupInfos.find((g) => g.groupId === groupId)?.groupName;
+                    const bannerText = sRow?.isGroup
+                      ? t('chatlist.siblingRotatedBannerGroup', {
+                          group: sGroupName || sRow.displayName || groupId,
+                        })
+                      : t('chatlist.siblingRotatedBannerDm', { name: sRow?.displayName || groupId });
                     return (
                       <TouchableOpacity
                         key={groupId}
                         onPress={() => navigation.navigate('Settings')}
                       >
-                        <Text style={styles.issueBannerText}>{t('chatlist.siblingRotatedBanner')}</Text>
+                        <Text style={styles.issueBannerText}>{bannerText}</Text>
                       </TouchableOpacity>
                     );
                   }

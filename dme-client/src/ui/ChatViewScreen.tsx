@@ -119,7 +119,6 @@ export function ChatViewScreen(): React.JSX.Element {
   const [dissolved, setDissolved] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
-  const [needsBackupRestore, setNeedsBackupRestore] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<StoredMessage | null>(null);
   const [pickerLayout, setPickerLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [actionMenuTarget, setActionMenuTarget] = useState<StoredMessage | null>(null);
@@ -358,7 +357,6 @@ export function ChatViewScreen(): React.JSX.Element {
           setDissolved(info.dissolved ?? false);
           setRemoved(info.removed ?? false);
           setLeft(info.left ?? false);
-          setNeedsBackupRestore(false);
           try {
             const handle = await resolveHandleCached(info.creatorDid);
             if (handle !== info.creatorDid) {
@@ -367,11 +365,9 @@ export function ChatViewScreen(): React.JSX.Element {
           } catch (err) {
             console.error('Failed to resolve creator handle for', info.creatorDid, err);
           }
-        } else {
-          // 有群会话但无 GroupInfo：welcome 在本机处理失败，需从备份恢复
-          setDisplayName(t('chatlist.restoreBackupGroupName'));
-          setNeedsBackupRestore(true);
         }
+        // 幽灵群（有群会话但无 GroupInfo）已在 ChatListScreen.navigateToChat 拦截，
+        // 不存在其他进入路径，这里不再做 needsBackupRestore 只读兜底
       };
       loadGroupName().catch((err: unknown) => console.error('loadGroupName failed:', err));
     } else {
@@ -420,7 +416,7 @@ export function ChatViewScreen(): React.JSX.Element {
 
   const onSend = useCallback(async (): Promise<void> => {
     const trimmed = text.trim();
-    if (!trimmed || sending || needsBackupRestore) return;
+    if (!trimmed || sending) return;
     setSending(true);
     try {
       await sendMessage(conversationId, trimmed);
@@ -563,7 +559,7 @@ export function ChatViewScreen(): React.JSX.Element {
 
   const onMicPointerDown = useCallback(
     (e: { clientY?: number; nativeEvent?: { clientY?: number } }): void => {
-      if (dissolved || removed || left || needsBackupRestore) return;
+      if (dissolved || removed || left) return;
       // 未授权：本次点击只弹窗请求权限，不进入录音流程（避免权限弹窗打断按下/松手时序）
       if (!micGranted) {
         void requestMicPermission().then((ok) => {
@@ -626,7 +622,7 @@ export function ChatViewScreen(): React.JSX.Element {
     [dissolved, removed, left, micGranted, finishVoiceSend, showVoiceToast, t],
   );
 
-  const canReact = !dissolved && !removed && !left && !needsBackupRestore;
+  const canReact = !dissolved && !removed && !left;
 
   const senderIdentityFor = useCallback((item: StoredMessage): {
     senderDisplayName?: string;
@@ -942,16 +938,14 @@ export function ChatViewScreen(): React.JSX.Element {
           keyboardShouldPersistTaps="handled"
         />
 
-        {dissolved || removed || left || needsBackupRestore ? (
+        {dissolved || removed || left ? (
           <View style={styles.inputBar}>
             <Text style={styles.dissolvedText}>
-              {needsBackupRestore
-                ? t('chatview.restoreBackupToContinue')
-                : dissolved
-                  ? t('chatview.dissolved')
-                  : removed
-                    ? t('chatview.removed')
-                    : t('chatview.left')}
+              {dissolved
+                ? t('chatview.dissolved')
+                : removed
+                  ? t('chatview.removed')
+                  : t('chatview.left')}
             </Text>
           </View>
         ) : (

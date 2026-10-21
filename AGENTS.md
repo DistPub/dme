@@ -524,7 +524,7 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 - `group_invite_response` 处理器 `ownReplayWithoutPair` 分支：改为置 `accepted` + `setSessionIssue(..., 'sibling-rotated')` + `setChatListVersion(+1)`（触发 banner 即时刷新）+ 同步更新 `receivedGroupInvites` state。
 - `group_welcome` 处理器 `!joined` 重置逻辑：跳过 `accepted` 状态，避免把已提示恢复备份的状态又改回 pending。
 - `ChatListScreen`：无 GroupInfo 但存在对应 `receivedGroupInvites` 记录的 groupId 显示为「待恢复备份的群聊」（`chatlist.restoreBackupGroupName`）而非 groupId。
-- `ChatListScreen.navigateToChat`：幽灵群（isGroup 且 groupInfos 无对应记录）点击拦截，弹 Alert / `Taro.showModal` 提示恢复备份，不跳转。`ChatViewScreen` 保留 `needsBackupRestore` 只读兜底（deep link 等其他入口）。
+- `ChatListScreen.navigateToChat`：幽灵群（isGroup 且 groupInfos 无对应记录）与反向幽灵群（有 GroupInfo 无群 mlsSession）点击**一律静默拦截不进入、不弹窗**（2026-10-21 用户拍板：幽灵群分支实际不会发生——metadata 不存在就新建已堵住；原 Alert/showModal 与 `chatlist.restoreBackupGroupHint` / `chatview.restoreBackupToContinue` 文案键已删除）。2026-10-21 起不再保留 ChatViewScreen 的 `needsBackupRestore` 只读兜底——ChatView 唯一入口是 navigateToChat，拦截后不可达。
 - i18n：新增 `chatlist.restoreBackupGroupName`、`chatview.restoreBackupToContinue` 中英文。
 
 ### own-leaf 邀请镜像收敛（2026-10-16 落地，双端）

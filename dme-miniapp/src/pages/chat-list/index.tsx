@@ -513,17 +513,12 @@ export default function ChatListPage(): React.JSX.Element {
   // ---- 导航 --------------------------------------------------------------
   const navigateToChat = useCallback(
     async (groupId: string, isGroup: boolean): Promise<void> => {
-      // 幽灵群拦截：群会话但无 GroupInfo → welcome 处理失败，需恢复备份
+      // 幽灵群拦截：群会话但无 GroupInfo → welcome 处理失败，需恢复备份。
+      // 2026-10-21 用户拍板：此分支实际不会发生（metadata 不存在就新建已堵住），
+      // 不弹窗，与其他拦截一致静默返回
       if (isGroup && !groupInfos.some((g) => g.groupId === groupId)) {
-        Taro.showModal({
-          title: t('chatlist.restoreBackupGroupName'),
-          content: t('chatview.restoreBackupToContinue'),
-          showCancel: false,
-        });
         return;
       }
-      // 反向幽灵群不再弹窗（2026-10-17 用户拍板，与 dme-client 同步）：
-      // 列表群名改显「待恢复备份的群聊」+ 顶部恢复备份横幅
       // 反向幽灵群（2026-10-17，与 dme-client 同步）：有 GroupInfo 无群
       // mlsSession（群主兄弟端）——列表名与横幅已说明需恢复备份，点群静默拦截
       if (isGroup && !poller?.getSession(groupId)) {
@@ -774,15 +769,25 @@ export default function ChatListPage(): React.JSX.Element {
           return allIssues.length > 0 ? (
           <View className="chatlist__issueBanner">
             {allIssues.map(({ groupId, issue, senderDid }) => {
-              // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）
+              // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）。
+              // 2026-10-21 文案改版（与 dme-client 同步）：区分群聊/私聊并带会话名；
+              // 群名优先取 GroupInfo.groupName——反向幽灵群行的 displayName 是
+              // 「待恢复备份的群聊」，直接用会变成「群聊待恢复备份的群聊：…」
               if (issue === 'sibling-rotated') {
+                const sRow = rows.find((c) => c.conversationId === groupId);
+                const sGroupName = groupInfos.find((g) => g.groupId === groupId)?.groupName;
+                const bannerText = sRow?.isGroup
+                  ? t('chatlist.siblingRotatedBannerGroup', {
+                      group: sGroupName || sRow.displayName || groupId,
+                    })
+                  : t('chatlist.siblingRotatedBannerDm', { name: sRow?.displayName || groupId });
                 return (
                   <View
                     key={groupId}
                     onClick={() => void Taro.navigateTo({ url: '/pages/settings/index' })}
                   >
                     <Text className="chatlist__issueBannerText">
-                      {t('chatlist.siblingRotatedBanner')}
+                      {bannerText}
                     </Text>
                   </View>
                 );

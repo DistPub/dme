@@ -154,7 +154,6 @@ export default function ChatViewPage(): React.JSX.Element {
   const [dissolved, setDissolved] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [left, setLeft] = useState(false);
-  const [needsBackupRestore, setNeedsBackupRestore] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<StoredMessage | null>(null);
   const [pickerLayout, setPickerLayout] = useState<OverlayLayout | null>(null);
   const [actionMenuTarget, setActionMenuTarget] = useState<StoredMessage | null>(null);
@@ -417,12 +416,9 @@ export default function ChatViewPage(): React.JSX.Element {
           setDissolved(info.dissolved ?? false);
           setRemoved(info.removed ?? false);
           setLeft(info.left ?? false);
-          setNeedsBackupRestore(false);
-        } else {
-          // 有群会话但无 GroupInfo：welcome 在本机处理失败，需从备份恢复
-          setDisplayName(t('chatlist.restoreBackupGroupName'));
-          setNeedsBackupRestore(true);
         }
+        // 幽灵群（有群会话但无 GroupInfo）已在 chat-list 的 navigateToChat 拦截，
+        // 不存在其他进入路径，这里不再做 needsBackupRestore 只读兜底
         if (info) {
           try {
             const handle = await resolveHandleCached(info.creatorDid);
@@ -469,7 +465,7 @@ export default function ChatViewPage(): React.JSX.Element {
 
   const onSend = useCallback(async (): Promise<void> => {
     const trimmed = text.trim();
-    if (!trimmed || sending || isBlocked || needsBackupRestore) return;
+    if (!trimmed || sending || isBlocked) return;
     setSending(true);
     try {
       await sendMessage(conversationId, trimmed);
@@ -487,7 +483,7 @@ export default function ChatViewPage(): React.JSX.Element {
     } finally {
       setSending(false);
     }
-  }, [text, sending, isBlocked, needsBackupRestore, sendMessage, conversationId, t]);
+  }, [text, sending, isBlocked, sendMessage, conversationId, t]);
 
   // ---- 按住说话 -------------------------------------------------------------
 
@@ -532,7 +528,7 @@ export default function ChatViewPage(): React.JSX.Element {
 
   const onVoiceTouchStart = useCallback(
     (e: unknown): void => {
-      if (isBlocked || needsBackupRestore) return;
+      if (isBlocked) return;
       // Taro 的 BaseEventOrig 类型不带 touches，统一走 touchOf 兜底（utils/screen）
       const touch = touchOf(e);
       if (!touch) return;
@@ -558,7 +554,7 @@ export default function ChatViewPage(): React.JSX.Element {
           Taro.showToast({ title: t('chatview.recordFailed'), icon: 'none' });
         });
     },
-    [isBlocked, needsBackupRestore, t],
+    [isBlocked, t],
   );
 
   const onVoiceTouchMove = useCallback((e: unknown): void => {
@@ -682,7 +678,7 @@ export default function ChatViewPage(): React.JSX.Element {
   );
 
   const handleAttach = useCallback(async (): Promise<void> => {
-    if (isBlocked || needsBackupRestore) return;
+    if (isBlocked) return;
     try {
       const res = await Taro.showActionSheet({
         itemList: [t('chatview.attachImage'), t('chatview.attachVideo'), t('chatview.attachFile')],
@@ -717,7 +713,7 @@ export default function ChatViewPage(): React.JSX.Element {
       if (/cancel/i.test(msgText)) return;
       console.error('File pick failed:', err);
     }
-  }, [isBlocked, needsBackupRestore, t, conversationId, sendFileMessage]);
+  }, [isBlocked, t, conversationId, sendFileMessage]);
 
   /** 把 Taro API 包成严格 Promise：success 才 resolve，fail 必须 reject。
    *  🔴 不能直接 await Taro.xxx：个别 API 的 promisify 在失败分支也会 resolve，
@@ -807,7 +803,7 @@ export default function ChatViewPage(): React.JSX.Element {
 
   // ---- 渲染 ---------------------------------------------------------------
 
-  const canReact = !dissolved && !removed && !left && !needsBackupRestore;
+  const canReact = !dissolved && !removed && !left;
 
   const senderIdentityFor = useCallback(
     (
@@ -1011,7 +1007,7 @@ export default function ChatViewPage(): React.JSX.Element {
   const displayMessages = useMemo(() => [...messages].reverse(), [messages]);
 
   const overlayOpen = pickerTarget !== null || actionMenuTarget !== null;
-  const groupReadonly = isGroup && (dissolved || removed || left || needsBackupRestore);
+  const groupReadonly = isGroup && (dissolved || removed || left);
 
   return (
     <View
@@ -1095,13 +1091,11 @@ export default function ChatViewPage(): React.JSX.Element {
       {groupReadonly ? (
         <View className="chatview__composer chatview__composer--readonly">
           <Text className="chatview__dissolvedText">
-            {needsBackupRestore
-              ? t('chatview.restoreBackupToContinue')
-              : dissolved
-                ? t('chatview.dissolved')
-                : removed
-                  ? t('chatview.removed')
-                  : t('chatview.left')}
+            {dissolved
+              ? t('chatview.dissolved')
+              : removed
+                ? t('chatview.removed')
+                : t('chatview.left')}
           </Text>
         </View>
       ) : (
@@ -1164,7 +1158,7 @@ export default function ChatViewPage(): React.JSX.Element {
           )}
           {!voiceMode ? (
             <View
-              className={`chatview__sendBtn ${sending || isBlocked || needsBackupRestore || !text.trim() ? 'chatview__sendBtn--disabled' : ''}`}
+              className={`chatview__sendBtn ${sending || isBlocked || !text.trim() ? 'chatview__sendBtn--disabled' : ''}`}
               onClick={() => void onSend()}
             >
               <Text className="chatview__sendBtnText">{sending ? '…' : t('chatview.send')}</Text>

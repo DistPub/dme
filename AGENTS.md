@@ -537,6 +537,15 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 
 **修复（双端同步）：** `group_metadata_update` 处理器改为**不存在就新建**——`existing` 有则合并（members + groupName），无则用 payload 构造完整 `GroupInfo`（`creatorDid` 从 `members` 里 `role === 'creator'` 推导，兜底 `msg.senderDid`），同时补齐 `setGroupInfos` 追加分支、`setGroups` 登记与 `setChatListVersion` 刷新。
 
+## 成员变更的成员列表收敛（2026-10-21 落地，双端）
+
+踢人/拉人只产生 MLS commit，此前**从没人广播新成员列表**：`group_commit` 分支只写 MLS session 不写 `GroupInfo.members`，而群管理页渲染的是本地 `GroupInfo.members` → 被踢者永远留在其他成员**和操作者兄弟端**的群管理列表里（实测：A 端踢掉 X，B 端群管理仍显示 X）。remove-only commit 无 path（不含新熵），兄弟端能成功应用 commit——MLS 树正确、仅 UI 列表陈旧，更掩盖了问题。
+
+**修复（双端同步，AppContext `removeMemberFromGroup` / `addAcceptedMembersToGroup`）：**
+
+1. **成员列表收敛广播**：commit 投递成功后，用群会话把现成的 `group_metadata_update`（新成员列表）加密投进群 queueId 空间。其他成员与操作者的兄弟端（自叶扫描）收到后走现成 handler 更新 `GroupInfo.members`；本机凭 own-leaf gen 游标跳过（发送时已推进）不会重复处理；被踢者已不在树中解不开此消息，其通知仍走定向 1v1 `group_member_removed`。best-effort，广播失败不回滚已成功的成员变更。
+2. **备份顺序修正**：`putGroupInfo` 必须先于 `triggerBackupAfterAdvance`——备份快照包含 groupInfos，旧顺序把旧成员列表（含被踢者）备份上云，兄弟端恢复备份后照样显示已移除的成员。
+
 ## 多语言 (i18n)
 
 客户端支持 简体中文 (`zh`) / English (`en`) 双语，运行时切换，无需重启。

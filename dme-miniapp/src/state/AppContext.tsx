@@ -3372,14 +3372,31 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       await storage.setCommitSeq(claimSeq);
 
-      // 备份点：拉人 commit 全部投递成功，群会话状态推进，立即联动备份
-      await triggerBackupAfterAdvance(`addAcceptedMembers ${groupId}`);
-
+      // 先落盘新成员列表再备份（与 dme-client 同步，2026-10-21）：备份快照
+      // 包含 groupInfos，若备份先于 putGroupInfo 执行，云端快照里的成员
+      // 列表不含新成员，兄弟端恢复备份后群管理页看不到拉进来的人
       const updatedInfo: GroupInfo = {
         ...groupInfo,
         members: [...groupInfo.members, ...newMembers],
       };
       await storage.putGroupInfo(updatedInfo);
+
+      // 成员列表收敛广播（与 dme-client 同步，2026-10-21，同 removeMember）：
+      // commit wrapper 只推进 MLS 状态，兄弟端/其他成员的本地
+      // GroupInfo.members 不会更新。广播 group_metadata_update，best-effort。
+      try {
+        const metaMsg = createMetadataUpdate({
+          groupId,
+          groupName: groupInfo.groupName,
+          members: updatedInfo.members,
+        });
+        await sendEncryptedTo(groupId, metaMsg);
+      } catch (err) {
+        console.warn('addAcceptedMembersToGroup: metadata 广播失败（best-effort）', err);
+      }
+
+      // 备份点：拉人 commit 全部投递成功，群会话状态推进，立即联动备份
+      await triggerBackupAfterAdvance(`addAcceptedMembers ${groupId}`);
 
       for (const invite of accepted) {
         await storage.updatePendingInviteStatus(invite.inviteId, 'cancelled');
@@ -3493,9 +3510,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       await storage.setCommitSeq(claimSeq);
 
-      // 备份点：踢人 commit 投递成功，群会话状态推进，立即联动备份
-      await triggerBackupAfterAdvance(`removeMember ${groupId}`);
-
+      // 先落盘新成员列表再备份（与 dme-client 同步，2026-10-21）：备份快照
+      // 包含 groupInfos，若备份先于 putGroupInfo 执行，云端快照里的成员
+      // 列表仍是旧的（含被踢者），兄弟端按 sibling-rotated 提示恢复备份
+      // 后照样显示已移除的成员
       const updatedInfo: GroupInfo = {
         ...groupInfo,
         members: groupInfo.members.filter((m) => m.did !== memberDid),
@@ -3503,6 +3521,28 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await storage.putGroupInfo(updatedInfo);
       setGroupInfos((prev) => prev.map((g) => (g.groupId === groupId ? updatedInfo : g)));
       setChatListVersion((v) => v + 1);
+
+      // 成员列表收敛广播（与 dme-client 同步，2026-10-21）：commit wrapper
+      // 只推进各端 MLS 加密状态，从不更新各端本地 GroupInfo.members（群
+      // 管理页据此渲染）——被踢者一直留在兄弟端/其他成员的群管理列表里。
+      // 复用现成的 group_metadata_update 协议消息广播新成员列表，经群
+      // queueId 空间投递：其他成员与同账号兄弟端（自叶扫描）收到后走现成
+      // handler 更新 GroupInfo；本机凭 own-leaf gen 游标跳过；被踢者已不在
+      // 树中解不开此消息，其通知走上面的 1v1 group_member_removed。
+      // best-effort：广播失败不回滚已成功的踢人。
+      try {
+        const metaMsg = createMetadataUpdate({
+          groupId,
+          groupName: groupInfo.groupName,
+          members: updatedInfo.members,
+        });
+        await sendEncryptedTo(groupId, metaMsg);
+      } catch (err) {
+        console.warn('removeMemberFromGroup: metadata 广播失败（best-effort）', err);
+      }
+
+      // 备份点：踢人 commit 投递成功，群会话状态推进，立即联动备份
+      await triggerBackupAfterAdvance(`removeMember ${groupId}`);
     },
     [session, storage, pds, poller, sendEncryptedTo, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim],
   );

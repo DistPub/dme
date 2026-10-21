@@ -138,7 +138,11 @@ export default function ChatListPage(): React.JSX.Element {
   const [myHandle, setMyHandle] = useState('');
 
   const [inviterHandles, setInviterHandles] = useState<Record<string, string>>({});
-  const [sessionIssues, setSessionIssues] = useState<{ groupId: string; issue: 'sibling-rotated' | 'desynced' }[]>([]);
+  const [sessionIssues, setSessionIssues] = useState<
+    { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[]
+  >([]);
+  /** desynced 横幅的「oo」：触发标记的 commit 发送者展示名（handle，groupId 索引）。 */
+  const [desyncedSenderNames, setDesyncedSenderNames] = useState<Record<string, string>>({});
 
   // 会话异常标记（sibling-rotated / desynced）：有新标记或状态重建后刷新
   useEffect(() => {
@@ -147,10 +151,13 @@ export default function ChatListPage(): React.JSX.Element {
       if (!storage) return;
       try {
         const groupIds = await storage.listGroups();
-        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced' }[] = [];
+        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[] = [];
         for (const gid of groupIds) {
           const issue = await storage.getSessionIssue(gid);
-          if (issue) issues.push({ groupId: gid, issue });
+          if (issue) {
+            const senderDid = issue === 'desynced' ? await storage.getSessionIssueSender(gid) : null;
+            issues.push({ groupId: gid, issue, senderDid });
+          }
         }
         if (!cancelled) setSessionIssues(issues);
       } catch (err) {
@@ -212,6 +219,39 @@ export default function ChatListPage(): React.JSX.Element {
     handleCacheRef.current[did] = did;
     return did;
   }, []);
+
+  // desynced 横幅「oo」：解析触发标记的 commit 发送者展示名（handle 兜底 DID）
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const pending = sessionIssues.filter(
+        (i) => i.issue === 'desynced' && i.senderDid && desyncedSenderNames[i.groupId] === undefined,
+      );
+      for (const item of pending) {
+        const did = item.senderDid;
+        if (!did) continue;
+        let name = did;
+        try {
+          name = (await resolveHandle(did)) || did;
+        } catch {
+          // 保持 did 兜底
+        }
+        if (!cancelled) setDesyncedSenderNames((prev) => ({ ...prev, [item.groupId]: name }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionIssues, desyncedSenderNames, resolveHandle]);
+
+  // 关闭 desynced 横幅：隐藏 + 清除标记（轮换恢复参与）；新失败会重新置标记
+  const handleDismissDesynced = useCallback(async (groupId: string): Promise<void> => {
+    try {
+      await storage?.setSessionIssue(groupId, null);
+    } catch (err) {
+      console.error('chat-list: 关闭 desynced 横幅失败', err);
+      return;
+    }
+    setSessionIssues((prev) => prev.filter((i) => i.groupId !== groupId));
+  }, [storage]);
 
   const resolveProfiles = useCallback(
     async (dids: string[]): Promise<Record<string, ProfileEntry>> => {
@@ -726,20 +766,49 @@ export default function ChatListPage(): React.JSX.Element {
           // 无群 mlsSession，群主兄弟端）与 sessionIssue 同栏展示恢复备份提示
           const ghostIssues = groupInfos
             .filter((g) => rows.some((c) => c.conversationId === g.groupId) && !poller?.getSession(g.groupId))
-            .map((g) => ({ groupId: g.groupId, issue: 'sibling-rotated' as const }));
+            .map((g) => ({ groupId: g.groupId, issue: 'sibling-rotated' as const, senderDid: null }));
           const allIssues = [
             ...sessionIssues,
             ...ghostIssues.filter((g) => !sessionIssues.some((s) => s.groupId === g.groupId)),
           ];
           return allIssues.length > 0 ? (
           <View className="chatlist__issueBanner">
-            {allIssues.map(({ groupId, issue }) => (
-              <Text key={groupId} className="chatlist__issueBannerText">
-                {issue === 'sibling-rotated'
-                  ? t('chatlist.siblingRotatedBanner')
-                  : t('chatlist.desyncedBanner')}
-              </Text>
-            ))}
+            {allIssues.map(({ groupId, issue, senderDid }) => {
+              // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）
+              if (issue === 'sibling-rotated') {
+                return (
+                  <View
+                    key={groupId}
+                    onClick={() => void Taro.navigateTo({ url: '/pages/settings/index' })}
+                  >
+                    <Text className="chatlist__issueBannerText">
+                      {t('chatlist.siblingRotatedBanner')}
+                    </Text>
+                  </View>
+                );
+              }
+              // desynced（2026-10-20 与 dme-client 同步）：区分群聊/私聊，带发送者名，可关闭清标记
+              const row = rows.find((c) => c.conversationId === groupId);
+              const bannerText = row?.isGroup
+                ? t('chatlist.desyncedBannerGroup', {
+                    group: row.displayName || groupId,
+                    sender: desyncedSenderNames[groupId] ?? senderDid ?? '',
+                  })
+                : t('chatlist.desyncedBannerDm', { name: row?.displayName || groupId });
+              return (
+                <View key={groupId} className="chatlist__issueBannerRow">
+                  <Text className="chatlist__issueBannerText chatlist__issueBannerText--flex">
+                    {bannerText}
+                  </Text>
+                  <Text
+                    className="chatlist__issueBannerDismiss"
+                    onClick={() => void handleDismissDesynced(groupId)}
+                  >
+                    {t('chatlist.desyncedDismiss')}
+                  </Text>
+                </View>
+              );
+            })}
           </View>
           ) : null;
         })()}

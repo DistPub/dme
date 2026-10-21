@@ -139,7 +139,11 @@ export function ChatListScreen(): React.JSX.Element {
   const [avatarError, setAvatarError] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [userHandle, setUserHandle] = useState('');
-  const [sessionIssues, setSessionIssues] = useState<{ groupId: string; issue: 'sibling-rotated' | 'desynced' }[]>([]);
+  const [sessionIssues, setSessionIssues] = useState<
+    { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[]
+  >([]);
+  /** desynced 横幅的「oo」：触发标记的 commit 发送者展示名（handle，groupId 索引）。 */
+  const [desyncedSenderNames, setDesyncedSenderNames] = useState<Record<string, string>>({});
 
   // 会话异常标记（sibling-rotated / desynced）：有新标记或状态重建后刷新
   useEffect(() => {
@@ -148,10 +152,13 @@ export function ChatListScreen(): React.JSX.Element {
       if (!app.storage) return;
       try {
         const groupIds = await app.storage.listGroups();
-        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced' }[] = [];
+        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[] = [];
         for (const gid of groupIds) {
           const issue = await app.storage.getSessionIssue(gid);
-          if (issue) issues.push({ groupId: gid, issue });
+          if (issue) {
+            const senderDid = issue === 'desynced' ? await app.storage.getSessionIssueSender(gid) : null;
+            issues.push({ groupId: gid, issue, senderDid });
+          }
         }
         if (!cancelled) setSessionIssues(issues);
       } catch (err) {
@@ -188,6 +195,39 @@ const resolveHandle = useCallback(async (did: string): Promise<string> => {
   handleCacheRef.current[did] = did;
   return did;
 }, []);
+
+// desynced 横幅「oo」：解析触发标记的 commit 发送者展示名（handle 兜底 DID）
+useEffect(() => {
+  let cancelled = false;
+  void (async () => {
+    const pending = sessionIssues.filter(
+      (i) => i.issue === 'desynced' && i.senderDid && desyncedSenderNames[i.groupId] === undefined,
+    );
+    for (const item of pending) {
+      const did = item.senderDid;
+      if (!did) continue;
+      let name = did;
+      try {
+        name = (await resolveHandle(did)) || did;
+      } catch {
+        // 保持 did 兜底
+      }
+      if (!cancelled) setDesyncedSenderNames((prev) => ({ ...prev, [item.groupId]: name }));
+    }
+  })();
+  return () => { cancelled = true; };
+}, [sessionIssues, desyncedSenderNames, resolveHandle]);
+
+// 关闭 desynced 横幅：隐藏 + 清除标记（轮换恢复参与）；新失败会重新置标记
+const handleDismissDesynced = useCallback(async (groupId: string): Promise<void> => {
+  try {
+    await app.storage?.setSessionIssue(groupId, null);
+  } catch (err) {
+    console.error('ChatListScreen: dismiss desynced failed:', err);
+    return;
+  }
+  setSessionIssues((prev) => prev.filter((i) => i.groupId !== groupId));
+}, [app.storage]);
 
 const resolveProfiles = useCallback(async (
   dids: string[],
@@ -805,27 +845,43 @@ const resolveProfiles = useCallback(async (
               // 群主兄弟端）与 sessionIssue 同栏展示恢复备份提示，不再用点群弹窗
               const ghostIssues = app.groupInfos
                 .filter((g) => app.groups.includes(g.groupId) && !app.poller?.getSession(g.groupId))
-                .map((g) => ({ groupId: g.groupId, issue: 'sibling-rotated' as const }));
+                .map((g) => ({ groupId: g.groupId, issue: 'sibling-rotated' as const, senderDid: null }));
               const allIssues = [
                 ...sessionIssues,
                 ...ghostIssues.filter((g) => !sessionIssues.some((s) => s.groupId === g.groupId)),
               ];
               return allIssues.length > 0 ? (
               <View style={styles.issueBanner}>
-                {allIssues.map(({ groupId, issue }) => {
-                  const bannerText = issue === 'sibling-rotated'
-                    ? t('chatlist.siblingRotatedBanner')
-                    : t('chatlist.desyncedBanner');
-                  // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页
-                  return issue === 'sibling-rotated' ? (
-                    <TouchableOpacity
-                      key={groupId}
-                      onPress={() => navigation.navigate('Settings')}
-                    >
-                      <Text style={styles.issueBannerText}>{bannerText}</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <Text key={groupId} style={styles.issueBannerText}>{bannerText}</Text>
+                {allIssues.map(({ groupId, issue, senderDid }) => {
+                  // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）
+                  if (issue === 'sibling-rotated') {
+                    return (
+                      <TouchableOpacity
+                        key={groupId}
+                        onPress={() => navigation.navigate('Settings')}
+                      >
+                        <Text style={styles.issueBannerText}>{t('chatlist.siblingRotatedBanner')}</Text>
+                      </TouchableOpacity>
+                    );
+                  }
+                  // desynced（2026-10-20 文案改版）：区分群聊/私聊，带发送者名，可关闭清标记
+                  const row = conversations.find((c) => c.groupId === groupId);
+                  const bannerText = row?.isGroup
+                    ? t('chatlist.desyncedBannerGroup', {
+                        group: row.displayName || groupId,
+                        sender: desyncedSenderNames[groupId] ?? senderDid ?? '',
+                      })
+                    : t('chatlist.desyncedBannerDm', { name: row?.displayName || groupId });
+                  return (
+                    <View key={groupId} style={styles.issueBannerRow}>
+                      <Text style={[styles.issueBannerText, styles.issueBannerTextFlex]}>{bannerText}</Text>
+                      <TouchableOpacity
+                        style={styles.issueBannerDismiss}
+                        onPress={() => void handleDismissDesynced(groupId)}
+                      >
+                        <Text style={styles.issueBannerDismissText}>{t('chatlist.desyncedDismiss')}</Text>
+                      </TouchableOpacity>
+                    </View>
                   );
                 })}
               </View>
@@ -1340,6 +1396,22 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 13,
     lineHeight: 18,
+  },
+  issueBannerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  issueBannerTextFlex: {
+    flex: 1,
+  },
+  issueBannerDismiss: {
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  issueBannerDismissText: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
   },
   sectionTitle: {
     color: theme.colors.textSecondary,

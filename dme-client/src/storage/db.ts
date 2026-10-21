@@ -637,22 +637,43 @@ export class DmeStorage {
     return null;
   }
 
+  /**
+   * desynced 标记的补充信息：触发该标记的 commit 发送者 DID。
+   * 仅 desynced 有值（sibling-rotated 无需），供横幅「oo」展示，随标记清除。
+   */
+  async getSessionIssueSender(groupId: string): Promise<string | null> {
+    const raw = await storage.getItem(this.prefix + `sessionIssueSender:${groupId}`);
+    return raw ?? null;
+  }
+
   async setSessionIssue(
     groupId: string,
     issue: 'sibling-rotated' | 'desynced' | null,
+    senderDid?: string,
   ): Promise<void> {
     const key = this.prefix + `sessionIssue:${groupId}`;
+    const senderKey = this.prefix + `sessionIssueSender:${groupId}`;
     if (issue === null) {
       await storage.removeItem(key);
+      await storage.removeItem(senderKey);
     } else {
       await storage.setItem(key, issue);
+      if (senderDid) {
+        await storage.setItem(senderKey, senderDid);
+      } else {
+        await storage.removeItem(senderKey);
+      }
     }
   }
 
   /** 清除全部会话异常标记（备份恢复后状态整体重建，旧标记作废）。 */
   async clearAllSessionIssues(): Promise<void> {
     const keys = await storage.getAllKeys();
-    const issueKeys = keys.filter((k) => k.startsWith(this.prefix + 'sessionIssue:'));
+    const issueKeys = keys.filter(
+      (k) =>
+        k.startsWith(this.prefix + 'sessionIssue:') ||
+        k.startsWith(this.prefix + 'sessionIssueSender:'),
+    );
     if (issueKeys.length > 0) {
       await Promise.all(issueKeys.map((key) => storage.removeItem(key)));
     }

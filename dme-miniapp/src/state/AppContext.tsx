@@ -2007,8 +2007,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                     await msgStorage.setSessionIssue(commit.groupId, 'sibling-rotated');
                     console.warn('[dme:rotation] 兄弟设备已推进会话', commit.groupId, '需恢复备份');
                   } else {
-                    // 普通成员的 commit 应用失败：会话已脱钩，需重新握手（1.4 desync 兑底）
-                    await msgStorage.setSessionIssue(commit.groupId, 'desynced');
+                    // 普通成员的 commit 应用失败：会话已脱钩，需重新握手（1.4 desync 兑底）。
+                    // 记录发送者 DID 供横幅「oo」展示（2026-10-20 与 dme-client 同步）
+                    await msgStorage.setSessionIssue(commit.groupId, 'desynced', msg.senderDid);
                     console.warn('[dme:desync]', msg.senderDid, '的 commit 应用失败', commit.groupId);
                   }
                 }

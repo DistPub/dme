@@ -105,6 +105,7 @@ import type {
   GroupInviteResponse,
   GroupWelcome,
   GroupMetadataUpdate,
+  GroupForkRuling,
 } from '../protocol/group-message';
 import {
   createInviteRequest,
@@ -313,6 +314,12 @@ interface AppActions {
   dissolveGroup: (groupId: string) => Promise<void>;
   removeMemberFromGroup: (groupId: string, memberDid: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
+  /**
+   * 群主拍板（P2，group-fork-plan.md 3.2/3.3，与 dme-client 同步）：仅群主
+   * 可调用。确认「以本机为准」后经群 MLS 会话广播 group_fork_ruling（仅
+   * 权威世界可解密），本机清除 forked 标记并触发备份联动。
+   */
+  issueForkRuling: (groupId: string) => Promise<boolean>;
   /** 手动触发一次轮询（小程序无后台推送，页面 onShow 时调用）。 */
   pollNow: () => Promise<void>;
 }
@@ -899,11 +906,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (!activePds) throw new Error('backupIdentity: pds 未初始化');
       if (!activeStorage) throw new Error('backupIdentity: storage 未初始化');
 
-      // 缺口③配套：本机存在 sibling-rotated 会话时，本机状态落后于兄弟端，
-      // 此时备份会用旧状态覆盖云端备份（云端可能已由兄弟端刷新为包含其推进
-      // 的新状态）。正确顺序是先「从备份恢复」，恢复完成后再备份。
+      // 缺口③配套：本机存在 sibling-rotated / forked 会话时，本机状态落后于
+      // 兄弟端/权威谱系，此时备份会用旧状态覆盖云端备份（云端可能已由兄弟
+      // 端刷新为包含其推进的新状态）。正确顺序是先「从备份恢复」，恢复完成
+      // 后再备份。
       for (const gid of await activeStorage.listGroups()) {
-        if ((await activeStorage.getSessionIssue(gid)) === 'sibling-rotated') {
+        const backupIssue = await activeStorage.getSessionIssue(gid);
+        if (backupIssue === 'sibling-rotated' || backupIssue === 'forked') {
           throw new Error('BACKUP_BLOCKED_STALE');
         }
       }
@@ -925,6 +934,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         blockList: await activeStorage.getBlockList(),
         rotationAt,
         commitSeq: await activeStorage.getCommitSeq(),
+        // 谱系账本随备份走（group-fork-plan.md 3.1）：恢复端 lastSeq 归零会让
+        // 其下次 commit 从 1 重新编号，对端账本 seq 1 已有他值 → 全员假分叉
+        groupCommitLedger: await activeStorage.exportGroupCommitLedger(),
       };
 
       const encryptedData = encryptBackup(data, password);
@@ -1167,7 +1179,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // 推进"的充分条件。
       const staleGroupIds: string[] = [];
       for (const gid of await activeStorage.listGroups()) {
-        if ((await activeStorage.getSessionIssue(gid)) !== 'sibling-rotated') continue;
+        // forked（谱系分叉，与 dme-client 同步）与 sibling-rotated 同理：备份
+        // 必须确实包含与本机不同的状态（权威谱系）才允许恢复
+        const restoreIssue = await activeStorage.getSessionIssue(gid);
+        if (restoreIssue !== 'sibling-rotated' && restoreIssue !== 'forked') continue;
         const localSerialized = await activeStorage.getMlsSession(gid);
         if (!localSerialized) continue; // 本机无此会话状态，无从比对
         const backupSerialized = data.mlsSessions[gid];
@@ -1224,6 +1239,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       await activeStorage.putKeyPackagePool(data.keyPackagePool);
       setKeyPackagePool(data.keyPackagePool);
+
+      // 恢复群 commit 谱系账本（覆盖式；group-fork-plan.md 3.1，与 dme-client 同步）
+      await activeStorage.importGroupCommitLedger(
+        data.groupCommitLedger ?? { lastSeq: {}, entries: {} },
+      );
 
       for (const info of data.groupInfos) {
         await activeStorage.putGroupInfo(info);
@@ -1302,8 +1322,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       getIntervalMs: () => activeStorage.getKeyRotationIntervalMs(),
       getLastRotationAt: (groupId) => activeStorage.getLastRotationAt(groupId),
       setLastRotationAt: (groupId, ts) => activeStorage.setLastRotationAt(groupId, ts),
-      // 缺口②：带异常标记的会话不参与轮换——状态已废，且克隆端一端轮换会
-      // 在所有兄弟端触发 sibling-rotated 横幅风暴（实测踩过）
+      // 缺口②：带异常标记的会话（desynced / sibling-rotated / forked）不参与
+      // 轮换——状态已废，且克隆端一端轮换会在所有兄弟端触发横幅风暴（实测踩过）
       getSessionIssue: (groupId) => activeStorage.getSessionIssue(groupId),
       claimStore: {
         get: (rkey) => activePds.getRotationClaim(rkey),
@@ -1313,6 +1333,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // 宣言 v2：账号级单调 commit 高水位（本地计数随备份走）
       getCommitSeq: () => activeStorage.getCommitSeq(),
       setCommitSeq: (seq) => activeStorage.setCommitSeq(seq),
+      // 群 commit 谱系账本（group-fork-plan.md 3.1，与 dme-client 同步）：
+      // 轮换 commit 携带 per-group seq 并写回 queueId，供全员分叉检测
+      reserveGroupCommit: (groupId) => activeStorage.reserveGroupCommit(groupId),
+      appendGroupCommitQueueId: (groupId, seq, queueId) =>
+        activeStorage.appendGroupCommitQueueId(groupId, seq, queueId),
       getIdentitySigningPublicKey: async () => activeKeys.signing.publicKey,
       onRotated: async (groupId) => {
         // 1.5 备份联动（统一走 triggerBackupAfterAdvance）：有缓存密码 →
@@ -1996,6 +2021,34 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
           case 'group_commit': {
             const commit = parsed as unknown as { groupId: string; commitPayload: string };
+
+            // 谱系账本补观测（P1，group-fork-plan.md 3.1，与 dme-client 同步）：
+            // poller 侧只观测群会话 ctx（归属护栏见 poller.ts），1v1 通道扇出的
+            // commit 副本（建群/退群清理）在这里按解析出的真实 groupId 补记。
+            // poller 已观测过的 group-space 信封在账本里是 duplicate，幂等无害。
+            if (typeof msg.envelope.groupSeq === 'number') {
+              try {
+                const verdict = await msgStorage.observeGroupCommit(
+                  commit.groupId,
+                  msg.envelope.groupSeq,
+                  msg.envelope.queueId,
+                );
+                if (verdict === 'fork') {
+                  console.error(
+                    '[dme:fork] commit lineage fork detected (AppContext):',
+                    commit.groupId,
+                    'seq',
+                    msg.envelope.groupSeq,
+                    'queueId',
+                    msg.envelope.queueId,
+                  );
+                  await msgStorage.setSessionIssue(commit.groupId, 'forked');
+                }
+              } catch (err) {
+                console.warn('[dme:fork] ledger observe (AppContext) failed:', err);
+              }
+            }
+
             if (poller) {
               const groupSession = poller.getSession(commit.groupId);
               if (groupSession) {
@@ -2017,6 +2070,46 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                   }
                 }
               }
+            }
+            break;
+          }
+
+          case 'group_fork_ruling': {
+            // 群主拍板裁定（P2，group-fork-plan.md 3.3/3.4，与 dme-client 同步）：
+            // 只有权威世界（群主本机所在谱系）能解开此消息——非权威世界解不开，
+            // 天然走不到本分支，维持 forked 横幅走恢复备份路径。
+            const ruling = parsed as unknown as GroupForkRuling;
+            if (ruling.groupId) {
+              const rulingInfo = await msgStorage.getGroupInfo(ruling.groupId);
+              // 防伪：仅群主可发裁定（MLS 发送者认证 + creatorDid 比对）
+              if (!rulingInfo || rulingInfo.creatorDid !== msg.senderDid) {
+                console.warn(
+                  '[dme:fork] 忽略分叉裁定：发送者不是群主',
+                  ruling.groupId,
+                  msg.senderDid,
+                );
+                break;
+              }
+              // 幂等：仅当本机带 forked 标记时收敛（不清 sibling-rotated /
+              // desynced——那些标记语义不同）
+              if ((await msgStorage.getSessionIssue(ruling.groupId)) === 'forked') {
+                console.log('[dme:fork] 收到分叉裁定，清除 forked 标记', ruling.groupId);
+                await msgStorage.setSessionIssue(ruling.groupId, null);
+                await msgStorage.putMessage({
+                  id: msg.envelope.queueId,
+                  fromDid: msg.senderDid,
+                  toDid: userDid,
+                  plaintext: t(language, 'group.forkRulingApplied'),
+                  createdAt: msg.envelope.createdAt,
+                  sent: false,
+                  kind: 'group_system',
+                  conversationId: ruling.groupId,
+                });
+                setChatListVersion((v) => v + 1);
+              }
+              // 备份联动：权威世界成员收到裁定后刷新备份，让非权威兄弟端
+              // 后续可恢复到权威谱系
+              await triggerBackupAfterAdvance(`fork ruling received ${ruling.groupId}`);
             }
             break;
           }
@@ -2148,12 +2241,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
                       await msgStorage.putMlsSession(left.groupId, groupSession.serialize());
                       await msgStorage.setCommitSeq(claimSeq);
 
-                      await deliverCommitViaGroupSpace({
+                      // 谱系账本（group-fork-plan.md 3.1，与 dme-client 同步）
+                      const seqMeta = await msgStorage.reserveGroupCommit(left.groupId);
+                      const delivered = await deliverCommitViaGroupSpace({
                         preCommitStateSerialized: preCommitState,
                         groupId: left.groupId,
                         commitMessage,
                         createEnvelope: (envelope) => pds.createEnvelope(envelope),
+                        groupSeq: seqMeta.seq,
+                        parentQueueId: seqMeta.parentQueueId,
                       });
+                      await msgStorage.appendGroupCommitQueueId(
+                        left.groupId,
+                        seqMeta.seq,
+                        delivered.queueId,
+                      );
 
                       // 备份点：群主执行退群清理 commit，群会话状态推进，
                       // 立即联动备份（其他端恢复后才有含此次移除的新状态）
@@ -2863,10 +2965,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * 四步，小程序集中成这一个 helper（行为完全一致，含会话序列化回写）。
    */
   const sendEncryptedTo = useCallback(
-    async (peerDid: string, payload: unknown): Promise<boolean> => {
-      if (!storage || !pds || !poller) return false;
+    async (
+      peerDid: string,
+      payload: unknown,
+      // 谱系账本（group-fork-plan.md 3.1，与 dme-client 同步）：仅群 commit
+      // 信封携带，透传到信封明文
+      lineageMeta?: { groupSeq: number; parentQueueId: string | null },
+    ): Promise<string | null> => {
+      if (!storage || !pds || !poller) return null;
       const mlsSession = poller.getSession(peerDid);
-      if (!mlsSession) return false;
+      if (!mlsSession) return null;
 
       const encResult = await mlsSession.encrypt(
         new TextEncoder().encode(JSON.stringify(payload)),
@@ -2879,8 +2987,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         payload: bytesToBase64url(encResult.ciphertext),
         createdAt: new Date().toISOString(),
         messageType: 'application',
+        ...(lineageMeta
+          ? {
+              groupSeq: lineageMeta.groupSeq,
+              ...(lineageMeta.parentQueueId
+                ? { parentQueueId: lineageMeta.parentQueueId }
+                : {}),
+            }
+          : {}),
       });
-      return true;
+      return encResult.queueId;
     },
     [storage, pds, poller],
   );
@@ -3179,13 +3295,22 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // 其余 commit 场景（踢人/拉人/轮换/退群移除）已改走群 queueId 空间。
       // commit 广播
       for (const { commitMessage, memberDids } of commits) {
+        // 谱系账本（group-fork-plan.md 3.1，与 dme-client 同步）：每条逻辑
+        // commit 独立预留 seq，1v1 扇出的各副本共享该 seq，逐份追加 queueId
+        const seqMeta = await storage.reserveGroupCommit(groupId);
         const commitMsg = {
           type: 'group_commit' as const,
           groupId,
           commitPayload: bytesToBase64url(commitMessage),
         };
         for (const memberDid of memberDids) {
-          await sendEncryptedTo(memberDid, commitMsg);
+          const queueId = await sendEncryptedTo(memberDid, commitMsg, {
+            groupSeq: seqMeta.seq,
+            parentQueueId: seqMeta.parentQueueId,
+          });
+          if (queueId) {
+            await storage.appendGroupCommitQueueId(groupId, seqMeta.seq, queueId);
+          }
         }
       }
       } catch (err) {
@@ -3354,12 +3479,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await storage.putMlsSession(groupId, mlsSession.serialize());
 
       for (const { commitMessage, preCommitState } of commitsWithTargets) {
-        await deliverCommitViaGroupSpace({
+        // 谱系账本（group-fork-plan.md 3.1，与 dme-client 同步）：每条 commit
+        // 独立预留 seq
+        const seqMeta = await storage.reserveGroupCommit(groupId);
+        const delivered = await deliverCommitViaGroupSpace({
           preCommitStateSerialized: preCommitState,
           groupId,
           commitMessage,
           createEnvelope: (envelope) => pds.createEnvelope(envelope),
+          groupSeq: seqMeta.seq,
+          parentQueueId: seqMeta.parentQueueId,
         });
+        await storage.appendGroupCommitQueueId(groupId, seqMeta.seq, delivered.queueId);
       }
       } catch (err) {
         // addMember/投递失败：从动作前快照回滚内存态与存储态、释放宣言，
@@ -3493,12 +3624,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         };
         await sendEncryptedTo(memberDid, removedMsg);
 
-        await deliverCommitViaGroupSpace({
+        // 谱系账本（group-fork-plan.md 3.1，与 dme-client 同步）：预留 per-group seq
+        const seqMeta = await storage.reserveGroupCommit(groupId);
+        const delivered = await deliverCommitViaGroupSpace({
           preCommitStateSerialized: preCommitState,
           groupId,
           commitMessage,
           createEnvelope: (envelope) => pds.createEnvelope(envelope),
+          groupSeq: seqMeta.seq,
+          parentQueueId: seqMeta.parentQueueId,
         });
+        await storage.appendGroupCommitQueueId(groupId, seqMeta.seq, delivered.queueId);
       } catch (err) {
         // commit/投递失败：从提交前快照回滚内存态与存储态、释放宣言，
         // 绝不让「本地已换代而 commit 未投出」落盘
@@ -3591,6 +3727,63 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setChatListVersion((v) => v + 1);
     },
     [session, storage, pds, poller, language, sendEncryptedTo],
+  );
+
+  /**
+   * 群主拍板（P2，group-fork-plan.md 3.2 / 3.3，与 dme-client 同步）：forked
+   * 会话中仅群主端展示拍板确认。确认后经群 MLS 会话广播 group_fork_ruling
+   * ——群会话密钥天然决定只有权威世界（本机所在谱系）能解开；非权威世界
+   * 收不到，维持 forked 横幅走恢复备份路径。本机清除 forked 标记并触发
+   * 备份联动（备份让非权威的兄弟端后续可恢复到权威谱系）。
+   */
+  const issueForkRuling = useCallback(
+    async (groupId: string): Promise<boolean> => {
+      if (!session || !storage || !pds || !poller) {
+        throw new Error('issueForkRuling: 未初始化');
+      }
+
+      const groupInfo = await storage.getGroupInfo(groupId);
+      if (!groupInfo) {
+        console.warn('[dme:fork] issueForkRuling: 群信息不存在', groupId);
+        return false;
+      }
+      if (groupInfo.creatorDid !== session.did) {
+        console.warn('[dme:fork] issueForkRuling: 非群主忽略', groupId);
+        return false;
+      }
+      if ((await storage.getSessionIssue(groupId)) !== 'forked') {
+        console.log('[dme:fork] issueForkRuling: 会话未分叉，跳过', groupId);
+        return false;
+      }
+      const mlsSession = poller.getSession(groupId);
+      if (!mlsSession) {
+        console.warn('[dme:fork] issueForkRuling: 缺少群会话', groupId);
+        return false;
+      }
+
+      const ruling: GroupForkRuling = { type: 'group_fork_ruling', groupId };
+      const encResult = await mlsSession.encrypt(
+        new TextEncoder().encode(JSON.stringify(ruling)),
+      );
+      await storage.putMlsSession(groupId, mlsSession.serialize());
+
+      await pds.createEnvelope({
+        $type: 'dme.queue.envelope',
+        queueId: encResult.queueId,
+        payload: bytesToBase64url(encResult.ciphertext),
+        createdAt: new Date().toISOString(),
+        messageType: 'application',
+      });
+
+      // 本机即权威：清除 forked 标记（不清 sibling-rotated / desynced），
+      // 并联动备份（先落盘标记再备份）
+      await storage.setSessionIssue(groupId, null);
+      await triggerBackupAfterAdvance(`fork ruling ${groupId}`);
+      setChatListVersion((v) => v + 1);
+      console.log('[dme:fork] fork ruling issued for', groupId);
+      return true;
+    },
+    [session, storage, pds, poller, triggerBackupAfterAdvance],
   );
 
   // -------------------------------------------------------------------------
@@ -3712,7 +3905,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       addAcceptedMembersToGroup,
       dissolveGroup,
       removeMemberFromGroup,
-      leaveGroup,
+      leaveGroup, issueForkRuling,
       pollNow,
     }),
     [
@@ -3787,7 +3980,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       addAcceptedMembersToGroup,
       dissolveGroup,
       removeMemberFromGroup,
-      leaveGroup,
+      leaveGroup, issueForkRuling,
       pollNow,
     ],
   );

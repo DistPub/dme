@@ -14,12 +14,22 @@ import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { bytesToBase64url } from '../crypto/utils';
 import type { DmeEnvelope } from '../protocol/types';
 
+/**
+ * 与 dme-client 同名实现一致（group-fork-plan.md 3.1）：groupSeq/parentQueueId
+ * 携带在信封明文上，返回投递成功的 queueId 供调用方写回谱系账本。
+ *
+ * @param groupSeq 谱系账本预留的 per-group commit 序号（经
+ *   storage.reserveGroupCommit 取得）；缺省 = 不携带（旧客户端兼容）。
+ * @param parentQueueId 谱系链上一条 commit 的 queueId（P1 仅记录不判定）。
+ */
 export async function deliverCommitViaGroupSpace(params: {
   preCommitStateSerialized: string;
   groupId: string;
   commitMessage: Uint8Array;
   createEnvelope: (envelope: DmeEnvelope) => Promise<unknown>;
-}): Promise<void> {
+  groupSeq?: number;
+  parentQueueId?: string | null;
+}): Promise<{ queueId: string }> {
   const impl = await getNobleMlsImpl();
   const snapshot = await MlsSession.deserialize(
     params.preCommitStateSerialized,
@@ -40,6 +50,9 @@ export async function deliverCommitViaGroupSpace(params: {
     payload: bytesToBase64url(encResult.ciphertext),
     createdAt: new Date().toISOString(),
     messageType: 'application',
+    ...(params.groupSeq !== undefined ? { groupSeq: params.groupSeq } : {}),
+    ...(params.parentQueueId ? { parentQueueId: params.parentQueueId } : {}),
   };
   await params.createEnvelope(envelope);
+  return { queueId: envelope.queueId };
 }

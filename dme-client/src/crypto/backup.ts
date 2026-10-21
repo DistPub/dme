@@ -23,7 +23,7 @@ import { hmac } from '@noble/hashes/hmac';
 import { utf8ToBytes } from '@noble/hashes/utils';
 import { bytesToBase64url, base64urlToBytes } from './utils';
 import type { IdentityKeys } from './identity';
-import type { KeyPackagePoolEntry } from '../storage/db';
+import type { KeyPackagePoolEntry, GroupCommitLedgerEntry } from '../storage/db';
 import type { GroupInfo } from '../protocol/group-message';
 import type { BackupMeta } from '../protocol/types';
 
@@ -57,6 +57,17 @@ export interface FullBackupData {
    * commit 前与 PDS 宣言比对检测备份分叉。旧备份无此字段 → 视为 0。
    */
   commitSeq?: number;
+  /**
+   * 群 commit 谱系账本（P1，group-fork-plan.md 3.1）：per-group lastSeq +
+   * 每 seq 已见 queueId 集合。**必须随备份走**——恢复端若 lastSeq 归零，
+   * 下一次 commit 会从 1 重新编号，对端账本里 seq 1 已有他值 → 全员假分叉。
+   * 旧备份无此字段 → 恢复端账本为空，收到带 seq 的信封按首见记录（检测
+   * 能力降级但无假阳性），下一次 commit 前会重新对齐。
+   */
+  groupCommitLedger?: {
+    lastSeq: Record<string, number>;
+    entries: Record<string, GroupCommitLedgerEntry>;
+  };
 }
 
 /** JSON 序列化时的中间结构（Uint8Array 转 base64url）。 */
@@ -71,6 +82,10 @@ interface SerializedBackup {
   blockList: string[];
   rotationAt?: Record<string, number>;
   commitSeq?: number;
+  groupCommitLedger?: {
+    lastSeq: Record<string, number>;
+    entries: Record<string, GroupCommitLedgerEntry>;
+  };
 }
 
 /**
@@ -95,6 +110,7 @@ function serializeFullBackupData(data: FullBackupData): string {
     blockList: data.blockList,
     rotationAt: data.rotationAt,
     commitSeq: data.commitSeq,
+    groupCommitLedger: data.groupCommitLedger,
   };
   return JSON.stringify(serialized);
 }
@@ -122,6 +138,7 @@ function deserializeFullBackupData(json: string): FullBackupData {
     blockList: obj.blockList ?? [],
     rotationAt: obj.rotationAt,
     commitSeq: obj.commitSeq,
+    groupCommitLedger: obj.groupCommitLedger,
   };
 }
 

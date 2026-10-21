@@ -60,6 +60,17 @@ export interface KeyPackagePoolEntry {
   consumed: boolean;
 }
 
+/**
+ * 群 commit 谱系账本条目（P1，group-fork-plan.md 3.1）：
+ * 同一 seq 下已见的全部 commit 信封 queueId（1v1 扇出的同一逻辑 commit
+ * 每份副本 queueId 不同，发送方记录全部、接收方只见自己那份）+ 谱系链
+ * 上一条 commit 的 queueId（P1 仅记录不判定）。
+ */
+export interface GroupCommitLedgerEntry {
+  queueIds: string[];
+  parentQueueId: string | null;
+}
+
 const QUEUEID_LRU_MAX = 1000;
 
 const KEY_PACKAGE_POOL_KEY = 'keyPackagePool';
@@ -629,11 +640,18 @@ export class DmeStorage {
    * 会话异常标记（持久化）：
    * - 'sibling-rotated'：同账号另一台设备已轮换，本机无法应用其 commit，
    *   唯一恢复路径是恢复最新备份（1.6）；
-   * - 'desynced'：普通成员的 commit 应用失败/解密脱钩，需重新握手（1.4）。
+   * - 'desynced'：普通成员的 commit 应用失败/解密脱钩，需重新握手（1.4）；
+   * - 'forked'：群 commit 谱系分叉（谱系账本检出同 seq 异 queueId，
+   *   group-fork-plan.md 3.1），恢复路径与 sibling-rotated 相同：恢复权威
+   *   世界（群主拍板侧）的最新备份。
    */
-  async getSessionIssue(groupId: string): Promise<'sibling-rotated' | 'desynced' | null> {
+  async getSessionIssue(
+    groupId: string,
+  ): Promise<'sibling-rotated' | 'desynced' | 'forked' | null> {
     const raw = await storage.getItem(this.prefix + `sessionIssue:${groupId}`);
-    if (raw === 'sibling-rotated' || raw === 'desynced') return raw;
+    if (raw === 'sibling-rotated' || raw === 'desynced' || raw === 'forked') {
+      return raw;
+    }
     return null;
   }
 
@@ -648,7 +666,7 @@ export class DmeStorage {
 
   async setSessionIssue(
     groupId: string,
-    issue: 'sibling-rotated' | 'desynced' | null,
+    issue: 'sibling-rotated' | 'desynced' | 'forked' | null,
     senderDid?: string,
   ): Promise<void> {
     const key = this.prefix + `sessionIssue:${groupId}`;
@@ -676,6 +694,199 @@ export class DmeStorage {
     );
     if (issueKeys.length > 0) {
       await Promise.all(issueKeys.map((key) => storage.removeItem(key)));
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // 群 commit 谱系账本（P1，group-fork-plan.md 3.1）
+  //
+  // per-group 单调 seq：commit 发起方按 last+1 预留；每条 seq 记录「已见
+  // queueId 集合」（1v1 扇出的同一逻辑 commit 有多份不同 queueId 的副本，
+  // 发送方记录全部、接收方只见到自己那份）。分叉铁证 = 同 seq 出现集合外
+  // 的 queueId。seq 缺口（发送方预留后投递失败/崩溃）容忍不判定——账本是
+  // 观测层，不是 MLS 应用的一部分。
+  // -----------------------------------------------------------------------
+
+  private groupCommitLastSeqKey(groupId: string): string {
+    return this.prefix + `groupCommitLastSeq:${groupId}`;
+  }
+
+  private groupCommitEntryKey(groupId: string, seq: number): string {
+    return this.prefix + `groupCommitLedger:${groupId}:${seq}`;
+  }
+
+  async getGroupCommitLastSeq(groupId: string): Promise<number> {
+    const raw = await storage.getItem(this.groupCommitLastSeqKey(groupId));
+    const parsed = raw !== null ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+  }
+
+  async setGroupCommitLastSeq(groupId: string, seq: number): Promise<void> {
+    await storage.setItem(
+      this.groupCommitLastSeqKey(groupId),
+      String(Math.max(0, Math.floor(seq))),
+    );
+  }
+
+  async getGroupCommitEntry(
+    groupId: string,
+    seq: number,
+  ): Promise<GroupCommitLedgerEntry | null> {
+    const raw = await storage.getItem(this.groupCommitEntryKey(groupId, seq));
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        queueIds?: unknown;
+        parentQueueId?: unknown;
+      };
+      if (!Array.isArray(parsed.queueIds)) return null;
+      return {
+        queueIds: parsed.queueIds.filter(
+          (q): q is string => typeof q === 'string',
+        ),
+        parentQueueId:
+          typeof parsed.parentQueueId === 'string'
+            ? parsed.parentQueueId
+            : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 向 seq 条目追加一个已投递/已观测的 queueId（幂等）；条目不存在则创建
+   * （parentQueueId 取首个非空值）。顺带把 lastSeq 推高到 max(last, seq)。
+   */
+  async appendGroupCommitQueueId(
+    groupId: string,
+    seq: number,
+    queueId: string,
+    parentQueueId?: string | null,
+  ): Promise<void> {
+    const entry = await this.getGroupCommitEntry(groupId, seq);
+    const queueIds = entry ? [...entry.queueIds] : [];
+    if (!queueIds.includes(queueId)) queueIds.push(queueId);
+    const parent = entry?.parentQueueId ?? parentQueueId ?? null;
+    await storage.setItem(
+      this.groupCommitEntryKey(groupId, seq),
+      JSON.stringify({ queueIds, parentQueueId: parent }),
+    );
+    const last = await this.getGroupCommitLastSeq(groupId);
+    if (seq > last) await this.setGroupCommitLastSeq(groupId, seq);
+  }
+
+  /**
+   * 收端观测：commit 信封到达（无论能否解密）时调用。
+   * - 'duplicate'：queueId 已在账本（自己发的重放 / 重复投递），忽略；
+   * - 'fork'：同 seq 出现集合外 queueId —— 分叉铁证（group-fork-plan.md 3.1）；
+   * - 'new'：首见，记录入账。
+   * 'fork' 时**不**写入账本：账本只保留本端实际所在的谱系。
+   */
+  async observeGroupCommit(
+    groupId: string,
+    seq: number,
+    queueId: string,
+  ): Promise<'new' | 'duplicate' | 'fork'> {
+    if (!Number.isInteger(seq) || seq < 1) return 'new';
+    const entry = await this.getGroupCommitEntry(groupId, seq);
+    if (entry) {
+      return entry.queueIds.includes(queueId) ? 'duplicate' : 'fork';
+    }
+    await this.appendGroupCommitQueueId(groupId, seq, queueId);
+    return 'new';
+  }
+
+  /**
+   * 发送方预留序号：last+1（立即落盘，先于投递——投递中途失败/崩溃时该
+   * seq 留空缺，收端容忍缺口，绝不复用已预留的 seq 制造同 seq 异 queueId
+   * 的假分叉）。parentQueueId 取最近一条有 queueId 的条目（最多回溯 5 档，
+   * 跳过预留后未投出的空洞）。
+   */
+  async reserveGroupCommit(
+    groupId: string,
+  ): Promise<{ seq: number; parentQueueId: string | null }> {
+    const seq = (await this.getGroupCommitLastSeq(groupId)) + 1;
+    await this.setGroupCommitLastSeq(groupId, seq);
+    let parentQueueId: string | null = null;
+    for (let s = seq - 1; s >= 1 && s > seq - 6; s--) {
+      const entry = await this.getGroupCommitEntry(groupId, s);
+      if (entry && entry.queueIds.length > 0) {
+        parentQueueId = entry.queueIds[0];
+        break;
+      }
+    }
+    return { seq, parentQueueId };
+  }
+
+  /** 导出全部谱系账本（随备份上云；恢复时经 importGroupCommitLedger 写回）。 */
+  async exportGroupCommitLedger(): Promise<{
+    lastSeq: Record<string, number>;
+    entries: Record<string, GroupCommitLedgerEntry>;
+  }> {
+    const keys = await storage.getAllKeys();
+    const lastSeq: Record<string, number> = {};
+    const entries: Record<string, GroupCommitLedgerEntry> = {};
+    const lastPrefix = this.prefix + 'groupCommitLastSeq:';
+    const entryPrefix = this.prefix + 'groupCommitLedger:';
+    for (const key of keys) {
+      if (key.startsWith(lastPrefix)) {
+        const groupId = key.slice(lastPrefix.length);
+        const parsed = Number(await storage.getItem(key));
+        if (groupId && Number.isFinite(parsed) && parsed >= 0) {
+          lastSeq[groupId] = Math.floor(parsed);
+        }
+      } else if (key.startsWith(entryPrefix)) {
+        const rest = key.slice(entryPrefix.length);
+        const sep = rest.lastIndexOf(':');
+        if (sep <= 0) continue;
+        const groupId = rest.slice(0, sep);
+        const seq = Number(rest.slice(sep + 1));
+        const entry = await this.getGroupCommitEntry(
+          groupId,
+          Number.isFinite(seq) ? Math.floor(seq) : -1,
+        );
+        if (groupId && entry) {
+          entries[`${groupId}:${Math.floor(seq)}`] = entry;
+        }
+      }
+    }
+    return { lastSeq, entries };
+  }
+
+  /** 恢复备份时整体写回谱系账本（覆盖式，以备份为权威快照）。 */
+  async importGroupCommitLedger(data: {
+    lastSeq?: Record<string, number>;
+    entries?: Record<string, GroupCommitLedgerEntry>;
+  }): Promise<void> {
+    // 先清本机旧账本（恢复是全量收敛，不做合并）
+    const keys = await storage.getAllKeys();
+    const staleKeys = keys.filter(
+      (k) =>
+        k.startsWith(this.prefix + 'groupCommitLastSeq:') ||
+        k.startsWith(this.prefix + 'groupCommitLedger:'),
+    );
+    if (staleKeys.length > 0) {
+      await Promise.all(staleKeys.map((key) => storage.removeItem(key)));
+    }
+    for (const [groupId, seq] of Object.entries(data.lastSeq ?? {})) {
+      if (Number.isFinite(seq) && seq >= 0) {
+        await this.setGroupCommitLastSeq(groupId, Math.floor(seq));
+      }
+    }
+    for (const [key, entry] of Object.entries(data.entries ?? {})) {
+      const sep = key.lastIndexOf(':');
+      if (sep <= 0 || !Array.isArray(entry?.queueIds)) continue;
+      const groupId = key.slice(0, sep);
+      const seq = Number(key.slice(sep + 1));
+      if (!groupId || !Number.isInteger(seq) || seq < 1) continue;
+      await storage.setItem(
+        this.groupCommitEntryKey(groupId, seq),
+        JSON.stringify({
+          queueIds: entry.queueIds,
+          parentQueueId: entry.parentQueueId ?? null,
+        }),
+      );
     }
   }
 

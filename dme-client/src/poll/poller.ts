@@ -242,17 +242,63 @@ export class DmePoller {
           // 多端支持：扫描包含自己的叶子（去掉了 own-leaf skip 后，自己的设备也会拉到本机发出、已推进过 gen 的信封）。
           // 若本机对该叶子已消费到比信封 gen 更靠后，说明这条是本机自己发的、发送时已推进过 gen ——
           // 不要再解密（会触发 "gen in the past"），直接标记为已处理跳过。
-          const ownLeaf = session.getSenderLeafIndex();
-          if (
-            ctx.senderLeafIndex === ownLeaf &&
-            ctx.generation < session.getExpectedGeneration(ownLeaf)
-          ) {
-            await this.storage.markQueueIdProcessed(env.queueId);
-            this.inFlightQueueIds.delete(env.queueId);
-            continue;
-          }
+        const ownLeaf = session.getSenderLeafIndex();
+        if (
+          ctx.senderLeafIndex === ownLeaf &&
+          ctx.generation < session.getExpectedGeneration(ownLeaf)
+        ) {
+          await this.storage.markQueueIdProcessed(env.queueId);
+          this.inFlightQueueIds.delete(env.queueId);
+          continue;
+        }
 
-          const ciphertext = base64urlToBytes(env.payload);
+        // 群 commit 谱系观测（P1，group-fork-plan.md 3.1）：groupSeq 在信封
+        // 明文上，**必须放在解密之前**——分叉后对方谱系的信封解不开，只有
+        // 这里的明文观测能给出分叉铁证（同 seq 异 queueId）。观测失败不阻断
+        // 消息处理（账本是旁路观测层）。命中分叉时仍继续尝试解密：MLS 应用
+        // 走原有成功/失败路径，forked 标记独立成立。
+        //
+        // 归属护栏：仅当 ctx.groupId 是**群会话**（有 GroupInfo）时才观测。
+        // 1v1 通道扇出的 commit 副本（建群/退群清理）ctx.groupId 是对端 DID，
+        // 观测会记错账本，且不同群的 seq 在同一账本里碰撞会制造假分叉；这类
+        // 副本改由 AppContext group_commit 分支按解析出的真实 groupId 补观测
+        // （仅覆盖可解密副本；1v1 上解不开的副本无法归属，P1 接受此盲区，
+        // 分叉会在任一端后续 group-space commit 的 seq 碰撞时暴露）。
+        if (
+          ctx.type === 'message' &&
+          typeof env.groupSeq === 'number' &&
+          (await this.storage.getGroupInfo(ctx.groupId))
+        ) {
+          try {
+            const verdict = await this.storage.observeGroupCommit(
+              ctx.groupId,
+              env.groupSeq,
+              env.queueId,
+            );
+            if (verdict === 'fork') {
+              console.error(
+                '[dme:fork] commit lineage fork detected:',
+                ctx.groupId,
+                'seq',
+                env.groupSeq,
+                'queueId',
+                env.queueId,
+              );
+              await this.storage.setSessionIssue(ctx.groupId, 'forked');
+            } else if (verdict === 'new' && env.groupSeq > 1) {
+              console.log(
+                '[dme:fork] observed commit seq',
+                env.groupSeq,
+                'for',
+                ctx.groupId,
+              );
+            }
+          } catch (err) {
+            console.warn('[dme:fork] ledger observe failed:', err);
+          }
+        }
+
+        const ciphertext = base64urlToBytes(env.payload);
           const result = await session.decrypt(ciphertext);
 
           console.log('DmePoller: decrypt done, plaintext=' + !!result.plaintext + ' isCommit=' + result.isCommit);

@@ -140,7 +140,7 @@ export function ChatListScreen(): React.JSX.Element {
   const [displayName, setDisplayName] = useState('');
   const [userHandle, setUserHandle] = useState('');
   const [sessionIssues, setSessionIssues] = useState<
-    { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[]
+    { groupId: string; issue: 'sibling-rotated' | 'desynced' | 'forked'; senderDid?: string | null }[]
   >([]);
   /** desynced 横幅的「oo」：触发标记的 commit 发送者展示名（handle，groupId 索引）。 */
   const [desyncedSenderNames, setDesyncedSenderNames] = useState<Record<string, string>>({});
@@ -152,7 +152,7 @@ export function ChatListScreen(): React.JSX.Element {
       if (!app.storage) return;
       try {
         const groupIds = await app.storage.listGroups();
-        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[] = [];
+        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced' | 'forked'; senderDid?: string | null }[] = [];
         for (const gid of groupIds) {
           const issue = await app.storage.getSessionIssue(gid);
           if (issue) {
@@ -561,7 +561,9 @@ const resolveProfiles = useCallback(async (
 
   const handleLogoutPress = useCallback((): void => {
     setMenuVisible(false);
-    const hasPendingRestore = sessionIssues.some((i) => i.issue === 'sibling-rotated');
+    const hasPendingRestore = sessionIssues.some(
+      (i) => i.issue === 'sibling-rotated' || i.issue === 'forked',
+    );
     if (app.backupRequired || hasPendingRestore) {
       setBackupPwd('');
       setBackupPwdConfirm('');
@@ -851,6 +853,44 @@ const resolveProfiles = useCallback(async (
               return allIssues.length > 0 ? (
               <View style={styles.issueBanner}>
                 {allIssues.map(({ groupId, issue, senderDid }) => {
+                  // forked（P1，group-fork-plan.md 3.1）：谱系分叉铁证。分角色
+                  // 分流（P2）：群主端 = 拍板确认（点按广播 group_fork_ruling，
+                  // 仅权威世界可解）；普通成员/非群主端 = 恢复路径与
+                  // sibling-rotated 相同——恢复权威世界（群主拍板侧）的最新
+                  // 备份；不可关闭，入口在设置页
+                  if (issue === 'forked') {
+                    const fRow = conversations.find((c) => c.groupId === groupId);
+                    const fInfo = app.groupInfos.find((g) => g.groupId === groupId);
+                    const fGroupName = fInfo?.groupName;
+                    const isGroupOwner = !!fInfo && app.session?.did === fInfo.creatorDid;
+                    if (isGroupOwner) {
+                      return (
+                        <TouchableOpacity
+                          key={groupId}
+                          onPress={() => void app.issueForkRuling(groupId)}
+                        >
+                          <Text style={styles.issueBannerText}>
+                            {t('chatlist.forkedBannerOwnerGroup', {
+                              group: fGroupName || fRow?.displayName || groupId,
+                            })}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    }
+                    const forkedText = fRow?.isGroup
+                      ? t('chatlist.forkedBannerGroup', {
+                          group: fGroupName || fRow.displayName || groupId,
+                        })
+                      : t('chatlist.forkedBannerDm', { name: fRow?.displayName || groupId });
+                    return (
+                      <TouchableOpacity
+                        key={groupId}
+                        onPress={() => navigation.navigate('Settings')}
+                      >
+                        <Text style={styles.issueBannerText}>{forkedText}</Text>
+                      </TouchableOpacity>
+                    );
+                  }
                   // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）。
                   // 2026-10-21 文案改版：区分群聊/私聊并带会话名（与 desynced 横幅同风格）；
                   // 群名优先取 GroupInfo.groupName——反向幽灵群行的 displayName 是

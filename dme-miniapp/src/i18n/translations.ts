@@ -152,6 +152,9 @@ export const zh: Record<string, string> = {
   'chatlist.desyncedBannerGroup': '群聊{group}：本机收到他人{sender}的无法应用的记录，如与{sender}失去联系可能需要重建关系。',
   'chatlist.desyncedBannerDm': '私聊{name}：本机收到无法应用的记录，如与{name}失去联系可能需要重建关系。',
   'chatlist.desyncedDismiss': '关闭',
+  'chatlist.forkedBannerGroup': '群聊{group}：检测到群状态分叉，点按去设置页恢复最新备份以同步',
+  'chatlist.forkedBannerOwnerGroup': '群聊{group}：检测到群状态分叉，以本机为准吗？点按确认拍板',
+  'chatlist.forkedBannerDm': '私聊{name}：检测到会话分叉，点按去设置页恢复最新备份以同步',
   'chatlist.pendingGroupInvites': '待处理群聊邀请',
   'chatlist.fromHandle': '来自 @{handle}',
   'chatlist.inviteStatus': '{accepted} 已接受，{pending} 待处理',
@@ -324,6 +327,7 @@ export const zh: Record<string, string> = {
   'group.memberLeft': '@{handle} 已离开群聊',
   'group.youInvited': '你邀请了 @{handle} 加入群聊：{group}',
   'group.youLeft': '你已离开群聊：{group}',
+  'group.forkRulingApplied': '群主已确认群状态，本机已与权威谱系一致',
   'group.newGroup': '新群聊',
 
   // post
@@ -483,6 +487,9 @@ export const en: Record<string, string> = {
   'chatlist.desyncedBannerGroup': 'Group {group}: received an unappliable record from {sender}. If you have lost contact with {sender}, rebuilding the relationship may be required.',
   'chatlist.desyncedBannerDm': 'DM {name}: received an unappliable record. If you have lost contact with {name}, rebuilding the relationship may be required.',
   'chatlist.desyncedDismiss': 'Dismiss',
+  'chatlist.forkedBannerGroup': 'Group {group}: state fork detected — tap to restore the latest backup in Settings.',
+  'chatlist.forkedBannerOwnerGroup': 'Group {group}: state fork detected — keep this device as authoritative? Tap to confirm.',
+  'chatlist.forkedBannerDm': 'DM {name}: state fork detected — tap to restore the latest backup in Settings.',
   'chatlist.pendingGroupInvites': 'Pending Group Invites',
   'chatlist.fromHandle': 'From @{handle}',
   'chatlist.inviteStatus': '{accepted} accepted, {pending} pending',
@@ -655,6 +662,7 @@ export const en: Record<string, string> = {
   'group.memberLeft': '@{handle} left the group',
   'group.youInvited': 'You invited @{handle} to group: {group}',
   'group.youLeft': 'You left group: {group}',
+  'group.forkRulingApplied': 'Group owner confirmed the group state; this device matches the authoritative lineage.',
   'group.newGroup': 'New Group',
 
   // post

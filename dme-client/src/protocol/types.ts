@@ -57,6 +57,21 @@ export interface DmeEnvelope {
    * MLS-encrypted payload); the manifest itself stays end-to-end encrypted.
    */
   blobCids?: DmeBlobRef[];
+
+  /**
+   * 群 commit 谱系序号（P1，group-fork-plan.md 3.1）。仅群 commit 信封携带：
+   * per-group 单调递增，commit 发起方按本地谱系账本 last+1 填写。
+   * 放在信封明文（MLS 密文之外）是设计核心——分叉后对方谱系的信封解不开，
+   * 只有明文元数据是两条谱系仍共享的观测面（检测器唯一可用的信号源）。
+   */
+  groupSeq?: number;
+
+  /**
+   * 本 commit 引用的上一条 commit 信封的 queueId（谱系成链；组的首条 commit
+   * 缺省）。P1 仅记录不判定：1v1 通道扇出的同一逻辑 commit 每份副本 queueId
+   * 不同，收端只能见到自己那份，跨端 parent 比对会误报，留待后续方案细化。
+   */
+  parentQueueId?: string;
 }
 
 /** File download status. */

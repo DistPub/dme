@@ -140,6 +140,17 @@ export type GroupMemberLeft = {
   readonly groupName: string;
 };
 
+/**
+ * 群分叉拍板（P2，group-fork-plan.md 3.3，与 dme-client 同步）：群主检测到
+ * forked 分叉后确认「以本机为准」，经群 MLS 会话加密广播——MLS 密钥天然
+ * 决定**只有权威世界（群主本机所在谱系）能解开**。防伪靠接收端校验
+ * senderDid == GroupInfo.creatorDid（MLS 自带发送者认证）。
+ */
+export type GroupForkRuling = {
+  readonly type: 'group_fork_ruling';
+  readonly groupId: string;
+};
+
 // ---------------------------------------------------------------------------
 // Union
 // ---------------------------------------------------------------------------
@@ -153,7 +164,8 @@ export type GroupMessage =
   | GroupCommit
   | GroupDissolved
   | GroupMemberRemoved
-  | GroupMemberLeft;
+  | GroupMemberLeft
+  | GroupForkRuling;
 
 /** Discriminant type field for exhaustive matching. */
 export type GroupMessageType = GroupMessage['type'];

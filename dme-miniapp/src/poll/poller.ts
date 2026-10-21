@@ -295,6 +295,42 @@ export class DmePoller {
             continue;
           }
 
+          // 群 commit 谱系观测（P1，group-fork-plan.md 3.1，与 dme-client 同步）：
+          // groupSeq 在信封明文上，**必须放在解密之前**——分叉后对方谱系的信封
+          // 解不开，只有这里的明文观测能给出分叉铁证（同 seq 异 queueId）。
+          // 观测失败不阻断消息处理；命中分叉时仍继续尝试解密，forked 标记独立成立。
+          //
+          // 归属护栏（与 dme-client 同步）：仅当 ctx.groupId 是**群会话**（有
+          // GroupInfo）时才观测。1v1 通道扇出的 commit 副本 ctx.groupId 是对端
+          // DID，观测会记错账本并制造跨群 seq 假碰撞；这类副本由 AppContext
+          // group_commit 分支按真实 groupId 补观测。
+          if (
+            ctx.type === 'message' &&
+            typeof env.groupSeq === 'number' &&
+            (await this.storage.getGroupInfo(ctx.groupId))
+          ) {
+            try {
+              const verdict = await this.storage.observeGroupCommit(
+                ctx.groupId,
+                env.groupSeq,
+                env.queueId,
+              );
+              if (verdict === 'fork') {
+                console.error(
+                  '[dme:fork] commit lineage fork detected:',
+                  ctx.groupId,
+                  'seq',
+                  env.groupSeq,
+                  'queueId',
+                  env.queueId,
+                );
+                await this.storage.setSessionIssue(ctx.groupId, 'forked');
+              }
+            } catch (err) {
+              console.warn('[dme:fork] ledger observe failed:', err);
+            }
+          }
+
           const ciphertext = base64urlToBytes(env.payload);
           const result = await session.decrypt(ciphertext);
 

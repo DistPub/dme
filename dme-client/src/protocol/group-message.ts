@@ -119,6 +119,17 @@ export type GroupDissolved = {
   readonly groupName: string;
 };
 
+/**
+ * 群分叉拍板（P2，group-fork-plan.md 3.3）：群主检测到 forked 分叉后确认
+ * 「以本机为准」，经群 MLS 会话加密广播——MLS 密钥天然决定**只有权威世界
+ * （群主本机所在谱系）能解开**，非权威世界收不到也解不开，无需寻址。
+ * 防伪靠接收端校验 senderDid == GroupInfo.creatorDid（MLS 自带发送者认证）。
+ */
+export type GroupForkRuling = {
+  readonly type: 'group_fork_ruling';
+  readonly groupId: string;
+};
+
 /** Member removed: creator -> removed member, mark group read-only. */
 export type GroupMemberRemoved = {
   readonly type: 'group_member_removed';
@@ -153,7 +164,8 @@ export type GroupMessage =
   | GroupCommit
   | GroupDissolved
   | GroupMemberRemoved
-  | GroupMemberLeft;
+  | GroupMemberLeft
+  | GroupForkRuling;
 
 /** Discriminant type field for exhaustive matching. */
 export type GroupMessageType = GroupMessage['type'];

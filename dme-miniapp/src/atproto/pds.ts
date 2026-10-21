@@ -195,6 +195,8 @@ export class DmePds {
           createdAt: env.createdAt,
           ...(env.messageType ? { messageType: env.messageType } : {}),
           ...(env.blobCids ? { blobCids: env.blobCids } : {}),
+          ...(env.groupSeq !== undefined ? { groupSeq: env.groupSeq } : {}),
+          ...(env.parentQueueId ? { parentQueueId: env.parentQueueId } : {}),
         },
       },
     );

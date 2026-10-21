@@ -115,6 +115,7 @@ export default function ChatListPage(): React.JSX.Element {
     sendFileMessage,
     backupIdentity,
     backupIdentityGuarded,
+    issueForkRuling,
     logout,
   } = useApp();
 
@@ -139,7 +140,7 @@ export default function ChatListPage(): React.JSX.Element {
 
   const [inviterHandles, setInviterHandles] = useState<Record<string, string>>({});
   const [sessionIssues, setSessionIssues] = useState<
-    { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[]
+    { groupId: string; issue: 'sibling-rotated' | 'desynced' | 'forked'; senderDid?: string | null }[]
   >([]);
   /** desynced 横幅的「oo」：触发标记的 commit 发送者展示名（handle，groupId 索引）。 */
   const [desyncedSenderNames, setDesyncedSenderNames] = useState<Record<string, string>>({});
@@ -151,7 +152,7 @@ export default function ChatListPage(): React.JSX.Element {
       if (!storage) return;
       try {
         const groupIds = await storage.listGroups();
-        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced'; senderDid?: string | null }[] = [];
+        const issues: { groupId: string; issue: 'sibling-rotated' | 'desynced' | 'forked'; senderDid?: string | null }[] = [];
         for (const gid of groupIds) {
           const issue = await storage.getSessionIssue(gid);
           if (issue) {
@@ -597,7 +598,9 @@ export default function ChatListPage(): React.JSX.Element {
   // 意味着用户尚未遵从提示。这两种状态退出会丢失/倒灌关键状态，必须处理。
   const handleLogoutPress = useCallback((): void => {
     setMenuVisible(false);
-    const hasPendingRestore = sessionIssues.some((i) => i.issue === 'sibling-rotated');
+    const hasPendingRestore = sessionIssues.some(
+      (i) => i.issue === 'sibling-rotated' || i.issue === 'forked',
+    );
     if (backupRequired || hasPendingRestore) {
       setBackupPwd('');
       setBackupPwdConfirm('');
@@ -769,6 +772,46 @@ export default function ChatListPage(): React.JSX.Element {
           return allIssues.length > 0 ? (
           <View className="chatlist__issueBanner">
             {allIssues.map(({ groupId, issue, senderDid }) => {
+              // forked（P1，group-fork-plan.md 3.1，与 dme-client 同步）：谱系
+              // 分叉铁证，恢复路径与 sibling-rotated 相同——恢复群主拍板侧
+              // （权威世界）的最新备份；不可关闭，入口在设置页
+              if (issue === 'forked') {
+                const fRow = rows.find((c) => c.conversationId === groupId);
+                const fInfo = groupInfos.find((g) => g.groupId === groupId);
+                const fGroupName = fInfo?.groupName;
+                // 分角色分流（P2，与 dme-client 同步）：群主端 = 拍板确认
+                // （点按广播 group_fork_ruling，仅权威世界可解）；其余端走恢复
+                const isGroupOwner = !!fInfo && session?.did === fInfo.creatorDid;
+                if (isGroupOwner) {
+                  return (
+                    <View
+                      key={groupId}
+                      onClick={() => void issueForkRuling(groupId)}
+                    >
+                      <Text className="chatlist__issueBannerText">
+                        {t('chatlist.forkedBannerOwnerGroup', {
+                          group: fGroupName || fRow?.displayName || groupId,
+                        })}
+                      </Text>
+                    </View>
+                  );
+                }
+                const forkedText = fRow?.isGroup
+                  ? t('chatlist.forkedBannerGroup', {
+                      group: fGroupName || fRow.displayName || groupId,
+                    })
+                  : t('chatlist.forkedBannerDm', { name: fRow?.displayName || groupId });
+                return (
+                  <View
+                    key={groupId}
+                    onClick={() => void Taro.navigateTo({ url: '/pages/settings/index' })}
+                  >
+                    <Text className="chatlist__issueBannerText">
+                      {forkedText}
+                    </Text>
+                  </View>
+                );
+              }
               // sibling-rotated 的唯一恢复路径是「从备份恢复」，入口在设置页（不可关闭）。
               // 2026-10-21 文案改版（与 dme-client 同步）：区分群聊/私聊并带会话名；
               // 群名优先取 GroupInfo.groupName——反向幽灵群行的 displayName 是

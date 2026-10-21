@@ -31,6 +31,14 @@
             "type": "array",
             "items": { "type": "blob" },
             "description": "PDS blob references (standard {$type:'blob', ref:{$link}, mimeType, size}) for encrypted file chunks. Carried on the manifest envelope so the PDS recognizes and preserves the blobs (anti-GC)."
+          },
+          "groupSeq": {
+            "type": "integer",
+            "description": "Optional per-group monotonic commit lineage seq (group-fork-plan.md 3.1). Present only on group commit envelopes; filled by the committer from its local lineage ledger. Plaintext on purpose: after a lineage fork the competing commit cannot be decrypted, so this is the only observable shared surface for fork detection."
+          },
+          "parentQueueId": {
+            "type": "string",
+            "description": "Optional queueId of the previous commit envelope in the lineage chain (informational in P1; absent for the first commit of a group)."
           }
         }
       }

@@ -34,13 +34,19 @@ import type { DmeEnvelope } from '../protocol/types';
  *   ——快照的应用链 generation 游标恰好等于各收端期望的下一个槽位。
  * @param commitMessage MLS commit 密文（收端用各自旧状态应用）。
  * @param createEnvelope 写入 PDS 的回调（通常即 pds.createEnvelope）。
+ * @param groupSeq 谱系账本预留的 per-group commit 序号（group-fork-plan.md 3.1，
+ *   调用方经 storage.reserveGroupCommit 取得）；缺省 = 不携带（旧客户端兼容）。
+ * @param parentQueueId 谱系链上一条 commit 的 queueId（P1 仅记录不判定）。
+ * @returns 投递成功的信封 queueId（调用方写回谱系账本）。
  */
 export async function deliverCommitViaGroupSpace(params: {
   preCommitStateSerialized: string;
   groupId: string;
   commitMessage: Uint8Array;
   createEnvelope: (envelope: DmeEnvelope) => Promise<unknown>;
-}): Promise<void> {
+  groupSeq?: number;
+  parentQueueId?: string | null;
+}): Promise<{ queueId: string }> {
   const impl = await getNobleMlsImpl();
   const snapshot = await MlsSession.deserialize(
     params.preCommitStateSerialized,
@@ -61,6 +67,9 @@ export async function deliverCommitViaGroupSpace(params: {
     payload: bytesToBase64url(encResult.ciphertext),
     createdAt: new Date().toISOString(),
     messageType: 'application',
+    ...(params.groupSeq !== undefined ? { groupSeq: params.groupSeq } : {}),
+    ...(params.parentQueueId ? { parentQueueId: params.parentQueueId } : {}),
   };
   await params.createEnvelope(envelope);
+  return { queueId: envelope.queueId };
 }

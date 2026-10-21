@@ -55,8 +55,18 @@ export interface RotationDeps {
   getIntervalMs(): Promise<number>;
   getLastRotationAt(groupId: string): Promise<number>;
   setLastRotationAt(groupId: string, ts: number): Promise<void>;
-  /** 会话异常标记（desynced / sibling-rotated），无标记时 null。 */
-  getSessionIssue(groupId: string): Promise<'sibling-rotated' | 'desynced' | null>;
+  /** 会话异常标记（desynced / sibling-rotated / forked），无标记时 null。 */
+  getSessionIssue(groupId: string): Promise<'sibling-rotated' | 'desynced' | 'forked' | null>;
+  /** 群 commit 谱系账本：预留 per-group seq（group-fork-plan.md 3.1）。 */
+  reserveGroupCommit(
+    groupId: string,
+  ): Promise<{ seq: number; parentQueueId: string | null }>;
+  /** 群 commit 谱系账本：投递成功后写回信封 queueId。 */
+  appendGroupCommitQueueId(
+    groupId: string,
+    seq: number,
+    queueId: string,
+  ): Promise<void>;
   /** PDS 宣言存取（AppContext 用 DmePds 组装，见 rotation-claim.ts）。 */
   claimStore: RotationClaimStore;
   /** 账号级 commit 高水位（本地计数，随备份走；宣言 v2 比对基准）。 */
@@ -171,13 +181,20 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
   try {
     const { commitMessage } = await session.updateOwnLeaf();
 
+    // 谱系账本：预留 per-group seq（立即落盘，投递失败留下空缺 seq 由收端
+    // 容忍，绝不复用——同 seq 异 queueId 会被收端判成假分叉）
+    const seqMeta = await deps.reserveGroupCommit(groupId);
+
     try {
-      await deliverCommitViaGroupSpace({
+      const { queueId } = await deliverCommitViaGroupSpace({
         preCommitStateSerialized: preCommitState,
         groupId,
         commitMessage,
         createEnvelope: deps.createEnvelope,
+        groupSeq: seqMeta.seq,
+        parentQueueId: seqMeta.parentQueueId,
       });
+      await deps.appendGroupCommitQueueId(groupId, seqMeta.seq, queueId);
     } catch (err) {
       // 投递失败：回滚内存态、释放宣言（避免虚高水位）、不记 lastRotationAt
       // ——绝不允许本地已换代而 commit 未投出（否则全员脱钩）。下个周期重试。

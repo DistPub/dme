@@ -4,6 +4,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -419,6 +420,13 @@ export function ChatViewScreen(): React.JSX.Element {
     }
   }, []);
 
+  const showVoiceToast = useCallback((msg: string): void => {
+    setVoiceToast(msg);
+    setTimeout(() => {
+      setVoiceToast((cur) => (cur === msg ? null : cur));
+    }, 1800);
+  }, []);
+
   const onSend = useCallback(async (): Promise<void> => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
@@ -429,10 +437,16 @@ export function ChatViewScreen(): React.JSX.Element {
       keepInputFocused();
     } catch (err) {
       console.error('Send failed:', err);
+      // 发送失败已有可见提示；本地记录由 sendMessage 内部回滚（不残留幽灵消息）
+      if (Platform.OS === 'web') {
+        showVoiceToast(t('chatview.sendFailed'));
+      } else {
+        Alert.alert(t('chatview.title'), t('chatview.sendFailed'));
+      }
     } finally {
       setSending(false);
     }
-  }, [text, sending, sendMessage, conversationId, keepInputFocused]);
+  }, [text, sending, sendMessage, conversationId, keepInputFocused, showVoiceToast, t]);
 
   const handleKeyPress = useCallback((e: { nativeEvent: { key: string; shiftKey?: boolean; preventDefault?: () => void } }): void => {
     if (Platform.OS !== 'web') return;
@@ -525,13 +539,6 @@ export function ChatViewScreen(): React.JSX.Element {
   }, [conversationId, sendFileMessage]);
 
   // ---- 按住说话（语音消息，仅 web） -----------------------------------------
-  const showVoiceToast = useCallback((msg: string): void => {
-    setVoiceToast(msg);
-    setTimeout(() => {
-      setVoiceToast((cur) => (cur === msg ? null : cur));
-    }, 1800);
-  }, []);
-
   /** 松手后的统一收尾：stop → 太短丢弃 / 走文件消息通道发送（接收端音频播放卡现成）。 */
   const finishVoiceSend = useCallback(async (): Promise<void> => {
     if (voiceGestureRef.current.finishing) return;

@@ -2515,7 +2515,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         createdAt: new Date().toISOString(),
         messageType: 'application',
       };
-      await pds.createEnvelope(envelope);
+      try {
+        await pds.createEnvelope(envelope);
+      } catch (err) {
+        // 上传失败：回滚本地记录，避免留下从未上云的"幽灵消息"（本地可见、对方收不到）
+        await storage.deleteMessage(groupId, msg.id);
+        throw err;
+      }
 
       setChatListVersion((v) => v + 1);
     },
@@ -2613,15 +2619,23 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const manifestBytes = new TextEncoder().encode(manifestJson);
       const encResult = await mlsSession.encrypt(manifestBytes);
       await storage.putMlsSession(conversationId, mlsSession.serialize());
-      await pds.createEnvelope({
-        $type: 'dme.queue.envelope',
-        queueId: encResult.queueId,
-        payload: bytesToBase64url(encResult.ciphertext),
-        // blobCids 放在**外层明文**，PDS 才会保留 blob 不被 GC
-        blobCids: upload.blobRefs,
-        createdAt: new Date().toISOString(),
-        messageType: 'application',
-      });
+      try {
+        await pds.createEnvelope({
+          $type: 'dme.queue.envelope',
+          queueId: encResult.queueId,
+          payload: bytesToBase64url(encResult.ciphertext),
+          // blobCids 放在**外层明文**，PDS 才会保留 blob 不被 GC
+          blobCids: upload.blobRefs,
+          createdAt: new Date().toISOString(),
+          messageType: 'application',
+        });
+      } catch (err) {
+        // 清单上云失败：文件已传上云，不删记录，回退为 failed 走现有重试 UI
+        console.error('finalizeFileMessage: 清单上云失败', err);
+        await storage.updateFileMessageMeta(conversationId, tempMsgId, { uploadStatus: 'failed' });
+        setChatListVersion((v) => v + 1);
+        return;
+      }
 
       await storage.deleteMessage(conversationId, tempMsgId);
       await storage.putMessage({

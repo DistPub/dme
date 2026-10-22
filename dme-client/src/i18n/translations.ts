@@ -190,6 +190,7 @@ export const zh: Record<string, string> = {
   'chatview.dissolved': '群聊已解散，无法发送消息',
   'chatview.removed': '你已被移出群聊，无法发送消息',
   'chatview.left': '你已离开群聊，无法发送消息',
+  'chatview.sendFailed': '发送失败，请重试',
   // 按住说话（语音消息，仅 web）
   'chatview.holdToTalk': '按住 说话',
   'chatview.recording': '正在录音，松开发送',
@@ -502,6 +503,7 @@ export const en: Record<string, string> = {
   'chatview.dissolved': 'Group dissolved — cannot send messages',
   'chatview.removed': 'You were removed — cannot send messages',
   'chatview.left': 'You left — cannot send messages',
+  'chatview.sendFailed': 'Send failed — please try again',
 
   // Voice messages (web only)
   'chatview.holdToTalk': 'Hold to talk',

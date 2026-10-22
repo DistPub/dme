@@ -28,6 +28,7 @@ export const DME_MSG = {
   NAVIGATE: 'DME_NAVIGATE',
   OPEN_URL: 'DME_OPEN_URL',
   SHARE: 'DME_SHARE',
+  START_CHAT: 'DME_START_CHAT',
   // Binary file-byte delegation (embed storage for the actual media, which the
   // KV STORAGE_* channel cannot hold — localStorage is ~5MB and base64 would
   // evict the messages themselves). fatesky persists these in its own
@@ -46,6 +47,18 @@ export type EmbedSharePayload = {
   url: string;
   /** Optional HTML embed snippet — currently unused by DME. */
   html?: string;
+};
+
+/**
+ * Payload of the inbound `DME_START_CHAT` message (fatesky → DME): request to
+ * open (or create) a 1v1 conversation with the target user. `handle` is
+ * display-only — DME must not depend on its presence.
+ */
+export type EmbedStartChatPayload = {
+  /** Target user DID (`did:plc:xxxxxxxx`). */
+  did: string;
+  /** Target user's current handle, display-only. */
+  handle?: string;
 };
 
 /** Credentials handed to the embed via the `DME_TOKEN` message. */

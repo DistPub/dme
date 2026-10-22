@@ -20,8 +20,8 @@ export type RootStackParamList = {
         };
       }
     | undefined;
-  ChatView: { friendDid: string } | { groupId: string };
-  QrDisplay: undefined;
+  ChatView: { friendDid: string; handle?: string } | { groupId: string };
+  QrDisplay: { did?: string; handle?: string } | undefined;
   QrScan: undefined;
   Settings: undefined;
   About: undefined;

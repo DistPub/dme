@@ -161,6 +161,36 @@ function NavigationRoot(): React.JSX.Element {
     app.consumeShareIntent();
   }, [app.shareIntent, app.consumeShareIntent]);
 
+  // Embed: a fatesky start-chat intent (`DME_START_CHAT`) opens the 1v1
+  // conversation with the target DID — routed into DME's existing add-friend
+  // flow when no conversation exists yet: QrDisplay auto-checks the DID
+  // (not registered → invite post / registered non-friend → handshake invite
+  // post + QR / already friend → chat). Conversation "creation" always goes
+  // through the handshake; there is no unilateral session for strangers.
+  // The intent is only consumed after a successful navigation, and while no
+  // session exists it stays buffered: if the navigator isn't ready yet (or the
+  // user hasn't logged in), it re-fires once ready/session appear (需求 §3.2,
+  // 验收 #2/#7). Own DID is defensively ignored (需求 §4).
+  useEffect(() => {
+    const intent = app.startChatIntent;
+    if (!intent) return;
+    if (!isReady || !navigationRef.isReady()) return;
+    if (!app.session) return;
+    if (intent.did === app.session.did) {
+      app.consumeStartChatIntent();
+      return;
+    }
+    if (app.groups.includes(intent.did)) {
+      navigationRef.navigate(
+        'ChatView',
+        intent.handle ? { friendDid: intent.did, handle: intent.handle } : { friendDid: intent.did },
+      );
+    } else {
+      navigationRef.navigate('QrDisplay', { did: intent.did, handle: intent.handle });
+    }
+    app.consumeStartChatIntent();
+  }, [app.startChatIntent, app.consumeStartChatIntent, app.session, app.groups, isReady]);
+
   useEffect(() => {
     const hadSession = prevSessionRef.current !== null;
     const hasSession = app.session !== null;

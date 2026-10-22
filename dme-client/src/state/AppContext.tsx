@@ -99,8 +99,9 @@ import {
   onChatActiveChange,
   offChatActiveChange,
   onShare,
+  onStartChat,
 } from '../embed/bridge';
-import type { EmbedSharePayload } from '../embed/protocol';
+import type { EmbedSharePayload, EmbedStartChatPayload } from '../embed/protocol';
 import { computeTotalUnread } from '../embed/unread';
 
 // ---------------------------------------------------------------------------
@@ -351,6 +352,8 @@ interface AppActions {
   sendPostMessage: (groupId: string, post: { uri: string; url: string; html?: string }) => Promise<void>;
   shareIntent: EmbedSharePayload | null;
   consumeShareIntent: () => void;
+  startChatIntent: EmbedStartChatPayload | null;
+  consumeStartChatIntent: () => void;
   sendFileMessage: (conversationId: string, fileUri: string, fileName: string, mimeType: string, fileSize: number) => Promise<void>;
   retryUploadFileMessage: (conversationId: string, msgId: string) => Promise<void>;
   downloadFile: (conversationId: string, msgId: string) => Promise<void>;
@@ -429,6 +432,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [loginStep, setLoginStep] = useState<'idle' | 'loggingIn' | 'awaiting2FA'>('idle');
   const [loginFormSnapshot, setLoginFormSnapshot] = useState<{ identifier: string; password: string; pdsUrl: string } | null>(null);
   const [shareIntent, setShareIntent] = useState<EmbedSharePayload | null>(null);
+  const [startChatIntent, setStartChatIntent] = useState<EmbedStartChatPayload | null>(null);
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
@@ -3998,6 +4002,10 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
     setShareIntent(null);
   }, []);
 
+  const consumeStartChatIntent = useCallback((): void => {
+    setStartChatIntent(null);
+  }, []);
+
   const applyEmbedToken = useCallback(async (payload: EmbedTokenPayload): Promise<void> => {
     if (!isEmbedContext()) return;
     if (embedMismatch) return;
@@ -4039,6 +4047,17 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
   useEffect(() => {
     onShare((share) => { setShareIntent(share); });
     return () => { onShare(null); };
+  }, []);
+
+  // Inbound start-chat intents from fatesky (`DME_START_CHAT`): surfaced as
+  // `startChatIntent` state so the navigation root can open the 1v1
+  // conversation with the target DID, then cleared via
+  // `consumeStartChatIntent`. Payload validation (did shape) lives in the
+  // bridge; buffering here is intentional — an intent that arrives before
+  // login/navigation is ready fires once the session exists (需求 §3.2).
+  useEffect(() => {
+    onStartChat((intent) => { setStartChatIntent(intent); });
+    return () => { onStartChat(null); };
   }, []);
 
   useEffect(() => {
@@ -4188,6 +4207,8 @@ blockList,
       sendPostMessage,
       shareIntent,
       consumeShareIntent,
+      startChatIntent,
+      consumeStartChatIntent,
       applyEmbedToken,
     }),
     [
@@ -4206,6 +4227,7 @@ blockList,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
       leaveGroup, issueForkRuling, refreshBlockList, blockMember, unblockMember, setActiveConversation, setSoundEnabled,
       sendPostMessage, shareIntent, consumeShareIntent,
+      startChatIntent, consumeStartChatIntent,
       applyEmbedToken,
     ],
   );

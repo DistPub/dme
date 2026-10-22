@@ -13,7 +13,7 @@ import {
   isAllowedParentOrigin,
   resolveParentTargetOrigin,
 } from './protocol';
-import type { EmbedTokenPayload, EmbedSharePayload } from './protocol';
+import type { EmbedTokenPayload, EmbedSharePayload, EmbedStartChatPayload } from './protocol';
 import { embedStorageBackend } from './embed-storage';
 
 /** Callback signature for chat-active state changes. */
@@ -21,6 +21,9 @@ export type ChatActiveChangeHandler = (active: boolean) => void;
 
 /** Callback signature for inbound share intents (fatesky → DME). */
 export type ShareHandler = (share: EmbedSharePayload) => void;
+
+/** Callback signature for inbound start-chat intents (fatesky → DME). */
+export type StartChatHandler = (payload: EmbedStartChatPayload) => void;
 
 // ---------------------------------------------------------------------------
 // Module-level singleton state
@@ -38,6 +41,7 @@ let storageDataReceived = false;
 let pendingToken: EmbedTokenPayload | null = null;
 let pendingTokenTimer: ReturnType<typeof setTimeout> | null = null;
 let onShareHandler: ShareHandler | null = null;
+let onStartChatHandler: StartChatHandler | null = null;
 const chatActiveHandlers = new Set<ChatActiveChangeHandler>();
 
 // Pending BLOB_GET requests awaiting a BLOB_DATA response from fatesky.
@@ -143,6 +147,31 @@ function handleMessage(event: MessageEvent): void {
         onShareHandler?.(share);
       } catch (err) {
         console.error('embed share handler failed:', err);
+      }
+    }
+    // Invalid payload — silently ignore.
+    return;
+  }
+
+  if (data.type === DME_MSG.START_CHAT) {
+    const payload = data.payload;
+    // 合法 DID：`did:` 前缀 + 非空。非法则静默丢弃（需求文档 §2）。
+    if (
+      payload &&
+      typeof payload.did === 'string' &&
+      payload.did.startsWith('did:') &&
+      payload.did.length > 'did:'.length
+    ) {
+      const intent: EmbedStartChatPayload = {
+        did: payload.did,
+        handle: typeof payload.handle === 'string' && payload.handle.length > 0
+          ? payload.handle
+          : undefined,
+      };
+      try {
+        onStartChatHandler?.(intent);
+      } catch (err) {
+        console.error('embed start-chat handler failed:', err);
       }
     }
     // Invalid payload — silently ignore.
@@ -399,6 +428,7 @@ export function stop(): void {
   parentOrigin = null;
   onTokenHandler = null;
   onShareHandler = null;
+  onStartChatHandler = null;
   lastUnread = null;
   lastInvalidJwt = null;
   readyRetryCount = 0;
@@ -437,6 +467,15 @@ export function offChatActiveChange(handler: ChatActiveChangeHandler): void {
  */
 export function onShare(handler: ShareHandler | null): void {
   onShareHandler = handler;
+}
+
+/**
+ * Register a callback invoked when the parent (fatesky) hands over a
+ * start-chat intent (`DME_START_CHAT`). Replaces any previously registered
+ * handler.
+ */
+export function onStartChat(handler: StartChatHandler | null): void {
+  onStartChatHandler = handler;
 }
 
 /**

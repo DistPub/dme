@@ -570,6 +570,21 @@ iOS 检测：UA `/iPad|iPhone|iPod/` 或 iPadOS 13+（`navigator.platform === 'M
 
 **关键 helper**：AppContext `takeFreshPoolPair(label, consume)`——取新鲜池条目并反序列化；`consume=true` 立即标 consumed（私钥随即进本机会话：QR 生成/1v1 扫码/建群），`consume=false` 预留待 join（群邀请接受，join 成功才标，保证 welcome 未到达时 pair 随备份可恢复）。
 
+## 个人主页「开始聊天」：DME_START_CHAT（2026-10-22 落地，仅 dme-client web 嵌入态）
+
+fatesky 个人主页上线「聊天」按钮（所有非本人主页一直可见），点击后 SPA 跳 `/messages` 并 postMessage `DME_START_CHAT {did, handle?}`，请求打开（或创建）与目标用户的 1v1 会话。需求文档：fatesky 仓库 `docs/dme-start-chat-requirement.md`。消息名/payload 与 fatesky `src/lib/dme-embed/constants.ts` 逐字一致。
+
+**实现（与 DME_SHARE 同构的 intent 管道）：**
+
+- `embed/protocol.ts`：`DME_MSG.START_CHAT = 'DME_START_CHAT'` + `EmbedStartChatPayload {did, handle?}`（handle 仅展示，不得依赖）。
+- `embed/bridge.ts`：bridge 内校验 `did`（`did:` 前缀 + 非空，非法静默丢弃）后分发 `onStartChat(handler)`；`stop()` 清理。
+- `AppContext`：`startChatIntent` state + `consumeStartChatIntent`，**intent 缓冲不丢**——导航器未就绪或未登录时不消费，session/ready 出现后 effect 重跑自动补发（对应验收 #2 无握手补发、#7 切账号归属新账号）。own DID 防御性忽略。
+- `App.tsx` NavigationRoot：消费 intent → 按 `app.groups.includes(did)` 分流——**有会话** `ChatView {friendDid, handle?}`；**陌生 DID** `QrDisplay {did, handle}` 走现有加好友流程。导航成功后才 consume。
+- `types/navigation.ts`：`ChatView` friendDid 分支新增可选 `handle`（ChatViewScreen 仅作标题初始值，随后被资料解析覆盖）；`QrDisplay` 新增 `{did?, handle?}` 参数。
+- `QrDisplayScreen`：支持带 DID 直达——`runCheck(did, displayHandle)` 抽出三路检查（未注册→邀请注册帖 / 已注册非好友→邀请帖+QR 握手 / already_friend→去聊天，`checkBobDmeStatus` 自带 storage 会话兜底），挂载即自动检查（`autoStartedRef` 防重入、等 session 就绪），错误重试不回到 handle 输入框。手动输入路径行为不变。
+
+**产品语义（§3.1/§4）**：DME 的 1v1 会话创建 = 握手（需对方 KP），无法单方创建——陌生一律走加好友流程（发 Bluesky 邀请帖），不存在「无会话死胡同 ChatView」。fatesky 不做准入前置拦截。
+
 ## 多语言 (i18n)
 
 客户端支持 简体中文 (`zh`) / English (`en`) 双语，运行时切换，无需重启。

@@ -12,8 +12,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { theme } from './theme';
 import { Button } from './Button';
@@ -34,10 +34,12 @@ type RootStackParamList = {
   Login: undefined;
   Setup: undefined;
   ChatList: undefined;
-  ChatView: { friendDid: string };
-  QrDisplay: undefined;
+  ChatView: { friendDid: string; handle?: string };
+  QrDisplay: { did?: string; handle?: string } | undefined;
   QrScan: undefined;
 };
+
+type QrDisplayRouteProp = NativeStackScreenProps<RootStackParamList, 'QrDisplay'>['route'];
 
 type Phase = 'input' | 'checking' | 'preview' | 'already_friend' | 'publishing' | 'published' | 'error';
 
@@ -47,6 +49,11 @@ export function QrDisplayScreen(): React.JSX.Element {
   const app = useApp();
   const { t, language } = useI18n();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const route = useRoute<QrDisplayRouteProp>();
+  // DME_START_CHAT（web 嵌入态）携带目标 DID 直达：跳过 handle 输入，挂载即自动检查。
+  const autoDid = route.params?.did;
+  const autoHandle = route.params?.handle;
+  const autoStartedRef = useRef(false);
 
   const [handle, setHandle] = useState('');
   const [phase, setPhase] = useState<Phase>('input');
@@ -86,38 +93,37 @@ export function QrDisplayScreen(): React.JSX.Element {
     };
   }, [qrValue]);
 
-  const onCheckBob = useCallback(async (): Promise<void> => {
-    const trimmed = handle.trim();
-    if (!trimmed || !app.session || submittedRef.current) return;
+  /**
+   * 对既定 DID 执行三路检查（未注册 / 已注册非好友 / 已是好友）。手动输入
+   * 路径先 resolveHandle 再进入；DME_START_CHAT 直达路径跳过解析直接调用。
+   * `submittedRef` 防重入：调用方负责在需要重新检查时复位。
+   */
+  const runCheck = useCallback(async (targetDid: string, displayHandle: string): Promise<void> => {
+    if (!app.session || submittedRef.current) return;
     submittedRef.current = true;
     setPhase('checking');
 
     try {
-      const result = await app.session.agent.com.atproto.identity.resolveHandle({
-        handle: trimmed,
-      });
-      const resolvedDid = result.data.did;
-
-      if (resolvedDid === app.session.did) {
+      if (targetDid === app.session.did) {
         setErrorMsg(t('qrdisplay.cantInviteSelf'));
         setPhase('error');
         return;
       }
 
-      const status = await checkBobDmeStatus(app.storage, resolvedDid);
-      setBobDid(resolvedDid);
-      setBobHandle(trimmed);
+      const status = await checkBobDmeStatus(app.storage, targetDid);
+      setBobDid(targetDid);
+      setBobHandle(displayHandle);
       setBobStatus(status);
 
       if (status === 'not_registered') {
-        setPostText(generateInvitePostText(trimmed, language));
+        setPostText(generateInvitePostText(displayHandle, language));
         setPhase('preview');
       } else if (status === 'registered_not_friend') {
-        const { qrString, keyPackageSerialized, welcomeQueueId } = await app.generateInviteQr(resolvedDid);
+        const { qrString, keyPackageSerialized, welcomeQueueId } = await app.generateInviteQr(targetDid);
         setQrValue(qrString);
         keyPackageSerializedRef.current = keyPackageSerialized;
         welcomeQueueIdRef.current = welcomeQueueId;
-        setPostText(generateAddFriendPostText(trimmed, language));
+        setPostText(generateAddFriendPostText(displayHandle, language));
         setPhase('preview');
       } else {
         setPhase('already_friend');
@@ -126,7 +132,30 @@ export function QrDisplayScreen(): React.JSX.Element {
       setErrorMsg(err instanceof Error ? err.message : t('qrdisplay.failedCheck'));
       setPhase('error');
     }
-  }, [handle, app.session, app.storage, app.generateInviteQr, language]);
+  }, [app.session, app.storage, app.generateInviteQr, language, t]);
+
+  const onCheckBob = useCallback(async (): Promise<void> => {
+    const trimmed = handle.trim();
+    if (!trimmed || !app.session) return;
+    try {
+      const result = await app.session.agent.com.atproto.identity.resolveHandle({
+        handle: trimmed,
+      });
+      const resolvedDid = result.data.did;
+      await runCheck(resolvedDid, trimmed);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : t('qrdisplay.failedCheck'));
+      setPhase('error');
+    }
+  }, [handle, app.session, runCheck, t]);
+
+  // DME_START_CHAT 直达：挂载即自动检查（只跑一次；重试走 onRetry）。
+  // session 未就绪时等待，不置 started 标记，避免空转后永久卡在 input 阶段。
+  useEffect(() => {
+    if (!autoDid || autoStartedRef.current || !app.session) return;
+    autoStartedRef.current = true;
+    void runCheck(autoDid, autoHandle ?? autoDid);
+  }, [autoDid, autoHandle, app.session, runCheck]);
 
   const onPublish = useCallback(async (): Promise<void> => {
     if (!app.session || phase !== 'preview') return;
@@ -160,19 +189,24 @@ export function QrDisplayScreen(): React.JSX.Element {
     submittedRef.current = false;
     keyPackageSerializedRef.current = '';
     welcomeQueueIdRef.current = '';
-    setPhase('input');
-    setHandle('');
     setQrValue('');
     setPostText('');
     setErrorMsg('');
     setBobStatus(null);
-  }, []);
+    if (autoDid) {
+      // DME_START_CHAT 直达路径：重试 = 重新自动检查，不回到 handle 输入。
+      void runCheck(autoDid, autoHandle ?? autoDid);
+    } else {
+      setPhase('input');
+      setHandle('');
+    }
+  }, [autoDid, autoHandle, runCheck]);
 
   const onGoToChat = useCallback((): void => {
     if (bobDid) {
-      navigation.replace('ChatView', { friendDid: bobDid });
+      navigation.replace('ChatView', { friendDid: bobDid, handle: bobHandle || undefined });
     }
-  }, [bobDid, navigation]);
+  }, [bobDid, bobHandle, navigation]);
 
   return (
     <View style={styles.container}>

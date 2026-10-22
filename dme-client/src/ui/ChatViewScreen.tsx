@@ -85,6 +85,9 @@ export function ChatViewScreen(): React.JSX.Element {
 
   const conversationId = 'groupId' in route.params ? route.params.groupId : route.params.friendDid;
   const isGroup = 'groupId' in route.params;
+  // DME_START_CHAT 携带的 handle（可选，仅展示）：作为标题初始值，随后仍由
+  // DID 文档/资料解析结果覆盖（解析值更新鲜，payload handle 不得被依赖）。
+  const friendHandleParam = 'friendDid' in route.params ? route.params.handle : undefined;
   const {
     storage,
     session,
@@ -108,7 +111,9 @@ export function ChatViewScreen(): React.JSX.Element {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [inputHeight, setInputHeight] = useState(44);
-  const [displayName, setDisplayName] = useState(isGroup ? t('common.loading') : conversationId);
+  const [displayName, setDisplayName] = useState(
+    isGroup ? t('common.loading') : (friendHandleParam ?? conversationId),
+  );
   const [groupCreatorHandle, setGroupCreatorHandle] = useState('');
   const [friendAvatarUrl, setFriendAvatarUrl] = useState<string | null>(null);
   const [friendAvatarError, setFriendAvatarError] = useState(false);

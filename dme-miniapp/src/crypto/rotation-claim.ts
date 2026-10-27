@@ -15,9 +15,13 @@
  *           未推进），允许抢占（写 existing.seq）；
  *         宣言新鲜（age < TTL）→ taken：对端正在/刚完成，静默跳过本周期，
  *           其 wrapper 经正常 poll 走 sibling-rotated 路径；
- *         宣言过期（age >= TTL）→ stale：对端早已完成而本端长期未同步
- *           （wrapper 可能已超 7 天 TTL 丢失 = 静默失败场景），明确提示
- *           恢复备份；
+ *         宣言过期（age >= TTL）→ 进入「云端备份是否覆盖该推进」判定：
+ *           覆盖（备份含该推进）→ stale：本端真落后且恢复备份**能**修好，
+ *             提示恢复备份，绝不允许 commit；
+ *           不覆盖（备份不含该推进）→ adopt：本端落后但恢复备份只会倒灌
+ *             旧状态、**修不好**——此时要求用户恢复备份是死路（恢复后
+ *             仍撞同一高水位）。改为接管高水位（seq = existing.seq）继续
+ *             正常操作，不再阻断整个账号。
  *       PDS seq  < 本地 seq → 异常（本地不可能超前），fail-closed taken；
  *   - putRecord 有原生 CAS（swapRecord：当前记录 CID 比对）+ createRecord
  *     显式 rkey 的原子 create-if-absent：并发双写时服务端只让先到者成功，
@@ -29,6 +33,18 @@
  * 恢复完整重放的两大前提之一（用户拍板）：备份点足够新（所有影响解密
  * 的变更都联动备份）+ 备份不分叉（本机制检测：seq 高水位暴露任何端的
  * 任何 commit，落后端无法假装最新）。
+ *
+ * v3 修正（2026-10-27，实测踩过）：v2 把「PDS 高水位 > 本地 seq」一律
+ * 当作「备份分叉 → 提示恢复备份」，混淆了三件本质不同的事：
+ *   1) 本机真落后且**云端备份含**该推进 → 恢复备份有效（stale）；
+ *   2) 本机落后但**云端备份不含**该推进（兄弟端 commit 后备份联动失败，
+ *      或本机是全新设备）→ 恢复备份只会倒灌旧状态、救不了（adopt）；
+ *   3) 账号级计数器顺延（别的会话被 commit）→ 与本机操作的会话无关，
+ *      不该阻断任何操作。
+ * v2 把 2) 和 3) 都判成 stale → 全新设备永远过不了宣言门禁（建群/握手/
+ * 踢人/拉人/轮换全被拦），且横幅文案让用户去恢复一份**根本不含所需
+ * 状态**的备份——实测用户反馈「我没备份过，为什么叫我恢复备份」。
+ * v3 引入云端备份覆盖判定（cloudBackupCoversClaim）分流 stale / adopt。
  */
 
 import { hkdf } from '@noble/hashes/hkdf';
@@ -188,10 +204,14 @@ export async function peekCommitSeq(
  * 认领判定结果：
  * - acquired：本端拿到执行权，seq 为应写入的高水位（commit 成功后保留宣言）；
  * - taken：另一端已认领 / 并发落败 / 本地异常超前 → 静默跳过本周期；
- * - stale：PDS 高水位高于本地且宣言已过期 → 本端长期落后（备份分叉），
- *   调用方必须提示恢复备份，绝不允许 commit。
+ * - stale：PDS 高水位高于本地、宣言已过期、且**云端备份含该推进** →
+ *   本端真落后且恢复备份**能**修好，调用方必须提示恢复备份，绝不允许 commit；
+ * - adopt：PDS 高水位高于本地、宣言已过期、但**云端备份不含该推进** →
+ *   本端落后但恢复备份只会倒灌旧状态、修不好（实测：全新设备本地 seq=0
+ *   被判 stale，横幅让用户恢复一份不含所需状态的备份 → 死路）。此时
+ *   调用方应接管高水位（seq = existing.seq）继续正常操作，不阻断账号。
  */
-export type RotationClaimVerdict = 'acquired' | 'taken' | 'stale';
+export type RotationClaimVerdict = 'acquired' | 'taken' | 'stale' | 'adopt';
 
 export interface RotationClaimOutcome {
   verdict: RotationClaimVerdict;
@@ -199,14 +219,69 @@ export interface RotationClaimOutcome {
 }
 
 /**
- * v2 认领：账号级单调 commit 高水位仲裁。PDS 不可用时抛出——调用方必须
+ * 云端备份是否覆盖了「本次高水位推进」——决定 stale（恢复备份能修）还是
+ * adopt（恢复备份修不了，必须接管）。
+ *
+ * 判据（全部来自外层明文元数据，不解密备份、不需要密码）：
+ *   - meta.commitSeq >= claim.seq → 备份写于该推进之后 → **覆盖**；
+ *   - meta.commitSeq <  claim.seq → 备份写于该推进之前 → **不覆盖**
+ *     （恢复它只会倒灌到更旧的状态）；
+ *   - meta 缺失或无 commitSeq（旧记录）→ 保守按**不覆盖**处理：
+ *     无法证明备份含该推进，就不能承诺「恢复备份能修好」。
+ *
+ * 另一个正交信号：备份记录的写入时间是否晚于宣言的 createdAt。晚于说明
+ * 备份是在那次推进之后写的，佐证「覆盖」；早于则佐证「不覆盖」。两者冲突
+ * 时以 commitSeq 为准（它是账号级单调计数，语义最准）。
+ */
+export function cloudBackupCoversClaim(
+  meta: { commitSeq?: number } | null | undefined,
+  claimSeq: number,
+): boolean {
+  if (!meta || typeof meta.commitSeq !== 'number') return false;
+  return meta.commitSeq >= claimSeq;
+}
+
+/**
+ * 只读检视：当前高水位与本机的关系（**不写入任何记录**，纯判别）。
+ *
+ * 用途：让**已贴 sibling-rotated 标记的存量会话**能自愈。v3 修正之前，
+ * 一旦某端被判 stale 就永久贴上标记，横幅无法关闭——哪怕后来条件已变化
+ * （比如云端备份已刷新、或用户已在另一台设备推进），标记也一直在。
+ * 启动时用本接口复检：若当前判定已是 adopt（恢复备份修不了）/一致，
+ * 说明当初那个 stale 判定已过期（多半是云端备份后来才被刷新），标记应清除。
+ *
+ * 返回 'consistent'：本机与云端高水位一致（或云端无高水位）；
+ * 返回 'ahead'：云端高水位高于本机；
+ * 返回 'adoptable'：云端高水位高于本机、但云端备份不含该推进
+ *                 （恢复备份修不了 → 应接管高水位并清除标记）。
+ */
+export type ClaimInspection = 'consistent' | 'ahead' | 'adoptable';
+
+export async function inspectClaimWatermark(
+  params: RotationClaimParams,
+  localSeq: number,
+  store: RotationClaimStore,
+  cloudBackupMeta?: { commitSeq?: number } | null,
+): Promise<ClaimInspection> {
+  const { claim: existing } = await readClaim(params, store);
+  if (!existing || existing.seq < 0) return 'consistent';
+  if (existing.seq <= localSeq) return 'consistent';
+  // 云端高水位高于本机：能否靠恢复备份修好？
+  if (cloudBackupCoversClaim(cloudBackupMeta, existing.seq)) return 'ahead';
+  return 'adoptable';
+}
+
+/**
+ * v2/v3 认领：账号级单调 commit 高水位仲裁。PDS 不可用时抛出——调用方必须
  * fail-closed（跳过本周期），绝不在无仲裁的情况下 commit。
  *
  * @param claim.localSeq 本地 commitSeq（随备份走）；backupSeq 用于崩溃残留判别。
+ * @param claim.cloudBackupMeta 云端备份外层元数据（可空）——用于判定
+ *        「恢复备份能否修好」，分流 stale / adopt（见 cloudBackupCoversClaim）。
  */
 export async function acquireRotationClaim(
   params: RotationClaimParams,
-  claim: { groupId: string; epoch: number; localSeq: number },
+  claim: { groupId: string; epoch: number; localSeq: number; cloudBackupMeta?: { commitSeq?: number } | null },
   store: RotationClaimStore,
 ): Promise<RotationClaimOutcome> {
   const { claim: existing, cid: existingCid } = await readClaim(params, store);
@@ -232,9 +307,23 @@ export async function acquireRotationClaim(
         console.warn('[dme:claim] preempting crashed backup lock, seq', existing.seq);
         nextSeq = existing.seq;
       } else {
-        // 宣言已过期且 seq 仍高于本地 → 对端早已完成、本端长期未同步
-        //（wrapper 可能已超 7 天 TTL 丢失）→ 备份分叉，提示恢复备份
-        return { verdict: 'stale', seq: existing.seq };
+        // 宣言已过期且 seq 仍高于本地 → 对端早已完成、本端长期未同步。
+        // v3 修正（2026-10-27）：此时**不能一律**要求恢复备份——要先看
+        // 云端备份是否含这次推进：
+        //   含（stale）→ 本机真落后，恢复备份能修好 → 明确提示，绝不 commit；
+        //   不含（adopt）→ 恢复备份只会倒灌旧状态、修不好（实测：全新设备
+        //     本地 seq=0、云端备份写于推进之前，横幅让用户恢复备份是死路）
+        //     → 接管高水位继续，不阻断整个账号。
+        if (cloudBackupCoversClaim(claim.cloudBackupMeta, existing.seq)) {
+          console.warn('[dme:claim] stale: backup fork, cloud backup covers claim, restore required');
+          return { verdict: 'stale', seq: existing.seq };
+        }
+        console.warn(
+          '[dme:claim] adopt: cloud backup does not cover claim seq',
+          existing.seq,
+          '- restoring backup would roll back to older state; taking over watermark',
+        );
+        return { verdict: 'adopt', seq: existing.seq };
       }
     } else if (existing.seq === claim.localSeq) {
       // 本端与云端一致，最新 → 允许 commit
@@ -292,8 +381,13 @@ export async function releaseRotationClaim(
 // 若本机已落后（PDS 高水位更高），手动备份会用旧状态覆盖新备份，制造
 // 备份分叉。因此手动备份同样必须先过宣言仲裁：
 //   - 高水位高于本地且新鲜（另一端正在/刚完成 commit）→ busy，稍后再试；
-//   - 高水位高于本地且已过期（另一端早已推进、本端长期未同步）→ stale，
-//     必须先恢复最新备份，绝不允许上传可能过期的状态；
+//   - 高水位高于本地且已过期 → 按「云端备份是否覆盖该推进」分流（v3 修正，
+//     2026-10-27）：
+//       覆盖 → stale，必须先恢复最新备份，绝不允许上传可能过期的状态；
+//       不覆盖 → adopt：云端备份本就缺这次推进（本机是全新设备，或兄弟端
+//         commit 后备份联动失败），此时本机状态并不比云端旧——云端那份压根
+//         没有这次推进的成果。拒绝备份毫无意义，反而让用户永远推不上
+//         云端状态，且恢复备份也修不好（备份里没有所需状态）。放行。
 //   - 通过 → 持锁备份：锁会挡住备份窗口内兄弟端的 commit（否则兄弟端
 //     提交+自动备份落在前面，本端更旧的快照后上传仍会覆盖）。
 //
@@ -312,20 +406,24 @@ export interface BackupLockHandle {
   readonly previousPayload: string | null;
 }
 
-export type BackupLockVerdict = 'acquired' | 'busy' | 'stale';
+export type BackupLockVerdict = 'acquired' | 'busy' | 'stale' | 'adopt';
 
 export type BackupLockOutcome =
-  | { readonly verdict: 'acquired'; readonly handle: BackupLockHandle }
-  | { readonly verdict: 'busy' | 'stale'; readonly seq: number };
+  | { readonly verdict: 'acquired'; handle: BackupLockHandle }
+  | { readonly verdict: 'busy' | 'stale' | 'adopt'; seq: number };
 
 /**
  * 占用手动备份锁。PDS 不可用/读取失败时抛出（fail-closed）——无法仲裁
  * 时宁可不备份，也不上传可能已过期的状态。
+ *
+ * @param cloudBackupMeta 云端备份外层元数据（可空）——判定备份是否覆盖
+ *        当前高水位（v3 修正：stale vs adopt）。
  */
 export async function acquireBackupLock(
   params: RotationClaimParams,
   localSeq: number,
   store: RotationClaimStore,
+  cloudBackupMeta?: { commitSeq?: number } | null,
 ): Promise<BackupLockOutcome> {
   const previousPayload = await store.get(params.rkey);
   const existing = previousPayload === null ? null : decryptClaim(params.encKey, previousPayload.payload);
@@ -339,10 +437,17 @@ export async function acquireBackupLock(
       // 稍后再试（对方完成并同步后高水位会与本地追平）
       return { verdict: 'busy', seq: existing.seq };
     }
-    // 过期且高水位仍高于本地：另一端早已推进、本端长期未同步（wrapper
-    // 可能已超 7 天 TTL 丢失）。即使是崩溃残留，对备份来说结论也一样——
-    // 本机状态可疑，必须先恢复最新备份（fail-closed，可恢复）。
-    return { verdict: 'stale', seq: existing.seq };
+    // 过期且高水位仍高于本地（v3 修正，2026-10-27）：
+    //   云端备份含该推进 → stale：另一端早已推进、本端长期未同步（wrapper
+    //     可能已超 7 天 TTL 丢失），本机状态可疑，必须先恢复最新备份
+    //     （fail-closed，可恢复）；
+    //   云端备份不含该推进 → adopt：本机状态并不比云端旧（云端那份压根
+    //     没有这次推进的成果），拒绝备份只会让用户永远推不上云端状态，
+    //     且恢复备份也修不好。放行。
+    if (cloudBackupCoversClaim(cloudBackupMeta, existing.seq)) {
+      return { verdict: 'stale', seq: existing.seq };
+    }
+    return { verdict: 'adopt', seq: existing.seq };
   }
 
   // seq <= localSeq（一致或残留旧锁）→ 允许备份，持锁挡窗

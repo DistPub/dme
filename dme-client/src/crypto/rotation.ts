@@ -72,6 +72,12 @@ export interface RotationDeps {
   /** 账号级 commit 高水位（本地计数，随备份走；宣言 v2 比对基准）。 */
   getCommitSeq(): Promise<number>;
   setCommitSeq(seq: number): Promise<void>;
+  /**
+   * 云端备份外层元数据（可空）——v3 修正：判定「恢复备份能否修好」，
+   * 分流 stale（能修好→提示恢复）与 adopt（修不好→接管高水位继续）。
+   * 读失败应返回 null（不阻断轮换：拿不到就按「无法证明覆盖」处理）。
+   */
+  getCloudBackupMeta(): Promise<{ commitSeq?: number } | null>;
   /** 身份签名公钥（宣言槽位账号级稳定派生源）。 */
   getIdentitySigningPublicKey(): Promise<Uint8Array>;
   /** 轮换成功后的备份联动（1.5）。 */
@@ -142,17 +148,27 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
   const last = await deps.getLastRotationAt(groupId);
   if (Date.now() - last < interval) return;
 
-  // 宣言检查 v2（commit 的硬性门槛，账号级单调 commit 高水位仲裁）：
+  // 宣言检查 v2/v3（commit 的硬性门槛，账号级单调 commit 高水位仲裁）：
   // 本地 seq 与 PDS 一致 → 允许 commit（写 seq+1，保留为高水位）；
-  // PDS 更高 → 其他端已推进（taken/stale 均为宣言失败，同一恢复路径：
-  // 置 sibling-rotated 提示恢复最新备份，绝不 commit）；
+  // PDS 更高 → 其他端已推进（taken/stale/adopt 三种结局）：
+  //   taken（对端正在/刚完成）→ 静默跳过本周期，其 wrapper 经 poll 走
+  //     sibling-rotated 路径；
+  //   stale（云端备份**含**该推进）→ 本机真落后且恢复备份能修好 →
+  //     置 sibling-rotated 提示恢复最新备份，绝不 commit；
+  //   adopt（云端备份**不含**该推进）→ 本机并不比云端旧，恢复备份只会
+  //     倒灌旧状态、修不好（实测死路）→ 接管高水位继续轮换，不阻断。
   // PDS 不可用 → fail-closed 跳过，宁可下个周期重试也不无仲裁地 commit
   const claimParams = await deriveRotationClaimParams(await deps.getIdentitySigningPublicKey());
   let claimSeq: number;
   try {
     const { verdict, seq } = await acquireRotationClaim(
       claimParams,
-      { groupId, epoch: session.getEpoch(), localSeq: await deps.getCommitSeq() },
+      {
+        groupId,
+        epoch: session.getEpoch(),
+        localSeq: await deps.getCommitSeq(),
+        cloudBackupMeta: await deps.getCloudBackupMeta(),
+      },
       deps.claimStore,
     );
     claimSeq = seq;
@@ -165,11 +181,21 @@ async function rotateSession(groupId: string, deps: RotationDeps): Promise<void>
     }
     if (verdict === 'stale') {
       // 宣言 v2：PDS 高水位高于本地且已过期 = 其他端早已 commit 而本端
-      // 长期未同步（备份分叉，wrapper 可能已超 7 天 TTL 丢失）。
+      // 长期未同步，且云端备份**含**该推进 → 恢复备份能修好。
       // 绝不允许 commit，明确提示恢复备份（用户拍板设计）。
       console.warn('[dme:rotation] commit seq ahead of local (backup fork), restore required', groupId);
       deps.onAborted(groupId, 'stale');
       return;
+    }
+    if (verdict === 'adopt') {
+      // v3 修正（2026-10-27）：云端备份**不含**该推进——本机并不比云端旧，
+      // 恢复备份只会倒灌旧状态、修不好（实测：全新设备被要求恢复一份不含
+      // 所需状态的备份 = 死路）。接管高水位继续轮换，不置标记。
+      console.warn(
+        '[dme:rotation] adopting cloud watermark', seq,
+        '- cloud backup lacks this advance, restoring would roll back',
+      );
+      await deps.setCommitSeq(seq);
     }
   } catch (err) {
     console.warn('[dme:rotation] rotation claim check failed, skip this cycle', groupId, err);

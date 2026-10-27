@@ -182,6 +182,17 @@ export interface BackupMeta {
   platform: string;
   /** 全部本机会话的 HMAC 指纹（与加密载荷内的会话集合一致）。 */
   sessionFps: string[];
+  /**
+   * 写这份备份时的账号级 commit 高水位（宣言 v2）。
+   *
+   * v3 修正（2026-10-27）新增：这是判定「恢复备份能否修好」的关键依据——
+   * 宣言高水位 seq 若 ≤ 本字段，说明这份备份写于该次推进**之后**，恢复它
+   * 能拿到推进后的状态（stale，恢复备份有效）；若 > 本字段，说明备份写于
+   * 推进**之前**，恢复只会倒灌旧状态、修不好（adopt，须接管高水位）。
+   *
+   * 旧记录无此字段 → 视为 undefined（按「无法证明覆盖」处理，即 adopt）。
+   */
+  commitSeq?: number;
 }
 
 export interface IdentityBackupRecord {

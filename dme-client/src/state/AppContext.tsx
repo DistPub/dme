@@ -36,8 +36,8 @@ import { MlsSession } from '../crypto/mls-session';
 import { deliverCommitViaGroupSpace } from './commit-delivery';
 import { clearBackupPassword, getBackupPassword, saveBackupPassword } from '../crypto/password-cache';
 import { maybeRotateGroups, type RotationDeps } from '../crypto/rotation';
-import type { RotationClaimStore } from '../crypto/rotation-claim';
-import { acquireBackupLock, acquireRotationClaim, deriveRotationClaimParams, peekCommitSeq, releaseBackupLock, releaseRotationClaim } from '../crypto/rotation-claim';
+import type { BackupLockHandle, RotationClaimStore } from '../crypto/rotation-claim';
+import { acquireBackupLock, acquireRotationClaim, deriveRotationClaimParams, inspectClaimWatermark, peekCommitSeq, releaseBackupLock, releaseRotationClaim } from '../crypto/rotation-claim';
 import { getNobleMlsImpl } from '../crypto/mls-noble-kdf';
 import { KEYPACKAGE_POOL_SIZE } from '../crypto/mls-config';
 import {
@@ -981,12 +981,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const encryptedData = encryptBackup(data, password);
     // 方案C外层元数据：设备短码 + 平台 + 会话指纹。只供覆盖提示与展示，
     // 恢复流程不读它；写失败不应阻断备份本体（元数据尽力而为）。
+    // v3 修正（2026-10-27）：meta 追加 commitSeq——这是「云端备份是否覆盖
+    // 某次高水位推进」的判据（rotation-claim 的 stale vs adopt 分流）。
+    // 缺了它，恢复路径无法判断「恢复备份能不能修好」，只会一律要用户恢复。
     let meta: BackupMeta | undefined;
     try {
       meta = {
         deviceId: await getOrCreateDeviceId(),
         platform: getPlatformLabel(),
         sessionFps: computeSessionFingerprints(groupIds, identityKeys.signing.privateKey),
+        commitSeq: data.commitSeq,
       };
     } catch (err) {
       console.warn('[dme:backup] build meta failed, writing without meta:', err);
@@ -1089,17 +1093,41 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * 返回 null = 拒绝执行——taken/stale（其他端已推进/备份分叉）已置
    * sibling-rotated 提示恢复最新备份；PDS 不可用 fail-closed（不置标记、
    * 不动作，下个时机重试，绝不无仲裁 commit）。
+   *
+   * v3 修正（2026-10-27）：新增 adopt 判定——云端备份**不含**本次高水位
+   * 推进时（全新设备 / 兄弟端 commit 后备份联动失败），恢复备份只会倒灌
+   * 旧状态、修不好。此时不再置 sibling-rotated 阻断账号，而是让调用方
+   * 接管高水位（setCommitSeq）后照常执行。
    */
   const acquireClaimForCommit = useCallback(async (groupId: string, epoch: number): Promise<number | null> => {
     if (!storage || !pds || !identityKeys || !claimStore) return null;
     const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
     try {
+      // 云端备份外层元数据（判定 stale vs adopt 的依据）。读取失败不阻断
+      // 判定：拿不到就按「无法证明覆盖」→ adopt（fail-open towards 继续）。
+      let cloudBackupMeta: BackupMeta | null = null;
+      try {
+        cloudBackupMeta = (await pds.getIdentityBackupRecord())?.meta ?? null;
+      } catch (peekErr) {
+        console.warn('[dme:claim] cloud backup meta peek failed:', peekErr);
+      }
       const { verdict, seq } = await acquireRotationClaim(
         params,
-        { groupId, epoch, localSeq: await storage.getCommitSeq() },
+        { groupId, epoch, localSeq: await storage.getCommitSeq(), cloudBackupMeta },
         claimStore,
       );
       if (verdict === 'acquired') return seq;
+      if (verdict === 'adopt') {
+        // 接管高水位：云端备份不含这次推进，本机并不比云端旧。恢复备份
+        // 只会倒灌旧状态、修不好（实测死路），所以不阻断账号——先把本地
+        // 高水位追平到云端值，后续 commit 正常进行。
+        console.warn(
+          '[dme:claim] adopt: taking over cloud watermark', seq,
+          '- cloud backup lacks this advance, restoring would roll back',
+        );
+        await storage.setCommitSeq(seq);
+        return seq;
+      }
       console.warn(`[dme:claim] claim ${verdict}: commit blocked, backup restore required`, groupId);
       await storage.setSessionIssue(groupId, 'sibling-rotated');
       return null;
@@ -1120,9 +1148,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * 手动备份（用户点「备份」/退出登录前备份）：约定「任何备份点都必须先
    * 遵守宣言」——手动备份没有前置 commit 动作，但它把本机当前状态写进
    * 云端，本机落后时会用旧状态覆盖新备份（备份分叉的另一入口）。
-   * 先经宣言仲裁：busy（另一端正在操作）/ stale（本机长期落后）一律拒绝
-   * 并提示；通过则持锁备份（挡窗）+ 完成后恢复占用前的记录（备份不推进
-   * 账号状态，兄弟端 commit 的高水位必须原样保留）。
+   * 先经宣言仲裁：busy（另一端正在操作）/ stale（本机长期落后且云端备份
+   * 含该推进）一律拒绝并提示；adopt（云端备份不含该推进——本机并不比
+   * 云端旧）则接管高水位后放行；通过则持锁备份（挡窗）+ 完成后恢复占用
+   * 前的记录（备份不推进账号状态，兄弟端 commit 的高水位必须原样保留）。
    * PDS 不可用 fail-closed：无法仲裁时宁可不备份。
    */
   const backupIdentityGuarded = useCallback(async (password: string): Promise<void> => {
@@ -1131,11 +1160,37 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     if (!identityKeys) throw new Error('backupIdentityGuarded: identity keys not available');
     if (!claimStore) throw new Error('backupIdentityGuarded: claim store not available');
     const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
-    const outcome = await acquireBackupLock(params, await storage.getCommitSeq(), claimStore);
-    if (outcome.verdict !== 'acquired') {
-      throw new Error(outcome.verdict === 'busy' ? 'BACKUP_CLAIM_BUSY' : 'BACKUP_CLAIM_STALE');
+    // 云端备份外层元数据（stale vs adopt 判据）。读失败不阻断：拿不到就
+    // 按「无法证明覆盖」→ adopt。
+    let cloudBackupMeta: BackupMeta | null = null;
+    try {
+      cloudBackupMeta = (await pds.getIdentityBackupRecord())?.meta ?? null;
+    } catch (peekErr) {
+      console.warn('[dme:backup] cloud backup meta peek failed:', peekErr);
     }
-    const { handle } = outcome;
+    const outcome = await acquireBackupLock(
+      params,
+      await storage.getCommitSeq(),
+      claimStore,
+      cloudBackupMeta,
+    );
+    if (outcome.verdict === 'stale') {
+      throw new Error('BACKUP_CLAIM_STALE');
+    }
+    if (outcome.verdict === 'busy') {
+      throw new Error('BACKUP_CLAIM_BUSY');
+    }
+    if (outcome.verdict === 'adopt') {
+      // 接管高水位：云端备份不含这次推进，本机状态并不比云端旧——拒绝备份
+      // 会让用户永远推不上云端状态。追平本地高水位后照常备份（备份会把
+      // 新的 commitSeq 一并写上云端，下次两端就一致了）。
+      console.warn(
+        '[dme:backup] adopt: taking over cloud watermark', outcome.seq,
+        '- cloud backup lacks this advance',
+      );
+      await storage.setCommitSeq(outcome.seq);
+    }
+    const { handle } = outcome as { verdict: 'acquired'; handle: BackupLockHandle };
     try {
       await backupIdentity(password);
     } finally {
@@ -1262,6 +1317,27 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     // 恢复账号级 commit 高水位（宣言 v2 比对基准；旧备份无此字段 → 0）
     await storage.setCommitSeq(data.commitSeq ?? 0);
+    // v3 修正（2026-10-27）：恢复后必须把本地高水位追平到 PDS 宣言的实际
+    // seq。备份是兄弟端 commit 后异步写云的，云端备份往往落后于宣言高水位
+    //（实测：备份 seq≤29，宣言已到 30）。若只按备份 seq 设置，恢复后第一次
+    // commit 就会撞 stale → 又被提示「恢复备份」→ 死循环。宣言本身没删，
+    // 其 seq 就是本账号真实的水位，直接接管（adopt）即可继续 commit。
+    // PDS 不可用时 fail-closed：保持备份里的 seq，宁保守不冒进。
+    try {
+      const params = await deriveRotationClaimParams(data.identity.signing.publicKey);
+      if (!claimStore) throw new Error('claim store not initialized');
+      const cloudSeq = await peekCommitSeq(params, claimStore);
+      if (cloudSeq !== null && cloudSeq > (data.commitSeq ?? 0)) {
+        await storage.setCommitSeq(cloudSeq);
+        console.warn(
+          '[dme:restore] adopted PDS high watermark', cloudSeq,
+          '> backup commitSeq', data.commitSeq ?? 0,
+          '- avoids stale loop on next commit',
+        );
+      }
+    } catch (err) {
+      console.error('[dme:restore] failed to peek claim watermark, keeping backup seq', err);
+    }
     // 缺口⑨修复：恢复后状态整体重建（会话来自备份），旧的脱钩/兄弟轮换
     // 标记作废——必须在 setChatListVersion 之前清，否则 ChatListScreen
     // effect 监听 chatListVersion 首次跑会读到 storage 旧标记写进 React
@@ -1325,6 +1401,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       claimStore: claimStore as RotationClaimStore,
       getCommitSeq: () => storage.getCommitSeq(),
       setCommitSeq: (seq) => storage.setCommitSeq(seq),
+      // v3 修正：云端备份外层元数据（stale vs adopt 判据）。读失败返回 null
+      // ——不阻断轮换，按「无法证明覆盖」处理。
+      getCloudBackupMeta: async () => {
+        try {
+          return (await pds.getIdentityBackupRecord())?.meta ?? null;
+        } catch (err) {
+          console.warn('[dme:rotation] cloud backup meta peek failed:', err);
+          return null;
+        }
+      },
       // 群 commit 谱系账本（group-fork-plan.md 3.1）：轮换 commit 携带
       // per-group seq 并写回 queueId，供全员分叉检测
       reserveGroupCommit: (groupId) => storage.reserveGroupCommit(groupId),
@@ -1366,6 +1452,88 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       appStateSub.remove();
     };
   }, [runRotationCheck, poller]);
+
+  /**
+   * 存量 sibling-rotated 标记自愈（v3 修正，2026-10-27）。
+   *
+   * 问题：v2 把「PDS 高水位 > 本地 seq」一律判 stale 并永久贴上
+   * sibling-rotated 标记，横幅不可关闭、也无自愈路径。实测用户反馈
+   * 「我没备份过，为什么叫我恢复备份」——而那份备份压根不含所需状态，
+   * 恢复是死路。
+   *
+   * 自愈逻辑：启动时复检每个带 sibling-rotated 标记的会话——若当前判定
+   * 已不是「云端备份能覆盖该推进」（即 adoptable / consistent），说明当初
+   * 那个 stale 判定的前提已消失（云端备份后来才刷新，或本机已追平），
+   * 标记应清掉，横幅随之消失。若判定仍是 ahead（云端备份确实含该推进），
+   * 保留标记——那种情况恢复备份**确实**有效。
+   *
+   * 顺带：adoptable 时把本地 commitSeq 追平到云端高水位，避免下次
+   * commit 又撞同一高水位。
+   */
+  useEffect(() => {
+    if (!storage || !pds || !identityKeys || !claimStore) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const params = await deriveRotationClaimParams(identityKeys.signing.publicKey);
+        let cloudBackupMeta: BackupMeta | null = null;
+        try {
+          cloudBackupMeta = (await pds.getIdentityBackupRecord())?.meta ?? null;
+        } catch (peekErr) {
+          console.warn('[dme:claim] cloud backup meta peek failed:', peekErr);
+        }
+        const localSeq = await storage.getCommitSeq();
+        const inspection = await inspectClaimWatermark(params, localSeq, claimStore, cloudBackupMeta);
+
+        if (inspection === 'consistent') {
+          // 本机与云端一致：任何残留的 sibling-rotated 都是过期判定
+          // （云端备份后来才刷新 / 本机已追平）→ 清除。
+          const groupIds = await storage.listGroups();
+          let cleared = 0;
+          for (const gid of groupIds) {
+            if (await storage.getSessionIssue(gid) === 'sibling-rotated') {
+              await storage.setSessionIssue(gid, null);
+              cleared++;
+            }
+          }
+          if (cleared > 0) {
+            console.warn('[dme:claim] self-heal: cleared stale sibling-rotated marks', cleared);
+            setChatListVersion((v) => v + 1);
+          }
+          return;
+        }
+
+        if (inspection === 'adoptable') {
+          // 云端高水位高于本机，但云端备份不含该推进 → 恢复备份修不好，
+          // 不该继续用「恢复备份」横幅挡着用户。接管高水位 + 清除标记。
+          const cloudSeq = await peekCommitSeq(params, claimStore);
+          if (cloudSeq !== null && cloudSeq > localSeq) {
+            await storage.setCommitSeq(cloudSeq);
+            console.warn('[dme:claim] self-heal: adopted cloud watermark', cloudSeq);
+          }
+          const groupIds = await storage.listGroups();
+          let cleared = 0;
+          for (const gid of groupIds) {
+            if (await storage.getSessionIssue(gid) === 'sibling-rotated') {
+              await storage.setSessionIssue(gid, null);
+              cleared++;
+            }
+          }
+          if (cleared > 0) {
+            console.warn('[dme:claim] self-heal: cleared sibling-rotated marks (adoptable)', cleared);
+            setChatListVersion((v) => v + 1);
+          }
+        }
+        // inspection === 'ahead'：云端备份确实含该推进 → 保留标记，
+        // 横幅引导恢复备份（那种情况恢复**确实**有效）。
+      } catch (err) {
+        console.warn('[dme:claim] self-heal check failed:', err);
+      } finally {
+        if (!cancelled) void cancelled;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [storage, pds, identityKeys, claimStore]);
 
   // -------------------------------------------------------------------------
   // Invite / Accept

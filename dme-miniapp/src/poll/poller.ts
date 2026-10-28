@@ -39,10 +39,13 @@ export type IncomingWelcome = {
   queueId: string;
   /** Raw MLS Welcome wire bytes (decoded from envelope.payload base64url). */
   welcomeBytes: Uint8Array;
+  /** ISO-8601 timestamp from the envelope (used to record welcomeDate). */
+  createdAt: string;
 };
 
 export type OnMessageCallback = (msg: IncomingMessage) => Promise<void>;
 export type OnWelcomeCallback = (welcome: IncomingWelcome) => Promise<void>;
+export type OnRescueCallback = (groupId: string, payloadBase64url: string) => Promise<void>;
 
 type QueueContext =
   | {
@@ -52,17 +55,22 @@ type QueueContext =
       senderDid: string;
       generation: number;
     }
-  | { type: 'welcome'; queueId: string };
+  | { type: 'welcome'; queueId: string }
+  | { type: 'rescue'; groupId: string }
+  | { type: 'rescue_callback'; groupId: string };
 
 export class DmePoller {
   private readonly pds: DmePds;
   private readonly storage: DmeStorage;
   private readonly sessions: Map<string, MlsSession> = new Map();
   private readonly pendingWelcomes: Map<string, PendingWelcome> = new Map();
+  private readonly rescueQueueIds = new Map<string, string>();
+  private readonly rescueCallbackQueueIds = new Map<string, string>();
   private readonly inFlightQueueIds = new Set<string>();
   private polling = false;
   private onMessage: OnMessageCallback | null = null;
   private onWelcome: OnWelcomeCallback | null = null;
+  private onRescue: OnRescueCallback | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private batchSize = 3;
@@ -97,9 +105,34 @@ export class DmePoller {
     this.pendingWelcomes.delete(queueId);
   }
 
-  start(onMessage: OnMessageCallback, onWelcome: OnWelcomeCallback): void {
+  /**
+   * Set the rescue queueId for a 1v1 conversation.
+   * Pass null to stop polling the rescue channel for this group.
+   */
+  setRescueQueueId(groupId: string, queueId: string | null): void {
+    if (queueId === null) {
+      this.rescueQueueIds.delete(groupId);
+    } else {
+      this.rescueQueueIds.set(groupId, queueId);
+    }
+  }
+
+  /**
+   * Set the rescue callback queueId for a 1v1 conversation.
+   * Pass null to stop polling the callback for this group.
+   */
+  setRescueCallbackQueueId(groupId: string, queueId: string | null): void {
+    if (queueId === null) {
+      this.rescueCallbackQueueIds.delete(groupId);
+    } else {
+      this.rescueCallbackQueueIds.set(groupId, queueId);
+    }
+  }
+
+  start(onMessage: OnMessageCallback, onWelcome: OnWelcomeCallback, onRescue?: OnRescueCallback): void {
     this.onMessage = onMessage;
     this.onWelcome = onWelcome;
+    this.onRescue = onRescue ?? null;
     this.running = true;
     this.scheduleNextPoll(0);
   }
@@ -126,6 +159,10 @@ export class DmePoller {
     if (!this.onMessage || !this.onWelcome) return;
     this.running = true;
     this.scheduleNextPoll(0);
+  }
+
+  setOnRescue(onRescue: OnRescueCallback | null): void {
+    this.onRescue = onRescue;
   }
 
   isRunning(): boolean {
@@ -194,6 +231,18 @@ export class DmePoller {
     for (const queueId of this.pendingWelcomes.keys()) {
       allQueueIds.push(queueId);
       queueIdToContext.set(queueId, { type: 'welcome', queueId });
+    }
+
+    // 3. Collect rescue channel queueIds (1v1 rescue handshake).
+    for (const [groupId, queueId] of this.rescueQueueIds) {
+      allQueueIds.push(queueId);
+      queueIdToContext.set(queueId, { type: 'rescue', groupId });
+    }
+
+    // 4. Collect rescue callback queueIds.
+    for (const [groupId, queueId] of this.rescueCallbackQueueIds) {
+      allQueueIds.push(queueId);
+      queueIdToContext.set(queueId, { type: 'rescue_callback', groupId });
     }
 
     if (allQueueIds.length === 0) return;
@@ -279,10 +328,30 @@ export class DmePoller {
           //    下面的 message 分支就是正确顺序（先 decrypt 再 mark），保持一致。
           const welcomeBytes = base64urlToBytes(env.payload);
           if (this.onWelcome) {
-            await this.onWelcome({ queueId: ctx.queueId, welcomeBytes });
+            await this.onWelcome({ queueId: ctx.queueId, welcomeBytes, createdAt: env.createdAt });
           } else {
             // 没有回调就等于没人消费，不能标记，否则这条 welcome 会永久丢失
             console.warn('DmePoller: onWelcome 未注册，跳过 welcome', ctx.queueId);
+            this.inFlightQueueIds.delete(env.queueId);
+            continue;
+          }
+          await this.storage.markQueueIdProcessed(env.queueId);
+        } else if (ctx.type === 'rescue') {
+          if (this.onRescue) {
+            await this.onRescue(ctx.groupId, env.payload);
+          }
+          await this.storage.markQueueIdProcessed(env.queueId);
+        } else if (ctx.type === 'rescue_callback') {
+          // Rescue callback uses the same envelope format as a normal Welcome.
+          const welcomeBytes = base64urlToBytes(env.payload);
+          if (this.onWelcome) {
+            await this.onWelcome({
+              queueId: env.queueId,
+              welcomeBytes,
+              createdAt: env.createdAt,
+            });
+          } else {
+            console.warn('DmePoller: onWelcome 未注册，跳过 rescue callback', env.queueId);
             this.inFlightQueueIds.delete(env.queueId);
             continue;
           }

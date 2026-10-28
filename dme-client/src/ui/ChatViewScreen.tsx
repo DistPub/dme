@@ -104,6 +104,10 @@ export function ChatViewScreen(): React.JSX.Element {
     chatListVersion,
     blockList,
     setActiveConversation,
+    pendingRescueInvites,
+    acceptRescueInvite,
+    declineRescueInvite,
+    sendRescueHandshake,
   } = app;
 
   const [messages, setMessages] = useState<StoredMessage[]>([]);
@@ -119,6 +123,7 @@ export function ChatViewScreen(): React.JSX.Element {
   const [friendAvatarUrl, setFriendAvatarUrl] = useState<string | null>(null);
   const [friendAvatarError, setFriendAvatarError] = useState(false);
   const [friendHandle, setFriendHandle] = useState('');
+  const [rescuePromptVisible, setRescuePromptVisible] = useState(false);
   const [senderProfiles, setSenderProfiles] = useState<Record<string, SenderProfile>>({});
   const senderProfileCacheRef = useRef<Record<string, SenderProfile>>({});
   const [ownProfile, setOwnProfile] = useState<SenderProfile | null>(null);
@@ -177,6 +182,13 @@ export function ChatViewScreen(): React.JSX.Element {
     messagesRef.current = messages;
   }, [messages]);
 
+  const rescueInvite = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return pendingRescueInvites.find(
+      (i) => i.fromDid === conversationId && i.date === today,
+    );
+  }, [pendingRescueInvites, conversationId]);
+
   const loadRecentMessages = useCallback(async (): Promise<void> => {
     if (!storage) return;
     const { messages: msgs, hasMore: more } = await storage.getMessagesPaginated(conversationId, undefined, 50);
@@ -213,10 +225,34 @@ export function ChatViewScreen(): React.JSX.Element {
         console.error('markConversationAsRead failed:', err);
       });
 
+      // 1v1 rescue prompt: only for DMs, not groups.
+      setRescuePromptVisible(false);
+      if (!isGroup && storage) {
+        void (async () => {
+          try {
+            const today = new Date().toISOString().slice(0, 10);
+            const pendingCallback = await storage.getRescueCallback(conversationId);
+            if (pendingCallback && pendingCallback.date === today) return;
+            if (await storage.wasRescuePromptedToday(conversationId, today)) return;
+
+            const msgs = await storage.getMessages(conversationId);
+            const lastPeerMessage = msgs.find((m) => m.fromDid === conversationId);
+            if (lastPeerMessage) {
+              const ageMs = Date.now() - Date.parse(lastPeerMessage.createdAt);
+              if (ageMs < 7 * 24 * 60 * 60 * 1000) return;
+            }
+
+            setRescuePromptVisible(true);
+          } catch (err) {
+            console.error('[dme:rescue] rescue prompt check failed:', err);
+          }
+        })();
+      }
+
       return () => {
         setActiveConversation(null);
       };
-    }, [loadRecentMessages, markConversationAsRead, conversationId, setActiveConversation]),
+    }, [loadRecentMessages, markConversationAsRead, conversationId, setActiveConversation, isGroup, storage]),
   );
 
   useEffect(() => {
@@ -937,6 +973,59 @@ export function ChatViewScreen(): React.JSX.Element {
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        {!isGroup && rescuePromptVisible && !rescueInvite && (
+          <View style={styles.rescuePromptBar}>
+            <Text style={styles.rescuePromptText}>
+              {t('chatview.rescuePrompt')}
+            </Text>
+            <View style={styles.rescuePromptButtons}>
+              <Button
+                label={t('common.yes')}
+                onPress={() => {
+                  setRescuePromptVisible(false);
+                  void sendRescueHandshake(conversationId);
+                }}
+                variant="primary"
+                style={styles.rescuePromptBtn}
+              />
+              <Button
+                label={t('common.no')}
+                onPress={() => {
+                  setRescuePromptVisible(false);
+                  void storage?.setRescuePromptedToday(
+                    conversationId,
+                    new Date().toISOString().slice(0, 10),
+                  );
+                }}
+                variant="secondary"
+                style={styles.rescuePromptBtn}
+              />
+            </View>
+          </View>
+        )}
+
+        {!isGroup && rescueInvite && (
+          <View style={styles.rescueInviteCard}>
+            <Text style={styles.rescueInviteTitle} numberOfLines={1}>
+              {t('chatview.rescueInviteTitle', { handle: friendHandle || conversationId })}
+            </Text>
+            <View style={styles.rescueInviteButtons}>
+              <Button
+                label={t('common.accept')}
+                onPress={() => void acceptRescueInvite(conversationId)}
+                variant="primary"
+                style={styles.rescueInviteBtn}
+              />
+              <Button
+                label={t('common.decline')}
+                onPress={() => void declineRescueInvite(conversationId)}
+                variant="secondary"
+                style={styles.rescueInviteBtn}
+              />
+            </View>
+          </View>
+        )}
+
         <FlatList
           ref={listRef}
           style={styles.list}
@@ -1202,6 +1291,51 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.xs,
   },
   inviteBtn: {
+    flex: 1,
+    height: 36,
+  },
+  rescuePromptBar: {
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  rescuePromptText: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.caption,
+    textAlign: 'center',
+  },
+  rescuePromptButtons: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+  },
+  rescuePromptBtn: {
+    flex: 1,
+    height: 36,
+  },
+  rescueInviteCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing.md,
+    marginVertical: theme.spacing.sm,
+    marginHorizontal: theme.spacing.md,
+    alignSelf: 'center',
+    width: '90%',
+    maxWidth: 360,
+  },
+  rescueInviteTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.caption,
+    fontWeight: '600',
+  },
+  rescueInviteButtons: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+  },
+  rescueInviteBtn: {
     flex: 1,
     height: 36,
   },

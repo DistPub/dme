@@ -21,9 +21,9 @@ import type { KeyPackage, PrivateKeyPackage } from 'ts-mls';
 
 import { DmeSession } from '../atproto/session';
 import { DmePds } from '../atproto/pds';
-import { declareKeys, getRemoteEncryptionKey, resolvePdsUrl } from '../atproto/did';
+import { declareKeys, getRemoteEncryptionKey, getRemoteSigningKey, resolvePdsUrl } from '../atproto/did';
 import { resolveHandleCached } from '../atproto/profile-cache';
-import { acceptInvite, processWelcome } from '../handshake/handshake';
+import { acceptInvite, processWelcome, prepareInviteQr } from '../handshake/handshake';
 import { decodeAndDecryptQr } from '../handshake/qr-decode';
 import { encodeQrPayload } from '../handshake/qr-encode';
 import { DmePoller } from '../poll/poller';
@@ -47,7 +47,15 @@ import {
 } from '../crypto/keypackage';
 import type { KeyPackagePair } from '../crypto/keypackage';
 import type { BackupMeta } from '../protocol/types';
+import type { PendingRescueInvite } from '../protocol/rescue';
 import { deriveWelcomeQueueId } from '../crypto/mls-queue-id';
+import {
+  computeRescueSharedSecret,
+  createRescueNonce,
+  decryptRescueMessage,
+  deriveRescueQueueId,
+  encryptRescueMessage,
+} from '../crypto/rescue-handshake';
 import { encryptBackup, decryptBackup, computeSessionFingerprints, cloudHasUnknownSessions, type FullBackupData } from '../crypto/backup';
 import { getOrCreateDeviceId, getPlatformLabel, formatDeviceLabel } from '../utils/device-id';
 import { bytesToBase64url, base64urlToBytes, bytesToBase64, hexToBytes, bytesToHex, base64ToBytes } from '../crypto/utils';
@@ -314,6 +322,7 @@ interface AppState {
   pendingInvites: PendingInvite[];
   groupInfos: GroupInfo[];
   receivedGroupInvites: PendingInvite[];
+  pendingRescueInvites: PendingRescueInvite[];
   blockList: string[];
   soundEnabled: boolean;
   embedMismatch: { localDid: string | null; tokenDid: string } | null;
@@ -371,6 +380,9 @@ interface AppActions {
   setAppViewProxy: (proxy: string) => Promise<void>;
   setServerUrl: (url: string) => Promise<void>;
   setGatewayUrl: (url: string) => Promise<void>;
+  acceptRescueInvite: (groupId: string) => Promise<void>;
+  declineRescueInvite: (groupId: string) => Promise<void>;
+  sendRescueHandshake: (groupId: string) => Promise<void>;
   sendGroupInvites: (groupName: string, friendDids: readonly string[]) => Promise<string>;
   respondToGroupInvite: (inviteId: string, accepted: boolean) => Promise<void>;
   createGroupFromPendingInvites: (groupId: string) => Promise<void>;
@@ -425,6 +437,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [groupInfos, setGroupInfos] = useState<GroupInfo[]>([]);
   const [receivedGroupInvites, setReceivedGroupInvites] = useState<PendingInvite[]>([]);
+  const [pendingRescueInvites, setPendingRescueInvites] = useState<PendingRescueInvite[]>([]);
   const [blockList, setBlockList] = useState<string[]>([]);
   const [soundEnabled, setSoundEnabledState] = useState(true);
   const [embedMismatch, setEmbedMismatch] = useState<{ localDid: string | null; tokenDid: string } | null>(null);
@@ -436,6 +449,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
+  const handleRescueMessageRef = useRef<(groupId: string, payloadBase64url: string) => Promise<void>>(async () => {});
 
   const activeConversationRef = useRef<string | null>(null);
   const chatActiveRef = useRef<boolean>(false);
@@ -482,6 +496,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       async (welcome: IncomingWelcome) => {
         await processWelcomeRef.current(welcome);
+      },
+      async (groupId: string, payloadBase64url: string) => {
+        await handleRescueMessageRef.current(groupId, payloadBase64url);
       },
     );
 
@@ -535,6 +552,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setPendingInvites(sentInvites);
     setReceivedGroupInvites(recvInvites);
     setGroupInfos(storedGroupInfos.filter((g) => sessionGroupIds.includes(g.groupId)));
+
+    // Load pending rescue invites (only today's are shown).
+    const today = new Date().toISOString().slice(0, 10);
+    const rescueInvites: PendingRescueInvite[] = [];
+    for (const groupId of sessionGroupIds) {
+      const invite = await newStorage.getRescueInvite(groupId);
+      if (invite && invite.date === today) {
+        rescueInvites.push(invite);
+      }
+    }
+    setPendingRescueInvites(rescueInvites);
+
     setBlockList(await newStorage.getBlockList());
     setSoundEnabledState(await newStorage.getSoundEnabled());
 
@@ -739,6 +768,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         async (welcome: IncomingWelcome) => {
           await processWelcomeRef.current(welcome);
         },
+        async (groupId: string, payloadBase64url: string) => {
+          await handleRescueMessageRef.current(groupId, payloadBase64url);
+        },
       );
 
       // Restore MLS sessions
@@ -791,6 +823,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setPendingInvites(sentInvites);
       setReceivedGroupInvites(recvInvites);
       setGroupInfos(storedGroupInfos.filter((g) => sessionGroupIds.includes(g.groupId)));
+
+      // Load pending rescue invites (only today's are shown).
+      const today = new Date().toISOString().slice(0, 10);
+      const rescueInvites: PendingRescueInvite[] = [];
+      for (const groupId of sessionGroupIds) {
+        const invite = await correctStorage.getRescueInvite(groupId);
+        if (invite && invite.date === today) {
+          rescueInvites.push(invite);
+        }
+      }
+      setPendingRescueInvites(rescueInvites);
+
       setBlockList(await correctStorage.getBlockList());
       setSoundEnabledState(await correctStorage.getSoundEnabled());
       setLoginStep('idle');
@@ -844,6 +888,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setKeyPackagePool([]);
       setPendingInvites([]);
       setReceivedGroupInvites([]);
+      setPendingRescueInvites([]);
       setGroupInfos([]);
       setPollBatchSizeState(3);
       setKeyRotationIntervalMsState(7 * 24 * 60 * 60 * 1000);
@@ -1637,6 +1682,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     poller.addSession(result.groupId, result.mlsSession);
     await storage.setCommitSeq(claimSeq);
 
+    // 记录 welcome 日期，供救援 queueId 派生使用
+    const createdAt = new Date().toISOString();
+    await storage.setWelcomeDate(result.groupId, createdAt.slice(0, 10));
+
     // 缺口①：握手推进了会话状态，立即联动备份——保证兄弟端之后恢复
     // 备份时拿到的是新会话，而不是被倒灌回旧状态
     await triggerBackupAfterAdvance(`acceptInvite ${result.groupId}`);
@@ -1646,7 +1695,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       $type: 'dme.queue.envelope',
       queueId: result.welcomeQueueId,
       payload: result.welcomePayload,
-      createdAt: new Date().toISOString(),
+      createdAt,
       messageType: 'welcome',
     };
     await pds.createEnvelope(envelope);
@@ -1685,6 +1734,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
     poller.addSession(result.groupId, result.mlsSession);
 
+    // 记录 welcome 日期（救援握手成功后也走这里，更新日期以隔离旧救援消息）
+    await storage.setWelcomeDate(result.groupId, welcome.createdAt.slice(0, 10));
+
+    // 如果是救援 callback，清除 pending 标记
+    await storage.clearRescueCallback(result.groupId);
+
     // 缺口①：接会话推进了状态，立即联动备份（同 acceptInviteQr）
     await triggerBackupAfterAdvance(`processWelcome ${result.groupId}`);
 
@@ -1697,6 +1752,343 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, [storage, identityKeys, session, poller, triggerBackupAfterAdvance]);
 
   processWelcomeRef.current = processReceivedWelcome;
+
+  // -------------------------------------------------------------------------
+  // 1v1 rescue handshake
+  // -------------------------------------------------------------------------
+
+  /**
+   * Compute and inject rescue/callback queueIds for all 1v1 sessions.
+   * Called whenever groups, identity, or date may have changed.
+   */
+  const refreshRescueQueueIds = useCallback(async (): Promise<void> => {
+    if (!poller || !storage || !identityKeys || !session) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const groupIds = await storage.listGroups();
+
+    for (const groupId of groupIds) {
+      // Only 1v1 conversations have groupId === friendDid and no GroupInfo.
+      const groupInfo = await storage.getGroupInfo(groupId);
+      if (groupInfo) continue;
+
+      let welcomeDate = await storage.getWelcomeDate(groupId);
+      if (!welcomeDate) {
+        const messages = await storage.getMessages(groupId);
+        if (messages.length > 0) {
+          const earliest = messages.reduce((min, m) =>
+            m.createdAt < min.createdAt ? m : min,
+          );
+          welcomeDate = earliest.createdAt.slice(0, 10);
+        } else {
+          welcomeDate = today;
+        }
+        // Do not persist fallback; it will be written on first real welcome.
+      }
+
+      const pendingCallback = await storage.getRescueCallback(groupId);
+      if (pendingCallback && pendingCallback.date === today) {
+        poller.setRescueQueueId(groupId, null);
+        poller.setRescueCallbackQueueId(groupId, pendingCallback.callbackQueueId);
+        continue;
+      }
+
+      try {
+        const theirEncPub = await getRemoteEncryptionKey(groupId);
+        if (!theirEncPub) {
+          throw new Error('peer encryption key not found');
+        }
+        const sharedSecret = computeRescueSharedSecret(
+          identityKeys.encryption.privateKey,
+          theirEncPub,
+        );
+        // We poll the peer's rescue queueId (written by the peer).
+        const rescueQueueId = deriveRescueQueueId(
+          sharedSecret,
+          groupId, // peer DID == writerDid for the queueId we scan
+          welcomeDate,
+          today,
+        );
+        poller.setRescueQueueId(groupId, rescueQueueId);
+        poller.setRescueCallbackQueueId(groupId, null);
+      } catch (err) {
+        console.warn('[dme:rescue] failed to derive rescue queueId for', groupId, err);
+        poller.setRescueQueueId(groupId, null);
+        poller.setRescueCallbackQueueId(groupId, null);
+      }
+    }
+  }, [poller, storage, identityKeys, session]);
+
+  /**
+   * Handle a rescue message received from the peer.
+   */
+  const handleRescueMessage = useCallback(async (
+    groupId: string,
+    payloadBase64url: string,
+  ): Promise<void> => {
+    if (!storage || !identityKeys || !session) {
+      console.error('handleRescueMessage: not fully initialized');
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const welcomeDate = await storage.getWelcomeDate(groupId);
+    if (!welcomeDate) {
+      console.warn('[dme:rescue] no welcomeDate for', groupId, 'ignoring rescue message');
+      return;
+    }
+
+    let theirSigningPub: Uint8Array;
+    let theirEncPub: Uint8Array;
+    try {
+      const signingPub = await getRemoteSigningKey(groupId);
+      const encPub = await getRemoteEncryptionKey(groupId);
+      if (!signingPub || !encPub) {
+        throw new Error('peer keys not found');
+      }
+      theirSigningPub = signingPub;
+      theirEncPub = encPub;
+    } catch (err) {
+      console.warn('[dme:rescue] failed to resolve peer keys for', groupId, err);
+      return;
+    }
+
+    const sharedSecret = computeRescueSharedSecret(
+      identityKeys.encryption.privateKey,
+      theirEncPub,
+    );
+
+    let decrypted: { message: { fromDid: string; qrData: string; callbackQueueId: string } };
+    try {
+      decrypted = decryptRescueMessage(
+        payloadBase64url,
+        sharedSecret,
+        groupId, // peer is the writer
+        welcomeDate,
+        today,
+        theirSigningPub,
+      );
+    } catch (err) {
+      console.warn('[dme:rescue] failed to decrypt rescue message for', groupId, err);
+      return;
+    }
+
+    const { message } = decrypted;
+    if (message.fromDid !== groupId) {
+      console.warn('[dme:rescue] rescue fromDid mismatch', message.fromDid, '!=', groupId);
+      return;
+    }
+
+    const invite: import('../protocol/rescue').PendingRescueInvite = {
+      date: today,
+      fromDid: message.fromDid,
+      qrData: message.qrData,
+      callbackQueueId: message.callbackQueueId,
+    };
+
+    await storage.setRescueInvite(groupId, invite);
+    setPendingRescueInvites((prev) => {
+      const filtered = prev.filter((i) => i.fromDid !== groupId);
+      return [...filtered, invite];
+    });
+    setChatListVersion((v) => v + 1);
+  }, [storage, identityKeys, session]);
+
+  handleRescueMessageRef.current = handleRescueMessage;
+
+  /**
+   * User declines a rescue invite (only hides it for today).
+   */
+  const declineRescueInvite = useCallback(async (groupId: string): Promise<void> => {
+    if (!storage) return;
+    await storage.clearRescueInvite(groupId);
+    setPendingRescueInvites((prev) => prev.filter((i) => i.fromDid !== groupId));
+    setChatListVersion((v) => v + 1);
+  }, [storage]);
+
+  /**
+   * User accepts a rescue invite: perform acceptInvite and deliver Welcome.
+   */
+  const acceptRescueInvite = useCallback(async (groupId: string): Promise<void> => {
+    if (!storage || !identityKeys || !session || !pds || !poller) {
+      throw new Error('acceptRescueInvite: not fully initialized');
+    }
+
+    const invite = await storage.getRescueInvite(groupId);
+    if (!invite) {
+      throw new Error('acceptRescueInvite: no pending invite for ' + groupId);
+    }
+
+    // KP 池统一消费：先取 pair，失败则刷新后重试一次
+    let poolPair: KeyPackagePair;
+    try {
+      poolPair = (await takeFreshPoolPair('acceptRescueInvite', false)).pair;
+    } catch {
+      await refreshKeyPackagePool();
+      poolPair = (await takeFreshPoolPair('acceptRescueInvite', false)).pair;
+    }
+
+    // acceptInvite 推进状态，必须过宣言门禁
+    const { aliceDid } = await decodeAndDecryptQr(invite.qrData, identityKeys.encryption.privateKey);
+    const claimSeq = await acquireClaimForCommit(aliceDid, 0);
+    if (claimSeq === null) {
+      throw new Error('acceptRescueInvite: claim denied');
+    }
+
+    let result: Awaited<ReturnType<typeof acceptInvite>>;
+    try {
+      result = await acceptInvite(session.did, identityKeys, invite.qrData, poolPair);
+    } catch (err) {
+      await releaseClaim();
+      throw err;
+    }
+
+    await storage.putMlsSession(result.groupId, result.mlsSession.serialize());
+    poller.addSession(result.groupId, result.mlsSession);
+    await storage.setCommitSeq(claimSeq);
+
+    const createdAt = new Date().toISOString();
+    await storage.setWelcomeDate(result.groupId, createdAt.slice(0, 10));
+
+    await triggerBackupAfterAdvance(`acceptRescueInvite ${result.groupId}`);
+
+    const envelope: import('../protocol/types').DmeEnvelope = {
+      $type: 'dme.queue.envelope',
+      queueId: invite.callbackQueueId,
+      payload: result.welcomePayload,
+      createdAt,
+      messageType: 'welcome',
+    };
+    await pds.createEnvelope(envelope);
+
+    await storage.clearRescueInvite(result.groupId);
+    setPendingRescueInvites((prev) => prev.filter((i) => i.fromDid !== result.groupId));
+    setChatListVersion((v) => v + 1);
+  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, acquireClaimForCommit, triggerBackupAfterAdvance]);
+
+  /**
+   * Prompt the user to leave a rescue marker when entering a 1v1 chat.
+   */
+  const checkRescuePrompt = useCallback(async (groupId: string): Promise<boolean> => {
+    if (!storage || !identityKeys || !session || !pds) return false;
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const pendingCallback = await storage.getRescueCallback(groupId);
+    if (pendingCallback && pendingCallback.date === today) return false;
+
+    if (await storage.wasRescuePromptedToday(groupId, today)) return false;
+
+    // Conditions: no message from peer for 7 days AND no envelope received in last 3 polls.
+    const messages = await storage.getMessages(groupId);
+    const lastPeerMessage = messages
+      .filter((m) => m.fromDid === groupId)
+      .pop();
+    if (lastPeerMessage) {
+      const ageMs = Date.now() - Date.parse(lastPeerMessage.createdAt);
+      if (ageMs < 7 * 24 * 60 * 60 * 1000) return false;
+    }
+
+    // TODO: track last 3 poll results per 1v1 session; for now require 7-day silence.
+
+    return true;
+  }, [storage, identityKeys, session, pds]);
+
+  /**
+   * Send a rescue handshake request for a 1v1 conversation.
+   */
+  const sendRescueHandshake = useCallback(async (groupId: string): Promise<void> => {
+    if (!storage || !identityKeys || !session || !pds) {
+      throw new Error('sendRescueHandshake: not fully initialized');
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    let welcomeDate = await storage.getWelcomeDate(groupId);
+    if (!welcomeDate) {
+      const messages = await storage.getMessages(groupId);
+      if (messages.length > 0) {
+        const earliest = messages.reduce((min, m) =>
+          m.createdAt < min.createdAt ? m : min,
+        );
+        welcomeDate = earliest.createdAt.slice(0, 10);
+      } else {
+        welcomeDate = today;
+      }
+    }
+
+    // KP 池统一消费：先取 pair，失败则刷新后重试一次
+    let poolPair: KeyPackagePair;
+    try {
+      poolPair = (await takeFreshPoolPair('sendRescueHandshake', false)).pair;
+    } catch {
+      await refreshKeyPackagePool();
+      poolPair = (await takeFreshPoolPair('sendRescueHandshake', false)).pair;
+    }
+
+    const theirEncPub = await getRemoteEncryptionKey(groupId);
+    if (!theirEncPub) {
+      throw new Error('peer encryption key not found');
+    }
+    const qrResult = await prepareInviteQr(session.did, poolPair, theirEncPub);
+    const callbackQueueId = deriveWelcomeQueueId(qrResult.keyPackageInitKey);
+
+    const sharedSecret = computeRescueSharedSecret(
+      identityKeys.encryption.privateKey,
+      theirEncPub,
+    );
+
+    const rescueQueueId = deriveRescueQueueId(
+      sharedSecret,
+      session.did, // we write to our own rescue queueId
+      welcomeDate,
+      today,
+    );
+
+    const rescueMessage = {
+      type: 'need_rescue' as const,
+      fromDid: session.did,
+      qrData: qrResult.qrString,
+      callbackQueueId,
+      sentAt: new Date().toISOString(),
+      nonce: createRescueNonce(),
+    };
+
+    const ciphertext = encryptRescueMessage(
+      rescueMessage,
+      sharedSecret,
+      session.did,
+      welcomeDate,
+      today,
+      identityKeys.signing.privateKey,
+    );
+
+    const envelope: import('../protocol/types').DmeEnvelope = {
+      $type: 'dme.queue.envelope',
+      queueId: rescueQueueId,
+      payload: ciphertext,
+      createdAt: new Date().toISOString(),
+      messageType: 'application',
+    };
+    await pds.createEnvelope(envelope);
+
+    await storage.setRescueCallback(groupId, { date: today, callbackQueueId });
+    // Switch poller from rescue channel to callback channel.
+    if (poller) {
+      poller.setRescueQueueId(groupId, null);
+      poller.setRescueCallbackQueueId(groupId, callbackQueueId);
+    }
+  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool]);
+
+  // -------------------------------------------------------------------------
+  // Rescue queueId refresh side effects
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!poller || !storage || !identityKeys || !session) return;
+    void refreshRescueQueueIds();
+    const id = setInterval(() => void refreshRescueQueueIds(), 60_000);
+    return () => clearInterval(id);
+  }, [poller, storage, identityKeys, session, refreshRescueQueueIds]);
 
   const downloadFile = useCallback(async (
     conversationId: string,
@@ -4349,7 +4741,8 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
       pendingInvites,
       groupInfos,
       receivedGroupInvites,
-blockList,
+      pendingRescueInvites,
+      blockList,
       soundEnabled,
       embedMismatch,
       embedTokenApplied,
@@ -4385,6 +4778,9 @@ blockList,
       setAppViewProxy,
       setServerUrl,
       setGatewayUrl,
+      acceptRescueInvite,
+      declineRescueInvite,
+      sendRescueHandshake,
       sendGroupInvites,
       respondToGroupInvite,
       createGroupFromPendingInvites,
@@ -4413,13 +4809,13 @@ blockList,
       // backupRequired / keyRotationIntervalMs 必须在依赖里：轮换/备份只改
       // 这两个 state，漏掉会让 useMemo 持续吐旧值，横幅直到刷新才消失
       keyRotationIntervalMs, backupRequired, appViewProxy, serverUrl, gatewayUrl,
-      pendingInvites, groupInfos, receivedGroupInvites, blockList, soundEnabled,
+      pendingInvites, groupInfos, receivedGroupInvites, pendingRescueInvites, blockList, soundEnabled,
       embedMismatch, embedTokenApplied, loginStep, loginFormSnapshot,
       login, cancel2FA, logout, restoreSession, setupIdentity, declareKeysAction,
       backupIdentity, backupIdentityGuarded, peekBackupConflict, restoreIdentityFromBackup, hasIdentityBackup,
       sendMessage, sendFileMessage, retryUploadFileMessage, sendReaction, downloadFile, deleteFriend, markConversationAsRead, generateInviteQr, trackInvitePendingWelcome, deletePendingWelcome, acceptInviteQr,
       refreshKeyPackagePool, setPollBatchSize, setAppViewProxy, setServerUrl, setGatewayUrl,
-      sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
+      acceptRescueInvite, declineRescueInvite, sendRescueHandshake, sendGroupInvites, respondToGroupInvite, createGroupFromPendingInvites,
       cancelGroupInvite, addMemberToGroup, addAcceptedMembersToGroup, dissolveGroup, removeMemberFromGroup,
       leaveGroup, issueForkRuling, refreshBlockList, blockMember, unblockMember, setActiveConversation, setSoundEnabled,
       sendPostMessage, shareIntent, consumeShareIntent,

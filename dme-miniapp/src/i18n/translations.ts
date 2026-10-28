@@ -29,6 +29,8 @@ export const zh: Record<string, string> = {
   'common.groupPrefix': '[群聊] ',
   'common.creatorTag': '（群主）',
   'common.confirm': '确认',
+  'common.yes': '是',
+  'common.no': '否',
 
   // login
   'login.title': 'DME',
@@ -218,6 +220,8 @@ export const zh: Record<string, string> = {
   'chatview.recording': '正在录音',
   'chatview.tooShort': '说话时间太短',
   'chatview.recordFailed': '录音失败，请允许麦克风权限',
+  'chatview.rescuePrompt': '检测到与对方长时间断联，今日是否需要救援？',
+  'chatview.rescueInviteTitle': '{handle} 请求救援握手以恢复私聊',
 
   // qrdisplay
   'qrdisplay.shareCardTitle': 'DME 加密聊天邀请',
@@ -364,6 +368,8 @@ export const en: Record<string, string> = {
   'common.groupPrefix': '[Group] ',
   'common.creatorTag': ' (Creator)',
   'common.confirm': 'Confirm',
+  'common.yes': 'Yes',
+  'common.no': 'No',
 
   // login
   'login.title': 'DME',
@@ -553,6 +559,8 @@ export const en: Record<string, string> = {
   'chatview.recording': 'Recording…',
   'chatview.tooShort': 'Too short',
   'chatview.recordFailed': 'Recording failed — please allow microphone access',
+  'chatview.rescuePrompt': 'Long disconnect with this contact detected. Need rescue today?',
+  'chatview.rescueInviteTitle': '{handle} requested a rescue handshake to recover this DM',
 
   // qrdisplay
   'qrdisplay.shareCardTitle': 'DME encrypted chat invite',

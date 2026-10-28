@@ -209,6 +209,103 @@
     }
   }
 
+  // 救援标记提示条（仅私聊）
+  &__rescuePromptBar {
+    background: #ffffff;
+    padding: 20px 32px;
+    border-bottom: 2px solid #f0f0f2;
+    flex-shrink: 0;
+  }
+
+  &__rescuePromptText {
+    font-size: 26px;
+    color: #111111;
+    text-align: center;
+  }
+
+  &__rescuePromptButtons {
+    display: flex;
+    flex-direction: row;
+    margin-top: 16px;
+  }
+
+  &__rescuePromptBtn {
+    flex: 1;
+    height: 68px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: #f0f0f2;
+    margin-right: 16px;
+
+    &:last-child {
+      margin-right: 0;
+    }
+
+    &--primary {
+      background: #111111;
+    }
+  }
+
+  &__rescuePromptBtnText {
+    font-size: 26px;
+    color: #111111;
+
+    &--primary {
+      color: #ffffff;
+    }
+  }
+
+  // 对方请求救援握手卡片（仅私聊）
+  &__rescueInviteCard {
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 24px;
+    margin: 16px 32px;
+    width: 630px;
+  }
+
+  &__rescueInviteTitle {
+    font-size: 26px;
+    font-weight: 600;
+    color: #111111;
+  }
+
+  &__rescueInviteButtons {
+    display: flex;
+    flex-direction: row;
+    margin-top: 16px;
+  }
+
+  &__rescueInviteBtn {
+    flex: 1;
+    height: 68px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: #f0f0f2;
+    margin-right: 16px;
+
+    &:last-child {
+      margin-right: 0;
+    }
+
+    &--primary {
+      background: #111111;
+    }
+  }
+
+  &__rescueInviteBtnText {
+    font-size: 26px;
+    color: #111111;
+
+    &--primary {
+      color: #ffffff;
+    }
+  }
+
   // ---- 输入条 --------------------------------------------------------------
 
   &__composer {

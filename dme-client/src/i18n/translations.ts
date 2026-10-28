@@ -26,6 +26,8 @@ export const zh: Record<string, string> = {
   'common.groupPrefix': '[群聊] ',
   'common.creatorTag': '（群主）',
   'common.confirm': '确认',
+  'common.yes': '是',
+  'common.no': '否',
 
   // login
   'login.title': 'DME',
@@ -203,6 +205,8 @@ export const zh: Record<string, string> = {
   'chatview.dayYesterday': '昨天',
   'chatview.dayThisYear': '{M}月{D}日',
   'chatview.dayOtherYear': '{Y}年{M}月{D}日',
+  'chatview.rescuePrompt': '检测到与对方长时间断联，今日是否需要救援？',
+  'chatview.rescueInviteTitle': '{handle} 请求救援握手以恢复私聊',
 
   // qrdisplay
   'qrdisplay.title': '邀请加入隐世',
@@ -339,6 +343,8 @@ export const en: Record<string, string> = {
   'common.groupPrefix': '[Group] ',
   'common.creatorTag': ' (Creator)',
   'common.confirm': 'Confirm',
+  'common.yes': 'Yes',
+  'common.no': 'No',
 
   // login
   'login.title': 'DME',
@@ -517,6 +523,8 @@ export const en: Record<string, string> = {
   'chatview.dayYesterday': 'Yesterday',
   'chatview.dayThisYear': '{M}/{D}',
   'chatview.dayOtherYear': '{Y}/{M}/{D}',
+  'chatview.rescuePrompt': 'Long disconnect with this contact detected. Need rescue today?',
+  'chatview.rescueInviteTitle': '{handle} requests a rescue handshake to restore the chat',
 
   // qrdisplay
   'qrdisplay.title': 'Invite to DME',

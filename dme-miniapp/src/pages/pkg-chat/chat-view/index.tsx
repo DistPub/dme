@@ -131,6 +131,10 @@ export default function ChatViewPage(): React.JSX.Element {
     blockList,
     setActiveConversation,
     pollNow,
+    pendingRescueInvites,
+    acceptRescueInvite,
+    declineRescueInvite,
+    sendRescueHandshake,
   } = useApp();
 
   /** 消息列表（**新→旧**，与 getMessagesPaginated 返回顺序一致）。 */
@@ -168,11 +172,21 @@ export default function ChatViewPage(): React.JSX.Element {
   const [recordCancelUi, setRecordCancelUi] = useState(false);
   /** 录音已进行秒数（浮层倒计时，上限 60s 由 recorder 层强制停止）。 */
   const [recordSeconds, setRecordSeconds] = useState(0);
+  /** 救援标记提示条是否可见（仅私聊、符合条件且今天未提示过）。 */
+  const [rescuePromptVisible, setRescuePromptVisible] = useState(false);
 
   const messagesRef = useRef<StoredMessage[]>([]);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // 当天由对端发起、待本机确认的救援邀请（仅当天展示，避免点昨天残留卡片）。
+  const rescueInvite = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return pendingRescueInvites.find(
+      (i) => i.fromDid === conversationId && i.date === today,
+    );
+  }, [pendingRescueInvites, conversationId]);
 
   // ---- 按住说话手势状态（ref 同步读写，touch 事件里不依赖闭包 state） ----
 
@@ -255,10 +269,35 @@ export default function ChatViewPage(): React.JSX.Element {
       console.error('markConversationAsRead failed:', err);
     });
     void pollNow();
+
+    // 1v1 rescue prompt: only for DMs, not groups.
+    setRescuePromptVisible(false);
+    if (!isGroup && storage) {
+      void (async () => {
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          const pendingCallback = await storage.getRescueCallback(conversationId);
+          if (pendingCallback && pendingCallback.date === today) return;
+          if (await storage.wasRescuePromptedToday(conversationId, today)) return;
+
+          const msgs = await storage.getMessages(conversationId);
+          const lastPeerMessage = msgs.find((m) => m.fromDid === conversationId);
+          if (lastPeerMessage) {
+            const ageMs = Date.now() - Date.parse(lastPeerMessage.createdAt);
+            if (ageMs < 7 * 24 * 60 * 60 * 1000) return;
+          }
+
+          setRescuePromptVisible(true);
+        } catch (err) {
+          console.error('[dme:rescue] rescue prompt check failed:', err);
+        }
+      })();
+    }
+
     return () => {
       setActiveConversation(null);
     };
-  }, [loadRecentMessages, markConversationAsRead, conversationId, setActiveConversation, pollNow]);
+  }, [loadRecentMessages, markConversationAsRead, conversationId, setActiveConversation, pollNow, isGroup, storage]);
 
   useDidShow(() => {
     void pollNow();
@@ -1055,6 +1094,63 @@ export default function ChatViewPage(): React.JSX.Element {
           <Text className="chatview__menuIcon">⋮</Text>
         </View>
       </View>
+
+      {/* 救援标记提示条（仅私聊、符合条件、今天未提示过） */}
+      {!isGroup && rescuePromptVisible && !rescueInvite ? (
+        <View className="chatview__rescuePromptBar">
+          <Text className="chatview__rescuePromptText">{t('chatview.rescuePrompt')}</Text>
+          <View className="chatview__rescuePromptButtons">
+            <View
+              className="chatview__rescuePromptBtn chatview__rescuePromptBtn--primary"
+              onClick={() => {
+                setRescuePromptVisible(false);
+                void sendRescueHandshake(conversationId);
+              }}
+            >
+              <Text className="chatview__rescuePromptBtnText chatview__rescuePromptBtnText--primary">
+                {t('common.yes')}
+              </Text>
+            </View>
+            <View
+              className="chatview__rescuePromptBtn"
+              onClick={() => {
+                setRescuePromptVisible(false);
+                void storage?.setRescuePromptedToday(
+                  conversationId,
+                  new Date().toISOString().slice(0, 10),
+                );
+              }}
+            >
+              <Text className="chatview__rescuePromptBtnText">{t('common.no')}</Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      {/* 对方请求救援握手卡片（仅私聊、当天有效） */}
+      {!isGroup && rescueInvite ? (
+        <View className="chatview__rescueInviteCard">
+          <Text className="chatview__rescueInviteTitle" numberOfLines={1}>
+            {t('chatview.rescueInviteTitle', { handle: friendHandle || conversationId })}
+          </Text>
+          <View className="chatview__rescueInviteButtons">
+            <View
+              className="chatview__rescueInviteBtn chatview__rescueInviteBtn--primary"
+              onClick={() => void acceptRescueInvite(conversationId)}
+            >
+              <Text className="chatview__rescueInviteBtnText chatview__rescueInviteBtnText--primary">
+                {t('common.accept')}
+              </Text>
+            </View>
+            <View
+              className="chatview__rescueInviteBtn"
+              onClick={() => void declineRescueInvite(conversationId)}
+            >
+              <Text className="chatview__rescueInviteBtnText">{t('common.decline')}</Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
 
       {/* messages：旧 → 新，向上滚动加载更早消息 */}
       <ScrollView

@@ -39,10 +39,13 @@ export type IncomingWelcome = {
   queueId: string;
   /** Raw MLS Welcome wire bytes (decoded from envelope.payload base64url). */
   welcomeBytes: Uint8Array;
+  /** ISO-8601 timestamp from the envelope (used to record welcomeDate). */
+  createdAt: string;
 };
 
 export type OnMessageCallback = (msg: IncomingMessage) => Promise<void>;
 export type OnWelcomeCallback = (welcome: IncomingWelcome) => Promise<void>;
+export type OnRescueCallback = (groupId: string, payloadBase64url: string) => Promise<void>;
 
 type QueueContext =
   | {
@@ -52,17 +55,22 @@ type QueueContext =
       senderDid: string;
       generation: number;
     }
-  | { type: 'welcome'; queueId: string };
+  | { type: 'welcome'; queueId: string }
+  | { type: 'rescue'; groupId: string }
+  | { type: 'rescue_callback'; groupId: string };
 
 export class DmePoller {
   private readonly pds: DmePds;
   private readonly storage: DmeStorage;
   private readonly sessions: Map<string, MlsSession> = new Map();
   private readonly pendingWelcomes: Map<string, PendingWelcome> = new Map();
+  private readonly rescueQueueIds = new Map<string, string>();
+  private readonly rescueCallbackQueueIds = new Map<string, string>();
   private readonly inFlightQueueIds = new Set<string>();
   private polling = false;
   private onMessage: OnMessageCallback | null = null;
   private onWelcome: OnWelcomeCallback | null = null;
+  private onRescue: OnRescueCallback | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private batchSize = 3;
@@ -97,9 +105,34 @@ export class DmePoller {
     this.pendingWelcomes.delete(queueId);
   }
 
-  start(onMessage: OnMessageCallback, onWelcome: OnWelcomeCallback): void {
+  /**
+   * Set the rescue queueId for a 1v1 conversation.
+   * Pass null to stop polling the rescue channel for this group.
+   */
+  setRescueQueueId(groupId: string, queueId: string | null): void {
+    if (queueId === null) {
+      this.rescueQueueIds.delete(groupId);
+    } else {
+      this.rescueQueueIds.set(groupId, queueId);
+    }
+  }
+
+  /**
+   * Set the rescue callback queueId for a 1v1 conversation.
+   * Pass null to stop polling the callback for this group.
+   */
+  setRescueCallbackQueueId(groupId: string, queueId: string | null): void {
+    if (queueId === null) {
+      this.rescueCallbackQueueIds.delete(groupId);
+    } else {
+      this.rescueCallbackQueueIds.set(groupId, queueId);
+    }
+  }
+
+  start(onMessage: OnMessageCallback, onWelcome: OnWelcomeCallback, onRescue?: OnRescueCallback): void {
     this.onMessage = onMessage;
     this.onWelcome = onWelcome;
+    this.onRescue = onRescue ?? null;
     this.running = true;
     this.scheduleNextPoll(0);
   }
@@ -112,6 +145,7 @@ export class DmePoller {
     }
     this.onMessage = null;
     this.onWelcome = null;
+    this.onRescue = null;
   }
 
   async pollOnce(): Promise<void> {
@@ -177,6 +211,18 @@ export class DmePoller {
       queueIdToContext.set(queueId, { type: 'welcome', queueId });
     }
 
+    // 3. Collect rescue channel queueIds (1v1 rescue handshake).
+    for (const [groupId, queueId] of this.rescueQueueIds) {
+      allQueueIds.push(queueId);
+      queueIdToContext.set(queueId, { type: 'rescue', groupId });
+    }
+
+    // 4. Collect rescue callback queueIds.
+    for (const [groupId, queueId] of this.rescueCallbackQueueIds) {
+      allQueueIds.push(queueId);
+      queueIdToContext.set(queueId, { type: 'rescue_callback', groupId });
+    }
+
     if (allQueueIds.length === 0) return;
 
     console.log('DmePoller: polling', allQueueIds.length, 'queueIds');
@@ -228,7 +274,27 @@ export class DmePoller {
           await this.storage.markQueueIdProcessed(env.queueId);
           const welcomeBytes = base64urlToBytes(env.payload);
           if (this.onWelcome) {
-            await this.onWelcome({ queueId: ctx.queueId, welcomeBytes });
+            await this.onWelcome({
+              queueId: ctx.queueId,
+              welcomeBytes,
+              createdAt: env.createdAt,
+            });
+          }
+        } else if (ctx.type === 'rescue') {
+          await this.storage.markQueueIdProcessed(env.queueId);
+          if (this.onRescue) {
+            await this.onRescue(ctx.groupId, env.payload);
+          }
+        } else if (ctx.type === 'rescue_callback') {
+          // Rescue callback uses the same envelope format as a normal Welcome.
+          await this.storage.markQueueIdProcessed(env.queueId);
+          const welcomeBytes = base64urlToBytes(env.payload);
+          if (this.onWelcome) {
+            await this.onWelcome({
+              queueId: env.queueId,
+              welcomeBytes,
+              createdAt: env.createdAt,
+            });
           }
         } else {
           const session = this.sessions.get(ctx.groupId);

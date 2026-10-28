@@ -17,6 +17,10 @@ import { DmeAsyncStorage as AsyncStorage } from '../platform/storage';
 import type { IdentityKeys } from '../crypto/identity';
 import type { GroupInfo, PendingInvite } from '../protocol/group-message';
 import type { FileMeta } from '../protocol/types';
+import type {
+  PendingRescueCallback,
+  PendingRescueInvite,
+} from '../protocol/rescue';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../config';
 
 export type MessageKind = 'text' | 'group_invite' | 'group_system' | 'file';
@@ -154,6 +158,109 @@ export class DmeStorage {
 
   async deleteMlsSession(groupId: string): Promise<void> {
     await AsyncStorage.removeItem(this.prefix + `mlsSession:${groupId}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // 1v1 救援握手持久化
+  // -----------------------------------------------------------------------
+
+  /** 初次加好友 / 救援成功后的 welcome 日期（YYYY-MM-DD），用于派生救援 queueId。 */
+  async getWelcomeDate(groupId: string): Promise<string | null> {
+    return AsyncStorage.getItem(this.prefix + `welcomeDate:${groupId}`);
+  }
+
+  async setWelcomeDate(groupId: string, date: string): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + `welcomeDate:${groupId}`, date);
+  }
+
+  /** 发起救援后等待 Welcome 的回调记录。 */
+  async getRescueCallback(
+    groupId: string,
+  ): Promise<PendingRescueCallback | null> {
+    const raw = await AsyncStorage.getItem(this.prefix + `rescueCallback:${groupId}`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<PendingRescueCallback>;
+      if (
+        typeof parsed.date === 'string' &&
+        typeof parsed.callbackQueueId === 'string'
+      ) {
+        return {
+          date: parsed.date,
+          callbackQueueId: parsed.callbackQueueId,
+        };
+      }
+    } catch {
+      // malformed, fall through to clear
+    }
+    await AsyncStorage.removeItem(this.prefix + `rescueCallback:${groupId}`);
+    return null;
+  }
+
+  async setRescueCallback(
+    groupId: string,
+    callback: PendingRescueCallback,
+  ): Promise<void> {
+    await AsyncStorage.setItem(
+      this.prefix + `rescueCallback:${groupId}`,
+      JSON.stringify(callback),
+    );
+  }
+
+  async clearRescueCallback(groupId: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + `rescueCallback:${groupId}`);
+  }
+
+  /** 施救方收到的救援邀请，仅当天展示。 */
+  async getRescueInvite(
+    groupId: string,
+  ): Promise<PendingRescueInvite | null> {
+    const raw = await AsyncStorage.getItem(this.prefix + `rescueInvite:${groupId}`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<PendingRescueInvite>;
+      if (
+        typeof parsed.date === 'string' &&
+        typeof parsed.fromDid === 'string' &&
+        typeof parsed.qrData === 'string' &&
+        typeof parsed.callbackQueueId === 'string'
+      ) {
+        return {
+          date: parsed.date,
+          fromDid: parsed.fromDid,
+          qrData: parsed.qrData,
+          callbackQueueId: parsed.callbackQueueId,
+        };
+      }
+    } catch {
+      // malformed, fall through to clear
+    }
+    await AsyncStorage.removeItem(this.prefix + `rescueInvite:${groupId}`);
+    return null;
+  }
+
+  async setRescueInvite(
+    groupId: string,
+    invite: PendingRescueInvite,
+  ): Promise<void> {
+    await AsyncStorage.setItem(
+      this.prefix + `rescueInvite:${groupId}`,
+      JSON.stringify(invite),
+    );
+  }
+
+  async clearRescueInvite(groupId: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + `rescueInvite:${groupId}`);
+  }
+
+  /** 今天是否已经对该私聊拒绝过救援弹窗。 */
+  async wasRescuePromptedToday(groupId: string, date: string): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(this.prefix + `rescuePrompted:${groupId}`);
+    return raw === date;
+  }
+
+  async setRescuePromptedToday(groupId: string, date: string): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + `rescuePrompted:${groupId}`, date);
   }
 
   // -----------------------------------------------------------------------

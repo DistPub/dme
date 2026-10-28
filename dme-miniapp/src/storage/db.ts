@@ -256,6 +256,19 @@ export class DmeStorage {
     await AsyncStorage.removeItem(this.prefix + `rescueInvite:${groupId}`);
   }
 
+  /**
+   * 是否存在某个 1v1 会话的待处理救援邀请（任意日期）。
+   *
+   * 用途：救援信封处理的**自愈判据**。救援消息成功消费后必然写入
+   * rescueInvite 记录；所以「记录不存在」⇒ 这条救援消息从未被成功消费过
+   * ⇒ LRU 里的「已处理」标记是脏数据，必须撤销并重试，否则救援消息被
+   * LRU 永久跳过、用户永远看不到救援卡片。
+   */
+  async hasAnyRescueInvite(groupId: string): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(this.prefix + `rescueInvite:${groupId}`);
+    return raw !== null && raw !== undefined;
+  }
+
   /** 今天是否已经对该私聊拒绝过救援弹窗。 */
   async wasRescuePromptedToday(groupId: string, date: string): Promise<boolean> {
     const raw = await AsyncStorage.getItem(this.prefix + `rescuePrompted:${groupId}`);

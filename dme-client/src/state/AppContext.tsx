@@ -449,7 +449,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
-  const handleRescueMessageRef = useRef<(groupId: string, payloadBase64url: string) => Promise<void>>(async () => {});
+  const handleRescueMessageRef = useRef<(groupId: string, payloadBase64url: string) => Promise<boolean>>(async () => false);
 
   const activeConversationRef = useRef<string | null>(null);
   const chatActiveRef = useRef<boolean>(false);
@@ -498,7 +498,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await processWelcomeRef.current(welcome);
       },
       async (groupId: string, payloadBase64url: string) => {
-        await handleRescueMessageRef.current(groupId, payloadBase64url);
+        return await handleRescueMessageRef.current(groupId, payloadBase64url);
       },
     );
 
@@ -769,7 +769,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           await processWelcomeRef.current(welcome);
         },
         async (groupId: string, payloadBase64url: string) => {
-          await handleRescueMessageRef.current(groupId, payloadBase64url);
+          return await handleRescueMessageRef.current(groupId, payloadBase64url);
         },
       );
 
@@ -1783,6 +1783,32 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * Compute and inject rescue/callback queueIds for all 1v1 sessions.
    * Called whenever groups, identity, or date may have changed.
    */
+  /**
+   * 解析 1v1 会话的 welcomeDate（救援通道派生的关键输入）。
+   *
+   * 三处必须用**完全相同**的规则，否则双方派生的 rescue queueId 不一致 →
+   * 一方写、另一方扫不到（表现为「对方收到救援标记，但本机没有卡片」）：
+   *   - refreshRescueQueueIds：扫对方通道
+   *   - sendRescueHandshake：写自己通道
+   *   - handleRescueMessage：解密对方消息
+   *
+   * 优先取持久化的 welcomeDate（握手成功时写入）；老用户（该特性上线前
+   * 握手）没有 → 退回「第一条历史消息的日期」；再没有 → 当天。
+   */
+  const resolveWelcomeDate = useCallback(async (groupId: string): Promise<string> => {
+    const today = new Date().toISOString().slice(0, 10);
+    const stored = await storage!.getWelcomeDate(groupId);
+    if (stored) return stored;
+    const messages = await storage!.getMessages(groupId);
+    if (messages.length > 0) {
+      const earliest = messages.reduce((min, m) =>
+        m.createdAt < min.createdAt ? m : min,
+      );
+      return earliest.createdAt.slice(0, 10);
+    }
+    return today;
+  }, [storage]);
+
   const refreshRescueQueueIds = useCallback(async (): Promise<void> => {
     if (!poller || !storage || !identityKeys || !session) return;
 
@@ -1794,19 +1820,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const groupInfo = await storage.getGroupInfo(groupId);
       if (groupInfo) continue;
 
-      let welcomeDate = await storage.getWelcomeDate(groupId);
-      if (!welcomeDate) {
-        const messages = await storage.getMessages(groupId);
-        if (messages.length > 0) {
-          const earliest = messages.reduce((min, m) =>
-            m.createdAt < min.createdAt ? m : min,
-          );
-          welcomeDate = earliest.createdAt.slice(0, 10);
-        } else {
-          welcomeDate = today;
-        }
-        // Do not persist fallback; it will be written on first real welcome.
-      }
+      const welcomeDate = await resolveWelcomeDate(groupId);
 
       const pendingCallback = await storage.getRescueCallback(groupId);
       if (pendingCallback && pendingCallback.date === today) {
@@ -1839,26 +1853,29 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         poller.setRescueCallbackQueueId(groupId, null);
       }
     }
-  }, [poller, storage, identityKeys, session]);
+  }, [poller, storage, identityKeys, session, resolveWelcomeDate]);
 
   /**
    * Handle a rescue message received from the peer.
+   *
+   * @returns true = 消息已被成功消费（poller 可标记为已处理）；
+   *          false = 消费失败（poller 必须**不要**标记，否则该 queueId 会被
+   *          LRU 永久跳过、救援消息再也取不到）。
    */
   const handleRescueMessage = useCallback(async (
     groupId: string,
     payloadBase64url: string,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (!storage || !identityKeys || !session) {
       console.error('handleRescueMessage: not fully initialized');
-      return;
+      return false;
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    const welcomeDate = await storage.getWelcomeDate(groupId);
-    if (!welcomeDate) {
-      console.warn('[dme:rescue] no welcomeDate for', groupId, 'ignoring rescue message');
-      return;
-    }
+    // ⚠️ 必须与发送方用**完全相同**的 welcomeDate 规则，否则派生出的
+    //    message key 不同 → 解密失败。缺失时走统一 fallback（见
+    //    resolveWelcomeDate），不能直接丢弃消息。
+    const welcomeDate = await resolveWelcomeDate(groupId);
 
     let theirSigningPub: Uint8Array;
     let theirEncPub: Uint8Array;
@@ -1872,7 +1889,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       theirEncPub = encPub;
     } catch (err) {
       console.warn('[dme:rescue] failed to resolve peer keys for', groupId, err);
-      return;
+      return false;
     }
 
     const sharedSecret = computeRescueSharedSecret(
@@ -1892,13 +1909,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       );
     } catch (err) {
       console.warn('[dme:rescue] failed to decrypt rescue message for', groupId, err);
-      return;
+      return false;
     }
 
     const { message } = decrypted;
     if (message.fromDid !== groupId) {
       console.warn('[dme:rescue] rescue fromDid mismatch', message.fromDid, '!=', groupId);
-      return;
+      return false;
     }
 
     const invite: import('../protocol/rescue').PendingRescueInvite = {
@@ -1914,7 +1931,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       return [...filtered, invite];
     });
     setChatListVersion((v) => v + 1);
-  }, [storage, identityKeys, session]);
+    return true;
+  }, [storage, identityKeys, session, resolveWelcomeDate]);
 
   handleRescueMessageRef.current = handleRescueMessage;
 
@@ -2030,18 +2048,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    let welcomeDate = await storage.getWelcomeDate(groupId);
-    if (!welcomeDate) {
-      const messages = await storage.getMessages(groupId);
-      if (messages.length > 0) {
-        const earliest = messages.reduce((min, m) =>
-          m.createdAt < min.createdAt ? m : min,
-        );
-        welcomeDate = earliest.createdAt.slice(0, 10);
-      } else {
-        welcomeDate = today;
-      }
-    }
+    // ⚠️ 与接收方必须用**完全相同**的 welcomeDate 规则（见 resolveWelcomeDate）
+    const welcomeDate = await resolveWelcomeDate(groupId);
 
     // KP 池统一消费：先取 pair，失败则刷新后重试一次
     let poolPair: KeyPackagePair;
@@ -2104,7 +2112,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       poller.setRescueQueueId(groupId, null);
       poller.setRescueCallbackQueueId(groupId, callbackQueueId);
     }
-  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool]);
+  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, resolveWelcomeDate]);
 
   // -------------------------------------------------------------------------
   // Rescue queueId refresh side effects

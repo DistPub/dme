@@ -45,7 +45,16 @@ export type IncomingWelcome = {
 
 export type OnMessageCallback = (msg: IncomingMessage) => Promise<void>;
 export type OnWelcomeCallback = (welcome: IncomingWelcome) => Promise<void>;
-export type OnRescueCallback = (groupId: string, payloadBase64url: string) => Promise<void>;
+/**
+ * Rescue message callback.
+ *
+ * @returns true = 消息已被成功消费（poller 可标记为已处理）；
+ *          false = 消费失败（poller **不会**标记，让下一轮重试）。
+ */
+export type OnRescueCallback = (
+  groupId: string,
+  payloadBase64url: string,
+) => Promise<boolean>;
 
 type QueueContext =
   | {
@@ -263,7 +272,28 @@ export class DmePoller {
         console.log('DmePoller: skipping in-flight queueId', env.queueId);
         continue;
       }
-      if (await this.storage.isQueueIdProcessed(env.queueId)) {
+      let alreadyProcessed = await this.storage.isQueueIdProcessed(env.queueId);
+
+      // ⚠️ 自愈（2026-10-28 真机修复）：
+      //    **救援邀请不存在 ⇒ 这条救援消息从未被成功消费过**。
+      //    因为成功消费的路径（handleRescueMessage）必然写入 rescueInvite
+      //    记录。所以只要救援通道上没有对应的 invite，就说明上一次尝试
+      //    失败了（多半是早期「先 mark 后处理」的顺序 bug 导致的），此时
+      //    LRU 里的标记是**脏数据**，必须撤销并重试，否则用户永远看不到
+      //    救援卡片，控制台一直刷 `skipping already-processed queueId`。
+      if (ctx.type === 'rescue' && alreadyProcessed) {
+        const hasInvite = await this.storage.hasAnyRescueInvite(ctx.groupId);
+        if (!hasInvite) {
+          console.warn(
+            '[dme:rescue] 检测到上次处理失败留下的脏标记，撤销并重试救援消息',
+            env.queueId,
+          );
+          await this.storage.unmarkQueueIdProcessed(env.queueId);
+          alreadyProcessed = false;
+        }
+      }
+
+      if (alreadyProcessed) {
         console.log('DmePoller: skipping already-processed queueId', env.queueId);
         continue;
       }
@@ -281,21 +311,46 @@ export class DmePoller {
             });
           }
         } else if (ctx.type === 'rescue') {
-          await this.storage.markQueueIdProcessed(env.queueId);
-          if (this.onRescue) {
-            await this.onRescue(ctx.groupId, env.payload);
+          // ⚠️ 顺序至关重要：**必须先处理成功，再标记已处理**。
+          //    早期实现先 markQueueIdProcessed 再调 onRescue，一旦
+          //    handleRescueMessage 提前 return（welcomeDate 缺失 / peer key
+          //    解析失败 / 解密失败 / fromDid 不匹配），这个 queueId 就被永久
+          //    标记为已处理，之后**永远不会再取到**，救援消息直接丢失
+          //    （2026-10-28 真机：对方收到救援标记但本机没有救援卡片，
+          //    控制台一直刷 `skipping already-processed queueId`）。
+          //    下面的 message 分支就是正确顺序（先 decrypt 再 mark），保持一致。
+          if (!this.onRescue) {
+            // 没有回调就等于没人消费，不能标记，否则这条救援消息会永久丢失
+            console.warn('DmePoller: onRescue 未注册，跳过救援消息', env.queueId);
+            this.inFlightQueueIds.delete(env.queueId);
+            continue;
+          }
+          const consumed = await this.onRescue(ctx.groupId, env.payload);
+          if (consumed) {
+            await this.storage.markQueueIdProcessed(env.queueId);
+          } else {
+            // 处理失败：**不要**标记，否则该 queueId 会被 LRU 永久跳过、
+            // 救援消息再也取不到。下一轮轮询会重新拉取并重试。
+            console.warn(
+              '[dme:rescue] 救援消息处理失败，本轮不标记，下轮重试',
+              env.queueId,
+            );
           }
         } else if (ctx.type === 'rescue_callback') {
           // Rescue callback uses the same envelope format as a normal Welcome.
-          await this.storage.markQueueIdProcessed(env.queueId);
+          // ⚠️ 同样必须「先处理成功、再标记」——见上方 rescue 分支的注释。
           const welcomeBytes = base64urlToBytes(env.payload);
-          if (this.onWelcome) {
-            await this.onWelcome({
-              queueId: env.queueId,
-              welcomeBytes,
-              createdAt: env.createdAt,
-            });
+          if (!this.onWelcome) {
+            console.warn('DmePoller: onWelcome 未注册，跳过 rescue callback', env.queueId);
+            this.inFlightQueueIds.delete(env.queueId);
+            continue;
           }
+          await this.onWelcome({
+            queueId: env.queueId,
+            welcomeBytes,
+            createdAt: env.createdAt,
+          });
+          await this.storage.markQueueIdProcessed(env.queueId);
         } else {
           const session = this.sessions.get(ctx.groupId);
           if (!session) {

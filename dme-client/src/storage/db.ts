@@ -257,6 +257,19 @@ export class DmeStorage {
     await storage.removeItem(this.prefix + `rescueInvite:${groupId}`);
   }
 
+  /**
+   * 是否存在某个 1v1 会话的待处理救援邀请（任意日期）。
+   *
+   * 用途：救援信封处理的**自愈判据**。救援消息成功消费后必然写入
+   * rescueInvite 记录；所以「记录不存在」⇒ 这条救援消息从未被成功消费过
+   * ⇒ LRU 里的「已处理」标记是脏数据，必须撤销并重试，否则救援消息被
+   * LRU 永久跳过、用户永远看不到救援卡片。
+   */
+  async hasAnyRescueInvite(groupId: string): Promise<boolean> {
+    const raw = await storage.getItem(this.prefix + `rescueInvite:${groupId}`);
+    return raw !== null && raw !== undefined;
+  }
+
   /** 今天是否已经对该私聊拒绝过救援弹窗。 */
   async wasRescuePromptedToday(groupId: string, date: string): Promise<boolean> {
     const raw = await storage.getItem(this.prefix + `rescuePrompted:${groupId}`);
@@ -447,6 +460,26 @@ export class DmeStorage {
       }
     }
 
+    await storage.setItem(
+      this.prefix + 'queueIdLru',
+      JSON.stringify([...entries]),
+    );
+  }
+
+  /**
+   * 撤销「已处理」标记。
+   *
+   * 用途：救援信封的处理**可能失败**（welcomeDate 缺失、peer key 解析失败、
+   * 解密失败、fromDid 不匹配）。一旦失败就绝不能留在已处理集合里，否则该
+   * queueId 会被 LRU 永久跳过、救援消息再也取不到（表现为「对方收到救援
+   * 标记但本机没有救援卡片，控制台刷 skipping already-processed」）。
+   * poller 在捕获异常后调用本方法回滚，让下一轮重试。
+   */
+  async unmarkQueueIdProcessed(queueId: string): Promise<void> {
+    const raw = await storage.getItem(this.prefix + 'queueIdLru');
+    if (!raw) return;
+    const entries = new Map<string, number>(JSON.parse(raw) as [string, number][]);
+    if (!entries.delete(queueId)) return;
     await storage.setItem(
       this.prefix + 'queueIdLru',
       JSON.stringify([...entries]),

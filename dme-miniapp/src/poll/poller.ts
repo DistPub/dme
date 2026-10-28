@@ -45,7 +45,16 @@ export type IncomingWelcome = {
 
 export type OnMessageCallback = (msg: IncomingMessage) => Promise<void>;
 export type OnWelcomeCallback = (welcome: IncomingWelcome) => Promise<void>;
-export type OnRescueCallback = (groupId: string, payloadBase64url: string) => Promise<void>;
+/**
+ * Rescue message callback.
+ *
+ * @returns true = 消息已被成功消费（poller 可标记为已处理）；
+ *          false = 消费失败（poller **不会**标记，让下一轮重试）。
+ */
+export type OnRescueCallback = (
+  groupId: string,
+  payloadBase64url: string,
+) => Promise<boolean>;
 
 type QueueContext =
   | {
@@ -288,6 +297,25 @@ export class DmePoller {
 
       let alreadyProcessed = await this.storage.isQueueIdProcessed(env.queueId);
 
+      // ⚠️ 救援通道自愈（2026-10-28 真机修复）：
+      //    **救援邀请不存在 ⇒ 这条救援消息从未被成功消费过**。
+      //    因为成功消费的路径（handleRescueMessage）必然写入 rescueInvite
+      //    记录。所以只要救援通道上没有对应的 invite，就说明上一次尝试
+      //    失败了（多半是早期「先 mark 后处理」的顺序 bug 导致的），此时
+      //    LRU 里的标记是**脏数据**，必须撤销并重试，否则用户永远看不到
+      //    救援卡片，控制台一直刷 `skipping already-processed queueId`。
+      if (ctx.type === 'rescue' && alreadyProcessed) {
+        const hasInvite = await this.storage.hasAnyRescueInvite(ctx.groupId);
+        if (!hasInvite) {
+          console.warn(
+            '[dme:rescue] 检测到上次处理失败留下的脏标记，撤销并重试救援消息',
+            env.queueId,
+          );
+          await this.storage.unmarkQueueIdProcessed(env.queueId);
+          alreadyProcessed = false;
+        }
+      }
+
       // ⚠️ 自愈 + 关键不变量（2026-09-28 真机修复）：
       //    **pendingWelcome 还在 ⇒ 这条 welcome 从未被成功消费过**。
       //    因为成功配对的路径（processReceivedWelcome）第一步就是
@@ -337,10 +365,29 @@ export class DmePoller {
           }
           await this.storage.markQueueIdProcessed(env.queueId);
         } else if (ctx.type === 'rescue') {
-          if (this.onRescue) {
-            await this.onRescue(ctx.groupId, env.payload);
+          // ⚠️ 顺序至关重要：**必须先处理成功，再标记已处理**。
+          //    早期实现先 markQueueIdProcessed 再调 onRescue，一旦
+          //    handleRescueMessage 提前 return（welcomeDate 缺失 / peer key
+          //    解析失败 / 解密失败 / fromDid 不匹配），这个 queueId 就被永久
+          //    标记为已处理，之后**永远不会再取到**，救援消息直接丢失
+          //    （2026-10-28 真机：对方收到救援标记但本机没有救援卡片，
+          //    控制台一直刷 `skipping already-processed queueId`）。
+          if (!this.onRescue) {
+            console.warn('DmePoller: onRescue 未注册，跳过救援消息', env.queueId);
+            this.inFlightQueueIds.delete(env.queueId);
+            continue;
           }
-          await this.storage.markQueueIdProcessed(env.queueId);
+          const consumed = await this.onRescue(ctx.groupId, env.payload);
+          if (consumed) {
+            await this.storage.markQueueIdProcessed(env.queueId);
+          } else {
+            // 处理失败：**不要**标记，否则该 queueId 会被 LRU 永久跳过、
+            // 救援消息再也取不到。下一轮轮询会重新拉取并重试。
+            console.warn(
+              '[dme:rescue] 救援消息处理失败，本轮不标记，下轮重试',
+              env.queueId,
+            );
+          }
         } else if (ctx.type === 'rescue_callback') {
           // Rescue callback uses the same envelope format as a normal Welcome.
           const welcomeBytes = base64urlToBytes(env.payload);

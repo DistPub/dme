@@ -79,6 +79,9 @@ const QUEUEID_LRU_MAX = 1000;
 
 const KEY_PACKAGE_POOL_KEY = 'keyPackagePool';
 
+/** 私聊打招呼默认文案（设置页可改，必填——空白一律回退此值）。 */
+export const DEFAULT_GREETING_TEXT = '你好，很高兴认识您。';
+
 /**
  * 存储封装，所有 key 以 `dme:<did>:` 为前缀。
  */
@@ -707,6 +710,26 @@ export class DmeStorage {
 
   async setSoundEnabled(enabled: boolean): Promise<void> {
     await storage.setItem(this.prefix + this.SOUND_ENABLED_KEY, String(enabled));
+  }
+
+  // -----------------------------------------------------------------------
+  // 私聊打招呼文案（握手成功建立 1v1 会话后自动发送）
+  // -----------------------------------------------------------------------
+
+  private readonly GREETING_TEXT_KEY = 'greetingText';
+
+  async getGreetingText(): Promise<string> {
+    const raw = await storage.getItem(this.prefix + this.GREETING_TEXT_KEY);
+    // 必填：无值/空白一律回退默认文案
+    return raw && raw.trim() ? raw : DEFAULT_GREETING_TEXT;
+  }
+
+  async setGreetingText(value: string): Promise<void> {
+    const trimmed = value.trim();
+    await storage.setItem(
+      this.prefix + this.GREETING_TEXT_KEY,
+      trimmed || DEFAULT_GREETING_TEXT,
+    );
   }
 
   // -----------------------------------------------------------------------

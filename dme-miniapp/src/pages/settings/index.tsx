@@ -26,7 +26,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { View, Text, Input, Switch, Button, ScrollView } from '@tarojs/components';
+import { View, Text, Input, Switch, Button, ScrollView, Textarea } from '@tarojs/components';
 import Taro from '@tarojs/taro';
 
 import { useApp } from '../../state/AppContext';
@@ -35,6 +35,7 @@ import type { Language } from '../../i18n/translations';
 import { LANGUAGES } from '../../i18n/translations';
 import { useWebTitle } from '../../utils/web-title';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../../config';
+import { DEFAULT_GREETING_TEXT } from '../../storage/db';
 import { BUILD_COMMIT_SHA, BUILD_DIRTY, BUILD_TIME } from '../../generated/build-info';
 import './index.scss';
 
@@ -57,6 +58,7 @@ export default function SettingsPage(): React.JSX.Element {
     soundEnabled,
     keyRotationIntervalMs,
     backupRequired,
+    storage,
     setPollBatchSize,
     setKeyRotationIntervalMs,
     setAppViewProxy,
@@ -77,6 +79,10 @@ export default function SettingsPage(): React.JSX.Element {
   const [proxyDraft, setProxyDraft] = useState(appViewProxy);
   const [serverDraft, setServerDraft] = useState(serverUrl);
   const [gatewayDraft, setGatewayDraft] = useState(gatewayUrl);
+
+  // 私聊打招呼文案（握手成功建立 1v1 会话后自动发送；必填，空值回退默认）
+  const [greetingDraft, setGreetingDraft] = useState(DEFAULT_GREETING_TEXT);
+  const [greetingSaved, setGreetingSaved] = useState(false);
 
   // 「已保存」回显（对应 web 的 saved / proxySaved / serverSaved / gatewaySaved）
   const [saved, setSaved] = useState(false);
@@ -108,6 +114,15 @@ export default function SettingsPage(): React.JSX.Element {
     setServerDraft(serverUrl);
     setGatewayDraft(gatewayUrl);
   }, [appViewProxy, serverUrl, gatewayUrl]);
+
+  // 打招呼文案草稿初始化（storage 异步就绪后读取）
+  useEffect(() => {
+    let cancelled = false;
+    void storage?.getGreetingText().then((text) => {
+      if (!cancelled) setGreetingDraft(text);
+    });
+    return () => { cancelled = true; };
+  }, [storage]);
 
   // ---- 保存 / 重置（与 web 的 handleSaveXxx / handleResetXxx 一一对应） ----
   const flash = (setter: (v: boolean) => void): void => {
@@ -154,6 +169,22 @@ export default function SettingsPage(): React.JSX.Element {
     await setGatewayUrl(DEFAULT_DME_GATEWAY_URL);
     flash(setGatewaySaved);
   }, [setGatewayUrl]);
+
+  const saveGreeting = useCallback(async (): Promise<void> => {
+    if (!storage) return;
+    // 必填：空白一律回退默认文案
+    const text = greetingDraft.trim() || DEFAULT_GREETING_TEXT;
+    setGreetingDraft(text);
+    await storage.setGreetingText(text);
+    flash(setGreetingSaved);
+  }, [storage, greetingDraft]);
+
+  const resetGreeting = useCallback(async (): Promise<void> => {
+    if (!storage) return;
+    setGreetingDraft(DEFAULT_GREETING_TEXT);
+    await storage.setGreetingText(DEFAULT_GREETING_TEXT);
+    flash(setGreetingSaved);
+  }, [storage]);
 
   // ---- 备份（对应 web handleBackup） -------------------------------------
   const handleBackup = useCallback(async (): Promise<void> => {
@@ -392,6 +423,28 @@ export default function SettingsPage(): React.JSX.Element {
           <Button
             className="settings__halfBtn settings__halfBtn--ghost"
             onClick={() => void resetGateway()}
+          >
+            {t('common.reset')}
+          </Button>
+        </View>
+
+        {/* 5.5 私聊打招呼文案：握手成功建立 1v1 会话后自动发送 */}
+        <Text className="settings__title">{t('settings.greetingText')}</Text>
+        <Text className="settings__hint">{t('settings.greetingTextHint')}</Text>
+        <Textarea
+          className="settings__input settings__textarea"
+          value={greetingDraft}
+          maxlength={200}
+          placeholder={DEFAULT_GREETING_TEXT}
+          onInput={(e) => setGreetingDraft(e.detail.value)}
+        />
+        <View className="settings__rowButtons">
+          <Button className="settings__halfBtn" onClick={() => void saveGreeting()}>
+            {greetingSaved ? t('common.saved') : t('common.save')}
+          </Button>
+          <Button
+            className="settings__halfBtn settings__halfBtn--ghost"
+            onClick={() => void resetGreeting()}
           >
             {t('common.reset')}
           </Button>

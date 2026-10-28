@@ -1645,6 +1645,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setPendingWelcomes((prev) => prev.filter((w) => w.queueId !== queueId));
   }, [storage, poller]);
 
+  /**
+   * 握手成功建立 1v1 会话后自动发送打招呼文案（设置页可配，必填）。
+   * 定义在 sendMessage 之后（3166 行附近），这里用 ref 转发——同
+   * processWelcomeRef 的理由：acceptInviteQr / processReceivedWelcome /
+   * acceptRescueInvite 都定义在 sendMessage 之前，闭包直接引用会 TDZ。
+   */
+  const sendGreetingRef = useRef<(groupId: string) => Promise<void>>(
+    async () => {
+      throw new Error('sendGreetingAfterHandshake 尚未就绪');
+    },
+  );
+
   const acceptInviteQr = useCallback(async (qrString: string): Promise<void> => {
     if (!storage || !identityKeys || !session || !pds || !poller) {
       throw new Error('acceptInviteQr: not fully initialized');
@@ -1702,6 +1714,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     setGroups((prev) => [...prev, result.groupId]);
     setChatListVersion((v) => v + 1);
+
+    // 私聊会话建立成功 → 自动发送打招呼文案（尽力而为，失败不影响握手）
+    void sendGreetingRef.current(result.groupId).catch((err) => {
+      console.error('sendGreetingAfterHandshake (acceptInviteQr) failed:', err);
+    });
   }, [storage, identityKeys, session, pds, poller, triggerBackupAfterAdvance, acquireClaimForCommit, releaseClaim, takeFreshPoolPair]);
 
   // -------------------------------------------------------------------------
@@ -1749,6 +1766,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setGroups((prev) => [...prev, result.groupId]);
     setPendingWelcomes((prev) => prev.filter((w) => w.queueId !== welcome.queueId));
     setChatListVersion((v) => v + 1);
+
+    // 私聊会话建立成功（含救援 callback）→ 自动发送打招呼文案（尽力而为）
+    void sendGreetingRef.current(result.groupId).catch((err) => {
+      console.error('sendGreetingAfterHandshake (processReceivedWelcome) failed:', err);
+    });
   }, [storage, identityKeys, session, poller, triggerBackupAfterAdvance]);
 
   processWelcomeRef.current = processReceivedWelcome;
@@ -1964,6 +1986,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await storage.clearRescueInvite(result.groupId);
     setPendingRescueInvites((prev) => prev.filter((i) => i.fromDid !== result.groupId));
     setChatListVersion((v) => v + 1);
+
+    // 救援握手成功、新 1v1 会话建立 → 自动发送打招呼文案（尽力而为）
+    void sendGreetingRef.current(result.groupId).catch((err) => {
+      console.error('sendGreetingAfterHandshake (acceptRescueInvite) failed:', err);
+    });
   }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, acquireClaimForCommit, triggerBackupAfterAdvance]);
 
   /**
@@ -3206,6 +3233,19 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
 
     setChatListVersion((v) => v + 1);
   }, [session, storage, pds, poller]);
+
+  /**
+   * 握手成功建立 1v1 会话后自动发送打招呼文案。三个触发点：
+   * acceptInviteQr（扫码方）/ processReceivedWelcome（被扫码方，含救援
+   * callback）/ acceptRescueInvite（施救方）。尽力而为：失败只记日志。
+   */
+  const sendGreetingAfterHandshake = useCallback(async (groupId: string): Promise<void> => {
+    if (!storage || !session || !pds || !poller) return;
+    const text = await storage.getGreetingText();
+    await sendMessage(groupId, text);
+  }, [storage, session, pds, poller, sendMessage]);
+
+  sendGreetingRef.current = sendGreetingAfterHandshake;
 
   /**
    * Send an embedded post-card message. The fatesky-provided share payload is

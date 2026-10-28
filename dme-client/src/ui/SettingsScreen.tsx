@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, TextInput, ScrollView, Switch, Alert } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
@@ -7,6 +7,7 @@ import { Button } from './Button';
 import { ScreenBackground } from './ScreenBackground';
 import { useApp } from '../state/AppContext';
 import { DEFAULT_APPVIEW_PROXY, DME_SERVER_URL, DEFAULT_DME_GATEWAY_URL } from '../config';
+import { DEFAULT_GREETING_TEXT } from '../storage/db';
 import type { RootStackParamList } from '../types/navigation';
 import { useI18n } from '../i18n/I18nContext';
 import { LANGUAGES } from '../i18n/translations';
@@ -36,6 +37,18 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
   const [gatewayDraft, setGatewayDraft] = useState(app.gatewayUrl);
   const [gatewaySaved, setGatewaySaved] = useState(false);
+
+  // 私聊打招呼文案（握手成功建立 1v1 会话后自动发送；必填，空值回退默认）
+  const [greetingDraft, setGreetingDraft] = useState(DEFAULT_GREETING_TEXT);
+  const [greetingSaved, setGreetingSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void app.storage?.getGreetingText().then((text) => {
+      if (!cancelled) setGreetingDraft(text);
+    });
+    return () => { cancelled = true; };
+  }, [app.storage]);
 
   const [backupPwd, setBackupPwd] = useState('');
   const [backupPwdConfirm, setBackupPwdConfirm] = useState('');
@@ -96,6 +109,22 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     await app.setGatewayUrl(DEFAULT_DME_GATEWAY_URL);
     setGatewaySaved(true);
     setTimeout(() => setGatewaySaved(false), 2000);
+  };
+
+  const handleSaveGreeting = async (): Promise<void> => {
+    // 必填：空白一律回退默认文案
+    const text = greetingDraft.trim() || DEFAULT_GREETING_TEXT;
+    setGreetingDraft(text);
+    await app.storage?.setGreetingText(text);
+    setGreetingSaved(true);
+    setTimeout(() => setGreetingSaved(false), 2000);
+  };
+
+  const handleResetGreeting = async (): Promise<void> => {
+    setGreetingDraft(DEFAULT_GREETING_TEXT);
+    await app.storage?.setGreetingText(DEFAULT_GREETING_TEXT);
+    setGreetingSaved(true);
+    setTimeout(() => setGreetingSaved(false), 2000);
   };
 
   const handleRotation = async (ms: number): Promise<void> => {
@@ -347,6 +376,32 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           <Button
             label={t('common.reset')}
             onPress={handleResetGateway}
+            variant="secondary"
+            style={styles.halfButton}
+          />
+        </View>
+
+        {/* 私聊打招呼文案：握手成功建立 1v1 会话后自动发送 */}
+        <Text style={styles.title}>{t('settings.greetingText')}</Text>
+        <Text style={styles.hint}>{t('settings.greetingTextHint')}</Text>
+        <TextInput
+          style={styles.input}
+          value={greetingDraft}
+          onChangeText={setGreetingDraft}
+          placeholder={DEFAULT_GREETING_TEXT}
+          placeholderTextColor={theme.colors.textSecondary}
+          multiline
+        />
+        <View style={styles.rowButtons}>
+          <Button
+            label={greetingSaved ? t('common.saved') : t('common.save')}
+            onPress={handleSaveGreeting}
+            variant="primary"
+            style={styles.halfButton}
+          />
+          <Button
+            label={t('common.reset')}
+            onPress={handleResetGreeting}
             variant="secondary"
             style={styles.halfButton}
           />

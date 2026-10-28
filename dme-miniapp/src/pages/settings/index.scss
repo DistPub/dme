@@ -89,6 +89,14 @@
     border-radius: 14px;
   }
 
+  // 打招呼文案多行输入（Textarea 复用 __input 外观，改自动高度）
+  &__textarea {
+    height: auto;
+    min-height: 120px;
+    padding: 20px 24px;
+    line-height: 40px;
+  }
+
   &__fullButton {
     width: 100%;
     height: 88px;

@@ -120,6 +120,13 @@ export class DmePoller {
    * Pass null to stop polling the rescue channel for this group.
    */
   setRescueQueueId(groupId: string, queueId: string | null): void {
+    const prev = this.rescueQueueIds.get(groupId);
+    if (queueId && prev && prev !== queueId) {
+      console.log(
+        '[dme:rescue] 救援通道切换', groupId,
+        prev.slice(0, 8) + '…', '->', queueId.slice(0, 8) + '…',
+      );
+    }
     if (queueId === null) {
       this.rescueQueueIds.delete(groupId);
     } else {
@@ -132,6 +139,13 @@ export class DmePoller {
    * Pass null to stop polling the callback for this group.
    */
   setRescueCallbackQueueId(groupId: string, queueId: string | null): void {
+    const prev = this.rescueCallbackQueueIds.get(groupId);
+    if (queueId && prev && prev !== queueId) {
+      console.log(
+        '[dme:rescue] callback 通道切换', groupId,
+        prev.slice(0, 8) + '…', '->', queueId.slice(0, 8) + '…',
+      );
+    }
     if (queueId === null) {
       this.rescueCallbackQueueIds.delete(groupId);
     } else {
@@ -295,8 +309,23 @@ export class DmePoller {
       }
 
       if (alreadyProcessed) {
-        console.log('DmePoller: skipping already-processed queueId', env.queueId);
-        continue;
+        // ⚠️ rescue_callback 自愈（2026-10-28）：成功消费的 callback 一定会
+        //    deletePendingWelcome（processReceivedWelcome 末尾）。所以标记了
+        //    已处理、但 PendingWelcome 条目仍在 ⇒ 这条 callback 从未被成功
+        //    消费过（早期 bug 的脏标记），必须撤销重试，否则发起端永远
+        //    进不了新会话，且双方救援通道纪元永久分叉（发起端 welcomeDate
+        //    停在旧纪元，接受端已切新纪元 → 发起端后续救援永远扫不到）。
+        if (ctx.type === 'rescue_callback' && this.pendingWelcomes.has(env.queueId)) {
+          console.warn(
+            '[dme:rescue] 检测到 callback 脏标记（PendingWelcome 仍在），撤销并重试',
+            env.queueId,
+          );
+          await this.storage.unmarkQueueIdProcessed(env.queueId);
+          alreadyProcessed = false;
+        } else {
+          console.log('DmePoller: skipping already-processed queueId', env.queueId);
+          continue;
+        }
       }
       this.inFlightQueueIds.add(env.queueId);
 

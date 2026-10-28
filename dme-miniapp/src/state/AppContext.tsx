@@ -1828,6 +1828,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       // 如果是救援 callback，清除 pending 标记
       await activeStorage.clearRescueCallback(result.groupId);
+      // 立即停扫 callback 通道（不等 60s 刷新），避免死轮询观感
+      activePoller.setRescueCallbackQueueId(result.groupId, null);
+      // 立即切换救援通道纪元（welcomeDate 已更新 → queueId 重派生）
+      refreshRescueQueueIdsRef.current();
 
       // 缺口①：接会话推进了状态，立即联动备份（同 acceptInviteQr）
       await triggerBackupAfterAdvance(`processWelcome ${result.groupId}`);
@@ -1942,6 +1946,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
     }
   }, [poller, storage, identityKeys, session, resolveWelcomeDate]);
+
+  // 通道刷新 ref（processReceivedWelcome 定义在本函数之前，需要跨引用）
+  const refreshRescueQueueIdsRef = useRef<() => void>(() => {});
+  refreshRescueQueueIdsRef.current = () => { void refreshRescueQueueIds(); };
 
   /**
    * Handle a rescue message received from the peer.
@@ -2086,6 +2094,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     const createdAt = new Date().toISOString();
     await activeStorage.setWelcomeDate(result.groupId, createdAt.slice(0, 10));
+    // 立即切换救援通道纪元（welcomeDate 已更新），不等 60s 定时刷新
+    void refreshRescueQueueIds();
 
     await triggerBackupAfterAdvance(`acceptRescueInvite ${result.groupId}`);
 
@@ -2106,7 +2116,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     void sendGreetingRef.current(result.groupId).catch((err) => {
       console.error('sendGreetingAfterHandshake (acceptRescueInvite) failed:', err);
     });
-  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, acquireClaimForCommit, triggerBackupAfterAdvance, releaseClaim]);
+  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, acquireClaimForCommit, triggerBackupAfterAdvance, releaseClaim, refreshRescueQueueIds]);
 
   /**
    * Prompt the user to leave a rescue marker when entering a 1v1 chat.

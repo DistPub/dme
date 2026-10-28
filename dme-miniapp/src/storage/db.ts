@@ -214,6 +214,23 @@ export class DmeStorage {
     await AsyncStorage.removeItem(this.prefix + `rescueCallback:${groupId}`);
   }
 
+  /**
+   * 救援通道纪元（rescueEpoch）：每次握手成功后双端各自持久化「本次握手的
+   * callbackQueueId」——双端可独立算出同一个值，天然一致。
+   *
+   * 为什么不能只用 welcomeDate 做纪元：同一天内第二次救援握手时 welcomeDate
+   * 不变 → 新旧通道 queueId 相同 → 旧的救援请求信封永远留在活跃通道上
+   * （控制台永远刷「skipping already-processed」），且自愈判据会把同
+   * queueId 上堆积的旧信封误判为脏标记而复活（弹出过期救援卡片）。
+   */
+  async getRescueEpoch(groupId: string): Promise<string | null> {
+    return AsyncStorage.getItem(this.prefix + `rescueEpoch:${groupId}`);
+  }
+
+  async setRescueEpoch(groupId: string, epoch: string): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + `rescueEpoch:${groupId}`, epoch);
+  }
+
   /** 施救方收到的救援邀请，仅当天展示。 */
   async getRescueInvite(
     groupId: string,

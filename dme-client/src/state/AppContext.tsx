@@ -449,7 +449,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const processWelcomeRef = useRef<(welcome: IncomingWelcome) => Promise<void>>(async () => {});
   const handleIncomingMessageRef = useRef<(msg: IncomingMessage, userDid: string, storage: DmeStorage) => Promise<void>>(async () => {});
-  const handleRescueMessageRef = useRef<(groupId: string, payloadBase64url: string) => Promise<boolean>>(async () => false);
+  const handleRescueMessageRef = useRef<(groupId: string, payloadBase64url: string, queueId: string) => Promise<boolean>>(async () => false);
 
   const activeConversationRef = useRef<string | null>(null);
   const chatActiveRef = useRef<boolean>(false);
@@ -497,8 +497,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       async (welcome: IncomingWelcome) => {
         await processWelcomeRef.current(welcome);
       },
-      async (groupId: string, payloadBase64url: string) => {
-        return await handleRescueMessageRef.current(groupId, payloadBase64url);
+      async (groupId: string, payloadBase64url: string, queueId: string) => {
+        return await handleRescueMessageRef.current(groupId, payloadBase64url, queueId);
       },
     );
 
@@ -768,8 +768,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         async (welcome: IncomingWelcome) => {
           await processWelcomeRef.current(welcome);
         },
-        async (groupId: string, payloadBase64url: string) => {
-          return await handleRescueMessageRef.current(groupId, payloadBase64url);
+        async (groupId: string, payloadBase64url: string, queueId: string) => {
+          return await handleRescueMessageRef.current(groupId, payloadBase64url, queueId);
         },
       );
 
@@ -1865,6 +1865,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const handleRescueMessage = useCallback(async (
     groupId: string,
     payloadBase64url: string,
+    queueId: string,
   ): Promise<boolean> => {
     if (!storage || !identityKeys || !session) {
       console.error('handleRescueMessage: not fully initialized');
@@ -1926,6 +1927,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
 
     await storage.setRescueInvite(groupId, invite);
+    // 记录本条信封已成功消费 —— poller 自愈判据用（见 storage.setRescueConsumed
+    // 的说明：不能用 rescueInvite 做判据，用户接受救援后它会被清掉）。
+    await storage.setRescueConsumed(groupId, queueId);
     setPendingRescueInvites((prev) => {
       const filtered = prev.filter((i) => i.fromDid !== groupId);
       return [...filtered, invite];

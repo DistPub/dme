@@ -257,16 +257,25 @@ export class DmeStorage {
   }
 
   /**
-   * 是否存在某个 1v1 会话的待处理救援邀请（任意日期）。
+   * 记录「已成功消费的救援信封 queueId」。
    *
-   * 用途：救援信封处理的**自愈判据**。救援消息成功消费后必然写入
-   * rescueInvite 记录；所以「记录不存在」⇒ 这条救援消息从未被成功消费过
-   * ⇒ LRU 里的「已处理」标记是脏数据，必须撤销并重试，否则救援消息被
-   * LRU 永久跳过、用户永远看不到救援卡片。
+   * 用途：救援信封处理的**自愈判据**。救援消息成功消费后必然写入本记录，
+   * 所以「本记录 ≠ 当前 envelope 的 queueId」⇒ 这条救援消息从未被成功
+   * 消费过 ⇒ LRU 里的「已处理」标记是脏数据，必须撤销并重试，否则救援
+   * 消息被 LRU 永久跳过、用户永远看不到救援卡片。
+   *
+   * 为什么不用 rescueInvite 记录做判据：用户**接受**救援后 rescueInvite
+   * 会被清掉（acceptRescueInvite → clearRescueInvite），此时若用
+   * rescueInvite 判据会误判成「从未消费」→ 撤销标记 → 已接受的救援卡片
+   * 复活。记录 queueId 本身才能精确表达「这一条已消费」。
    */
-  async hasAnyRescueInvite(groupId: string): Promise<boolean> {
-    const raw = await AsyncStorage.getItem(this.prefix + `rescueInvite:${groupId}`);
-    return raw !== null && raw !== undefined;
+  async setRescueConsumed(groupId: string, queueId: string): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + `rescueConsumed:${groupId}`, queueId);
+  }
+
+  /** 读取「已成功消费的救援信封 queueId」，没有则返回 null。 */
+  async getRescueConsumed(groupId: string): Promise<string | null> {
+    return AsyncStorage.getItem(this.prefix + `rescueConsumed:${groupId}`);
   }
 
   /** 今天是否已经对该私聊拒绝过救援弹窗。 */

@@ -54,6 +54,7 @@ export type OnWelcomeCallback = (welcome: IncomingWelcome) => Promise<void>;
 export type OnRescueCallback = (
   groupId: string,
   payloadBase64url: string,
+  queueId: string,
 ) => Promise<boolean>;
 
 type QueueContext =
@@ -282,8 +283,8 @@ export class DmePoller {
       //    LRU 里的标记是**脏数据**，必须撤销并重试，否则用户永远看不到
       //    救援卡片，控制台一直刷 `skipping already-processed queueId`。
       if (ctx.type === 'rescue' && alreadyProcessed) {
-        const hasInvite = await this.storage.hasAnyRescueInvite(ctx.groupId);
-        if (!hasInvite) {
+        const consumedQid = await this.storage.getRescueConsumed(ctx.groupId);
+        if (consumedQid !== env.queueId) {
           console.warn(
             '[dme:rescue] 检测到上次处理失败留下的脏标记，撤销并重试救援消息',
             env.queueId,
@@ -325,7 +326,7 @@ export class DmePoller {
             this.inFlightQueueIds.delete(env.queueId);
             continue;
           }
-          const consumed = await this.onRescue(ctx.groupId, env.payload);
+          const consumed = await this.onRescue(ctx.groupId, env.payload, env.queueId);
           if (consumed) {
             await this.storage.markQueueIdProcessed(env.queueId);
           } else {

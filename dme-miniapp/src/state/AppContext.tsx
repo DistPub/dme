@@ -1904,11 +1904,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
       const welcomeDate = await resolveWelcomeDate(groupId);
 
+      // callback 通道（我方已发起、等对方 Welcome）与救援通道（等对方发起）
+      // **并行扫描**。
+      //
+      // ⚠️ 早前实现是「二选一」：一旦本机发起救援就停扫救援通道，只扫
+      // callback。若双方同一天都发起救援 → 双方都停扫对方救援通道 →
+      // 互等死锁（谁都收不到对方的救援请求，谁都不施救）。
+      // 由于救援 queueId 本就按 writerDid 分离（我方只扫对方写的那个），
+      // 并行扫描不会扫到自己发的消息，无需互斥。
       const pendingCallback = await activeStorage.getRescueCallback(groupId);
       if (pendingCallback && pendingCallback.date === today) {
-        activePoller.setRescueQueueId(groupId, null);
         activePoller.setRescueCallbackQueueId(groupId, pendingCallback.callbackQueueId);
-        continue;
+      } else {
+        activePoller.setRescueCallbackQueueId(groupId, null);
       }
 
       try {
@@ -1928,11 +1936,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           today,
         );
         activePoller.setRescueQueueId(groupId, rescueQueueId);
-        activePoller.setRescueCallbackQueueId(groupId, null);
       } catch (err) {
         console.warn('[dme:rescue] failed to derive rescue queueId for', groupId, err);
         activePoller.setRescueQueueId(groupId, null);
-        activePoller.setRescueCallbackQueueId(groupId, null);
       }
     }
   }, [poller, storage, identityKeys, session, resolveWelcomeDate]);
@@ -2207,9 +2213,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await activePds.createEnvelope(envelope);
 
     await activeStorage.setRescueCallback(groupId, { date: today, callbackQueueId });
-    // Switch poller from rescue channel to callback channel.
+    // 本机转为等待对方的 Welcome：扫 callback 通道。
+    // ⚠️ **不停止扫救援通道** —— 救援 queueId 按 writerDid 分离（本机只扫
+    // 对方写的那个），并行扫描不会扫到自己发的消息；而若停扫，双方同一天
+    // 都发起救援时会互等死锁（谁都收不到对方的救援请求）。
+    // 救援通道 queueId 由 refreshRescueQueueIds 每 60s 统一刷新。
     if (activePoller) {
-      activePoller.setRescueQueueId(groupId, null);
       activePoller.setRescueCallbackQueueId(groupId, callbackQueueId);
     }
   }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, resolveWelcomeDate]);

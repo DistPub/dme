@@ -390,7 +390,6 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           onChangeText={setGreetingDraft}
           placeholder={DEFAULT_GREETING_TEXT}
           placeholderTextColor={theme.colors.textSecondary}
-          multiline
         />
         <View style={styles.rowButtons}>
           <Button

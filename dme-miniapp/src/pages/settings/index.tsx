@@ -435,6 +435,7 @@ export default function SettingsPage(): React.JSX.Element {
           className="settings__input settings__textarea"
           value={greetingDraft}
           maxlength={200}
+          autoHeight
           placeholder={DEFAULT_GREETING_TEXT}
           onInput={(e) => setGreetingDraft(e.detail.value)}
         />

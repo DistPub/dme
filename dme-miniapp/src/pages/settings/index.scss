@@ -92,9 +92,9 @@
   // 打招呼文案多行输入（Textarea 复用 __input 外观，改自动高度）
   &__textarea {
     height: auto;
-    min-height: 120px;
-    padding: 20px 24px;
-    line-height: 40px;
+    min-height: 88px;
+    padding: 24px;
+    line-height: 1.5;
   }
 
   &__fullButton {

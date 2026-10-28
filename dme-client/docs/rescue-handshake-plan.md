@@ -167,13 +167,6 @@ async getRescueInvite(
   groupId: string
 ): Promise<{ date: string; fromDid: string; qrData: string; callbackQueueId: string } | null>
 async clearRescueInvite(groupId: string): Promise<void>
-
-// 救援信封去重辅助（poller 自愈判据，见 4.2）
-async setRescueConsumed(groupId: string, queueId: string): Promise<void>
-async getRescueConsumed(groupId: string): Promise<string | null>
-
-// 撤销「已处理」标记（处理失败时回滚，让下一轮重试）
-async unmarkQueueIdProcessed(queueId: string): Promise<void>
 ```
 
 ### 3.2 初次握手时写入 welcomeDate
@@ -195,25 +188,37 @@ A/B 双方在救援重新握手成功后，再次写入新的 welcomeDate，确�
 注入规则（无 `GroupInfo` 的 groupId，即 1v1 会话）：
 
 ```ts
-// callback 通道：当天已发起救援则扫，否则不扫
+const welcomeDate = await resolveWelcomeDate(groupId)
+
+// ① 互斥：当天已发起救援（等对方 Welcome）→ 只扫 callback 通道
 const pending = await storage.getRescueCallback(groupId)
 if (pending && pending.date === today) {
+  poller.setRescueQueueId(groupId, null)
   poller.setRescueCallbackQueueId(groupId, pending.callbackQueueId)
-} else {
-  poller.setRescueCallbackQueueId(groupId, null)
+  continue
 }
 
-// 救援通道：**始终扫描**对方的救援 queueId（以对方 DID 为 writerDid）
+// ② 今天 welcome 的私聊：会话今天刚（重）建，无需救援 → 两个通道都不扫
+if (welcomeDate === today) {
+  poller.setRescueQueueId(groupId, null)
+  poller.setRescueCallbackQueueId(groupId, null)
+  continue
+}
+
+// ③ 否则扫救援通道（对方的 rescue queueId，以对方 DID 为 writerDid）
 const theirDid = groupId // 1v1 的 groupId 即对方 DID
 const queueId = deriveRescueQueueId(sharedSecret, theirDid, welcomeDate, today)
 poller.setRescueQueueId(groupId, queueId)
+poller.setRescueCallbackQueueId(groupId, null)
 ```
 
 - 本机永远只扫描 `rescueQueueId(对方 DID)`，不会扫到自己发的那条。
 - 救援 queueId 与常规消息 queueId 一起参与 5–15 秒的随机轮询，不单独控制频率。
-- **两个通道并行扫描，不互斥**。救援 queueId 本就按 writerDid 分离（本机只扫
-  对方写的那个），并行扫描不会扫到自己发的消息；而若「发起救援即停扫救援
-  通道」，双方同一天都发起救援时会互等死锁（谁都收不到对方的救援请求）。
+- **两个通道互斥**：有当天的 callback 就只轮 callback，否则才轮救援通道。
+- **今天 welcome 的私聊不生成、不轮询救援 queueId**：会话今天刚（重）建，
+  无需救援；握手成功后旧的救援请求信封（旧 welcomeDate 派生的 queueId）
+  就此脱离轮询集合，控制台不再刷旧请求的 `skipping already-processed`。
+  `sendRescueHandshake` 侧同样拦截（`welcomeDate === today` 直接抛错）。
 
 ### 4.1 处理顺序不变量（重要）
 
@@ -232,19 +237,7 @@ LRU 永久跳过，之后永远取不到。
 - 失败时不标记 → 下一轮轮询重新拉取并重试。
 - `rescue_callback` 分支同样遵循「先处理成功、再标记」。
 
-### 4.2 脏标记自愈
-
-已被污染的 LRU 标记无法自动恢复，需要自愈机制。判据：
-
-> **「已成功消费的救援信封 queueId」≠ 当前 envelope 的 queueId**
-> ⇒ 这条救援消息从未被成功消费过 ⇒ LRU 标记是脏数据 ⇒ 撤销并重试。
-
-用 `storage.rescueConsumed:{groupId}` 记录已成功消费的 queueId。
-**不能用 `rescueInvite` 记录做判据**：用户接受救援后 `acceptRescueInvite`
-会清掉 `rescueInvite`，此时若用它判据会误判成「从未消费」→ 撤销标记 →
-已接受的救援卡片复活。
-
-### 4.3 welcomeDate 必须三处同源
+### 4.2 welcomeDate 必须三处同源
 
 `welcomeDate` 是救援 queueId 与 message key 的派生输入，**三处必须调用同一个
 解析函数**（`resolveWelcomeDate`）：

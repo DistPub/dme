@@ -287,45 +287,9 @@ export class DmePoller {
         console.log('DmePoller: skipping in-flight queueId', env.queueId);
         continue;
       }
-      let alreadyProcessed = await this.storage.isQueueIdProcessed(env.queueId);
-
-      // ⚠️ 自愈（2026-10-28 真机修复）：
-      //    **救援邀请不存在 ⇒ 这条救援消息从未被成功消费过**。
-      //    因为成功消费的路径（handleRescueMessage）必然写入 rescueInvite
-      //    记录。所以只要救援通道上没有对应的 invite，就说明上一次尝试
-      //    失败了（多半是早期「先 mark 后处理」的顺序 bug 导致的），此时
-      //    LRU 里的标记是**脏数据**，必须撤销并重试，否则用户永远看不到
-      //    救援卡片，控制台一直刷 `skipping already-processed queueId`。
-      if (ctx.type === 'rescue' && alreadyProcessed) {
-        const consumedQid = await this.storage.getRescueConsumed(ctx.groupId);
-        if (consumedQid !== env.queueId) {
-          console.warn(
-            '[dme:rescue] 检测到上次处理失败留下的脏标记，撤销并重试救援消息',
-            env.queueId,
-          );
-          await this.storage.unmarkQueueIdProcessed(env.queueId);
-          alreadyProcessed = false;
-        }
-      }
-
-      if (alreadyProcessed) {
-        // ⚠️ rescue_callback 自愈（2026-10-28）：成功消费的 callback 一定会
-        //    deletePendingWelcome（processReceivedWelcome 末尾）。所以标记了
-        //    已处理、但 PendingWelcome 条目仍在 ⇒ 这条 callback 从未被成功
-        //    消费过（早期 bug 的脏标记），必须撤销重试，否则发起端永远
-        //    进不了新会话，且双方救援通道纪元永久分叉（发起端 welcomeDate
-        //    停在旧纪元，接受端已切新纪元 → 发起端后续救援永远扫不到）。
-        if (ctx.type === 'rescue_callback' && this.pendingWelcomes.has(env.queueId)) {
-          console.warn(
-            '[dme:rescue] 检测到 callback 脏标记（PendingWelcome 仍在），撤销并重试',
-            env.queueId,
-          );
-          await this.storage.unmarkQueueIdProcessed(env.queueId);
-          alreadyProcessed = false;
-        } else {
-          console.log('DmePoller: skipping already-processed queueId', env.queueId);
-          continue;
-        }
+      if (await this.storage.isQueueIdProcessed(env.queueId)) {
+        console.log('DmePoller: skipping already-processed queueId', env.queueId);
+        continue;
       }
       this.inFlightQueueIds.add(env.queueId);
 

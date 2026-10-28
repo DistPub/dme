@@ -214,22 +214,6 @@ export class DmeStorage {
     await AsyncStorage.removeItem(this.prefix + `rescueCallback:${groupId}`);
   }
 
-  /**
-   * 救援通道纪元（rescueEpoch）：每次握手成功后双端各自持久化「本次握手的
-   * callbackQueueId」——双端可独立算出同一个值，天然一致。
-   *
-   * 为什么不能只用 welcomeDate 做纪元：同一天内第二次救援握手时 welcomeDate
-   * 不变 → 新旧通道 queueId 相同 → 旧的救援请求信封永远留在活跃通道上
-   * （控制台永远刷「skipping already-processed」），且自愈判据会把同
-   * queueId 上堆积的旧信封误判为脏标记而复活（弹出过期救援卡片）。
-   */
-  async getRescueEpoch(groupId: string): Promise<string | null> {
-    return AsyncStorage.getItem(this.prefix + `rescueEpoch:${groupId}`);
-  }
-
-  async setRescueEpoch(groupId: string, epoch: string): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + `rescueEpoch:${groupId}`, epoch);
-  }
 
   /** 施救方收到的救援邀请，仅当天展示。 */
   async getRescueInvite(
@@ -271,28 +255,6 @@ export class DmeStorage {
 
   async clearRescueInvite(groupId: string): Promise<void> {
     await AsyncStorage.removeItem(this.prefix + `rescueInvite:${groupId}`);
-  }
-
-  /**
-   * 记录「已成功消费的救援信封 queueId」。
-   *
-   * 用途：救援信封处理的**自愈判据**。救援消息成功消费后必然写入本记录，
-   * 所以「本记录 ≠ 当前 envelope 的 queueId」⇒ 这条救援消息从未被成功
-   * 消费过 ⇒ LRU 里的「已处理」标记是脏数据，必须撤销并重试，否则救援
-   * 消息被 LRU 永久跳过、用户永远看不到救援卡片。
-   *
-   * 为什么不用 rescueInvite 记录做判据：用户**接受**救援后 rescueInvite
-   * 会被清掉（acceptRescueInvite → clearRescueInvite），此时若用
-   * rescueInvite 判据会误判成「从未消费」→ 撤销标记 → 已接受的救援卡片
-   * 复活。记录 queueId 本身才能精确表达「这一条已消费」。
-   */
-  async setRescueConsumed(groupId: string, queueId: string): Promise<void> {
-    await AsyncStorage.setItem(this.prefix + `rescueConsumed:${groupId}`, queueId);
-  }
-
-  /** 读取「已成功消费的救援信封 queueId」，没有则返回 null。 */
-  async getRescueConsumed(groupId: string): Promise<string | null> {
-    return AsyncStorage.getItem(this.prefix + `rescueConsumed:${groupId}`);
   }
 
   /** 今天是否已经对该私聊拒绝过救援弹窗。 */

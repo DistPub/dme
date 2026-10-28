@@ -1759,18 +1759,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     // 记录 welcome 日期（救援握手成功后也走这里，更新日期以隔离旧救援消息）
     await storage.setWelcomeDate(result.groupId, welcome.createdAt.slice(0, 10));
 
-    // 如果是救援 callback，清除 pending 标记。
-    // 同时推进救援纪元：本次 Welcome 的 queueId 就是双方约定的下一个纪元
-    // 本机（发起端）在这里写 welcome.queueId；接受端在 acceptRescueInvite 时
-    // 写 invite.callbackQueueId。双端独立持久化同一个值，天然一致。
-    const rescueCallbackRecord = await storage.getRescueCallback(result.groupId);
-    if (rescueCallbackRecord && rescueCallbackRecord.callbackQueueId === welcome.queueId) {
-      await storage.setRescueEpoch(result.groupId, welcome.queueId);
-    }
+    // 如果是救援 callback，清除 pending 标记
     await storage.clearRescueCallback(result.groupId);
     // 立即停扫 callback 通道（不等 60s 刷新），避免死轮询观感
     poller.setRescueCallbackQueueId(result.groupId, null);
-    // 立即切换救援通道纪元（welcomeDate 已更新 → queueId 重派生）
+    // 立即刷新通道：welcomeDate 已更新为今天 → refreshRescueQueueIds 会
+    // 按「今天 welcome 的私聊不轮询救援」立即停扫该会话的救援通道。
     refreshRescueQueueIdsRef.current();
 
     // 缺口①：接会话推进了状态，立即联动备份（同 acceptInviteQr）
@@ -1825,23 +1819,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     return today;
   }, [storage]);
 
-  /**
-   * 解析 1v1 会话的救援通道纪元。
-   *
-   * 优先用 rescueEpoch（每次握手成功后双端各自写入「本次握手的
-   * callbackQueueId」，双端可独立算出同一个值）；未设置（从未经新版
-   * 完成过握手）时退回 welcomeDate，与旧版行为完全兼容。
-   *
-   * ⚠️ 扫通道（refreshRescueQueueIds）、写通道（sendRescueHandshake）、
-   * 解密（handleRescueMessage）三处必须同源，否则 queueId/message key
-   * 不一致。
-   */
-  const resolveRescueEpoch = useCallback(async (groupId: string): Promise<string> => {
-    const epoch = await storage!.getRescueEpoch(groupId);
-    if (epoch) return epoch;
-    return resolveWelcomeDate(groupId);
-  }, [storage, resolveWelcomeDate]);
-
   const refreshRescueQueueIds = useCallback(async (): Promise<void> => {
     if (!poller || !storage || !identityKeys || !session) return;
 
@@ -1854,22 +1831,23 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (groupInfo) continue;
 
       const welcomeDate = await resolveWelcomeDate(groupId);
-      // 救援通道纪元：优先 rescueEpoch（每次握手成功后轮换），退回 welcomeDate
-      const rescueEpoch = await resolveRescueEpoch(groupId);
 
-      // callback 通道（我方已发起、等对方 Welcome）与救援通道（等对方发起）
-      // **并行扫描**。
-      //
-      // ⚠️ 早前实现是「二选一」：一旦本机发起救援就停扫救援通道，只扫
-      // callback。若双方同一天都发起救援 → 双方都停扫对方救援通道 →
-      // 互等死锁（谁都收不到对方的救援请求，谁都不施救）。
-      // 由于救援 queueId 本就按 writerDid 分离（我方只扫对方写的那个），
-      // 并行扫描不会扫到自己发的消息，无需互斥。
+      // 原有设计：互斥轮询——有当天的回调就只轮回调，否则才轮救援通道。
       const pendingCallback = await storage.getRescueCallback(groupId);
       if (pendingCallback && pendingCallback.date === today) {
+        poller.setRescueQueueId(groupId, null);
         poller.setRescueCallbackQueueId(groupId, pendingCallback.callbackQueueId);
-      } else {
+        continue;
+      }
+
+      // ⚠️ 今天 welcome 的私聊：会话今天刚（重）建，无需救援——
+      //    不生成救援 queueId、不轮询救援通道。握手成功后旧的救援请求
+      //    信封（用旧 welcomeDate 派生的 queueId）就此脱离轮询集合，
+      //    跨天后即使恢复轮询，queueId 也随 today 轮换自然淘汰旧信封。
+      if (welcomeDate === today) {
+        poller.setRescueQueueId(groupId, null);
         poller.setRescueCallbackQueueId(groupId, null);
+        continue;
       }
 
       try {
@@ -1885,16 +1863,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         const rescueQueueId = deriveRescueQueueId(
           sharedSecret,
           groupId, // peer DID == writerDid for the queueId we scan
-          rescueEpoch,
+          welcomeDate,
           today,
         );
         poller.setRescueQueueId(groupId, rescueQueueId);
+        poller.setRescueCallbackQueueId(groupId, null);
       } catch (err) {
         console.warn('[dme:rescue] failed to derive rescue queueId for', groupId, err);
         poller.setRescueQueueId(groupId, null);
+        poller.setRescueCallbackQueueId(groupId, null);
       }
     }
-  }, [poller, storage, identityKeys, session, resolveWelcomeDate, resolveRescueEpoch]);
+  }, [poller, storage, identityKeys, session, resolveWelcomeDate]);
 
   // 通道刷新 ref（processReceivedWelcome 定义在本函数之前，需要跨引用）
   const refreshRescueQueueIdsRef = useRef<() => void>(() => {});
@@ -1918,9 +1898,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    // ⚠️ 必须与发送方用**完全相同**的纪元（rescueEpoch ?? welcomeDate），
-    //    否则派生出的 message key 不同 → 解密失败。
-    const rescueEpoch = await resolveRescueEpoch(groupId);
+    // ⚠️ 必须与发送方用**完全相同**的 welcomeDate 规则，否则派生出的
+    //    message key 不同 → 解密失败。缺失时走统一 fallback（见
+    //    resolveWelcomeDate），不能直接丢弃消息。
+    const welcomeDate = await resolveWelcomeDate(groupId);
 
     let theirSigningPub: Uint8Array;
     let theirEncPub: Uint8Array;
@@ -1948,7 +1929,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         payloadBase64url,
         sharedSecret,
         groupId, // peer is the writer
-        rescueEpoch,
+        welcomeDate,
         today,
         theirSigningPub,
       );
@@ -1971,16 +1952,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
 
     await storage.setRescueInvite(groupId, invite);
-    // 记录本条信封已成功消费 —— poller 自愈判据用（见 storage.setRescueConsumed
-    // 的说明：不能用 rescueInvite 做判据，用户接受救援后它会被清掉）。
-    await storage.setRescueConsumed(groupId, queueId);
     setPendingRescueInvites((prev) => {
       const filtered = prev.filter((i) => i.fromDid !== groupId);
       return [...filtered, invite];
     });
     setChatListVersion((v) => v + 1);
     return true;
-  }, [storage, identityKeys, session, resolveWelcomeDate, resolveRescueEpoch]);
+  }, [storage, identityKeys, session, resolveWelcomeDate]);
 
   handleRescueMessageRef.current = handleRescueMessage;
 
@@ -2037,11 +2015,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     const createdAt = new Date().toISOString();
     await storage.setWelcomeDate(result.groupId, createdAt.slice(0, 10));
-    // 救援纪元轮换：以本次握手的 callbackQueueId 作为新纪元。双端各自持久化，
-    // 值天然一致（对端在消费 Welcome 时写同一个 queueId）。同一天内重复
-    // 救援时 welcomeDate 不变，必须靠 epoch 让通道真正轮换。
-    await storage.setRescueEpoch(result.groupId, invite.callbackQueueId);
-    // 立即切换救援通道纪元（welcomeDate 已更新），不等 60s 定时刷新
+    // 立即刷新通道：welcomeDate 已更新为今天 → refreshRescueQueueIds 会
+    // 按「今天 welcome 的私聊不轮询救援」立即停扫该会话的救援通道。
     void refreshRescueQueueIds();
 
     await triggerBackupAfterAdvance(`acceptRescueInvite ${result.groupId}`);
@@ -2102,8 +2077,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    // ⚠️ 与接收方必须用**完全相同**的纪元规则（见 resolveRescueEpoch）
-    const rescueEpoch = await resolveRescueEpoch(groupId);
+    // ⚠️ 与接收方必须用**完全相同**的 welcomeDate 规则（见 resolveWelcomeDate）
+    const welcomeDate = await resolveWelcomeDate(groupId);
+
+    // ⚠️ 今天 welcome 的私聊不生成救援 queueId（对方也不轮询）：写了也
+    //    没人收，且会话今天刚（重）建、无需救援。
+    if (welcomeDate === today) {
+      throw new Error('sendRescueHandshake: 会话今天刚建立，无需救援');
+    }
 
     // KP 池统一消费：先取 pair，失败则刷新后重试一次
     let poolPair: KeyPackagePair;
@@ -2129,7 +2110,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const rescueQueueId = deriveRescueQueueId(
       sharedSecret,
       session.did, // we write to our own rescue queueId
-      rescueEpoch,
+      welcomeDate,
       today,
     );
 
@@ -2146,7 +2127,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       rescueMessage,
       sharedSecret,
       session.did,
-      rescueEpoch,
+      welcomeDate,
       today,
       identityKeys.signing.privateKey,
     );
@@ -2191,7 +2172,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       poller.addPendingWelcome(pendingWelcomeEntry);
       poller.setRescueCallbackQueueId(groupId, callbackQueueId);
     }
-  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, resolveWelcomeDate, resolveRescueEpoch]);
+  }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, resolveWelcomeDate]);
 
   // -------------------------------------------------------------------------
   // Rescue queueId refresh side effects

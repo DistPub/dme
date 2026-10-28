@@ -1734,8 +1734,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const welcomes = await storage.getPendingWelcomes();
     const entry = welcomes.find((w) => w.queueId === welcome.queueId);
     if (!entry) {
-      console.error('processReceivedWelcome: no pending welcome for', welcome.queueId);
-      return;
+      // ⚠️ 必须 throw 而不是静默 return：poller 的 rescue_callback 分支
+      //    靠异常感知「未消费」——静默 return 会让 poller 把该 queueId
+      //    标记为已处理，Welcome 永久丢失（2026-10-28 真机：发起端永远
+      //    等不到回调、callback 通道死轮询的直接原因之一）。
+      throw new Error('processReceivedWelcome: no pending welcome for ' + welcome.queueId);
     }
 
     const pair = deserializeWithUint8Array<KeyPackagePair>(entry.keyPackageSerialized);
@@ -2116,13 +2119,35 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
     await pds.createEnvelope(envelope);
 
+    // 旧的 PendingWelcome（同会话更早发起、queueId 不同）一并清理，
+    // 避免孤儿通道永远留在轮询集合里。⚠️ 必须在 setRescueCallback 覆盖前读。
+    const previousCallback = await storage.getRescueCallback(groupId);
+    if (previousCallback && previousCallback.callbackQueueId !== callbackQueueId) {
+      await storage.deletePendingWelcome(previousCallback.callbackQueueId).catch(() => {});
+      poller?.removePendingWelcome(previousCallback.callbackQueueId);
+    }
+
     await storage.setRescueCallback(groupId, { date: today, callbackQueueId });
+
+    // ⚠️ 关键修复（2026-10-28 真机）：必须登记 PendingWelcome！否则对方
+    //    接受救援后把 Welcome 发到 callbackQueueId 时，processReceivedWelcome
+    //    找不到 KP pair（「no pending welcome」）直接返回，而 poller 照样把
+    //    该 queueId 标记为已处理 → Welcome 永久丢失、本机永远进不了新会话、
+    //    clearRescueCallback 永远走不到 → callback/救援通道死轮询。
+    const pendingWelcomeEntry: PendingWelcome = {
+      queueId: callbackQueueId,
+      groupId,
+      keyPackageSerialized: serializeWithUint8Array(poolPair),
+      createdAt: new Date().toISOString(),
+    };
+    await storage.putPendingWelcome(pendingWelcomeEntry);
     // 本机转为等待对方的 Welcome：扫 callback 通道。
     // ⚠️ **不停止扫救援通道** —— 救援 queueId 按 writerDid 分离（本机只扫
     // 对方写的那个），并行扫描不会扫到自己发的消息；而若停扫，双方同一天
     // 都发起救援时会互等死锁（谁都收不到对方的救援请求）。
     // 救援通道 queueId 由 refreshRescueQueueIds 每 60s 统一刷新。
     if (poller) {
+      poller.addPendingWelcome(pendingWelcomeEntry);
       poller.setRescueCallbackQueueId(groupId, callbackQueueId);
     }
   }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, resolveWelcomeDate]);

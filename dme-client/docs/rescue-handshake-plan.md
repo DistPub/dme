@@ -167,6 +167,13 @@ async getRescueInvite(
   groupId: string
 ): Promise<{ date: string; fromDid: string; qrData: string; callbackQueueId: string } | null>
 async clearRescueInvite(groupId: string): Promise<void>
+
+// 救援信封去重辅助（poller 自愈判据，见 4.2）
+async setRescueConsumed(groupId: string, queueId: string): Promise<void>
+async getRescueConsumed(groupId: string): Promise<string | null>
+
+// 撤销「已处理」标记（处理失败时回滚，让下一轮重试）
+async unmarkQueueIdProcessed(queueId: string): Promise<void>
 ```
 
 ### 3.2 初次握手时写入 welcomeDate
@@ -188,22 +195,67 @@ A/B 双方在救援重新握手成功后，再次写入新的 welcomeDate，确�
 注入规则（无 `GroupInfo` 的 groupId，即 1v1 会话）：
 
 ```ts
+// callback 通道：当天已发起救援则扫，否则不扫
 const pending = await storage.getRescueCallback(groupId)
 if (pending && pending.date === today) {
-  // 当天已发起救援，轮询 callbackQueueId
   poller.setRescueCallbackQueueId(groupId, pending.callbackQueueId)
-  poller.setRescueQueueId(groupId, null)
 } else {
-  // 否则扫描对方的救援 queueId：以对方 DID 为 writerDid
-  const theirDid = groupId // 1v1 的 groupId 即对方 DID
-  const queueId = deriveRescueQueueId(sharedSecret, theirDid, welcomeDate, today)
-  poller.setRescueQueueId(groupId, queueId)
   poller.setRescueCallbackQueueId(groupId, null)
 }
+
+// 救援通道：**始终扫描**对方的救援 queueId（以对方 DID 为 writerDid）
+const theirDid = groupId // 1v1 的 groupId 即对方 DID
+const queueId = deriveRescueQueueId(sharedSecret, theirDid, welcomeDate, today)
+poller.setRescueQueueId(groupId, queueId)
 ```
 
 - 本机永远只扫描 `rescueQueueId(对方 DID)`，不会扫到自己发的那条。
 - 救援 queueId 与常规消息 queueId 一起参与 5–15 秒的随机轮询，不单独控制频率。
+- **两个通道并行扫描，不互斥**。救援 queueId 本就按 writerDid 分离（本机只扫
+  对方写的那个），并行扫描不会扫到自己发的消息；而若「发起救援即停扫救援
+  通道」，双方同一天都发起救援时会互等死锁（谁都收不到对方的救援请求）。
+
+### 4.1 处理顺序不变量（重要）
+
+poller 处理信封时，**必须「先处理成功、再标记已处理」**。把 `markQueueIdProcessed`
+放在处理之前，等于给失败一次静默永久丢弃的机会：处理失败后该 queueId 会被
+LRU 永久跳过，之后永远取不到。
+
+2026-10-28 真机踩坑：救援分支是「先 mark 再调 `onRescue`」，而
+`handleRescueMessage` 遇到 `welcomeDate` 缺失 / peer key 解析失败 / 解密失败 /
+`fromDid` 不匹配时会提前 `return` —— 结果救援消息被永久标记为已处理，
+控制台一直刷 `skipping already-processed queueId`，救援卡片永不出现。
+
+因此：
+
+- `onRescue` 回调返回 `boolean`（是否成功消费），poller 据此决定是否标记。
+- 失败时不标记 → 下一轮轮询重新拉取并重试。
+- `rescue_callback` 分支同样遵循「先处理成功、再标记」。
+
+### 4.2 脏标记自愈
+
+已被污染的 LRU 标记无法自动恢复，需要自愈机制。判据：
+
+> **「已成功消费的救援信封 queueId」≠ 当前 envelope 的 queueId**
+> ⇒ 这条救援消息从未被成功消费过 ⇒ LRU 标记是脏数据 ⇒ 撤销并重试。
+
+用 `storage.rescueConsumed:{groupId}` 记录已成功消费的 queueId。
+**不能用 `rescueInvite` 记录做判据**：用户接受救援后 `acceptRescueInvite`
+会清掉 `rescueInvite`，此时若用它判据会误判成「从未消费」→ 撤销标记 →
+已接受的救援卡片复活。
+
+### 4.3 welcomeDate 必须三处同源
+
+`welcomeDate` 是救援 queueId 与 message key 的派生输入，**三处必须调用同一个
+解析函数**（`resolveWelcomeDate`）：
+
+- `refreshRescueQueueIds`：扫对方通道
+- `sendRescueHandshake`：写自己通道
+- `handleRescueMessage`：解密对方消息
+
+规则：持久化值 → 第一条历史消息的日期 → 当天。三处规则不一致 → 双端派生
+出不同的 message key → 解密必失败（表现为「对方收到救援标记，但本机扫不到/
+解不开」）。
 
 ## 5. 进入私聊时的弹窗触发
 

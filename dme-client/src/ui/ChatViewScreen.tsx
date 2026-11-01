@@ -33,6 +33,7 @@ import {
 } from '../utils/format-chat-time';
 import { exportFileToDevice } from '../utils/file-export';
 import { useWebTitle } from '../utils/web-title';
+import { getTodayDate } from '../utils/date';
 import { useApp } from '../state/AppContext';
 import { useI18n } from '../i18n/I18nContext';
 import {
@@ -183,9 +184,9 @@ export function ChatViewScreen(): React.JSX.Element {
   }, [messages]);
 
   const rescueInvite = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getTodayDate();
     return pendingRescueInvites.find(
-      (i) => i.fromDid === conversationId && i.date === today,
+      (i) => i.groupId === conversationId && i.date === today,
     );
   }, [pendingRescueInvites, conversationId]);
 
@@ -230,15 +231,26 @@ export function ChatViewScreen(): React.JSX.Element {
       if (!isGroup && storage) {
         void (async () => {
           try {
-            const today = new Date().toISOString().slice(0, 10);
+            const today = getTodayDate();
             const pendingCallback = await storage.getRescueCallback(conversationId);
             if (pendingCallback && pendingCallback.date === today) return;
             if (await storage.wasRescuePromptedToday(conversationId, today)) return;
 
+            // 对方最近一条消息距今 ≥ 7 天才算断联；< 7 天不弹。
+            // ⚠️ getMessages 返回的是**追加序**（最早在前）。要「最近一条」
+            //    不能用 find()（拿到最早一条 → 长会话里几乎永远判定为断联），
+            //    也不能只靠 pop()——消息是**收到/发出时**才 append 的，网络
+            //    乱序会让最后追加的那条不是时间上最新的。
+            //    → 按 createdAt 取最大值（时间上真正最近的一条）。
             const msgs = await storage.getMessages(conversationId);
-            const lastPeerMessage = msgs.find((m) => m.fromDid === conversationId);
-            if (lastPeerMessage) {
-              const ageMs = Date.now() - Date.parse(lastPeerMessage.createdAt);
+            const lastPeerAt = msgs
+              .filter((m) => m.fromDid === conversationId)
+              .reduce((max, m) => {
+                const t = Date.parse(m.createdAt);
+                return Number.isNaN(t) ? max : Math.max(max, t);
+              }, 0);
+            if (lastPeerAt > 0) {
+              const ageMs = Date.now() - lastPeerAt;
               if (ageMs < 7 * 24 * 60 * 60 * 1000) return;
             }
 

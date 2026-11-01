@@ -91,12 +91,12 @@ import type { PendingRescueInvite } from '../protocol/rescue';
 import type { ReactionMessage } from '../protocol/reaction';
 import {
   computeRescueSharedSecret,
-  createRescueNonce,
   decryptRescueMessage,
   deriveRescueQueueId,
   encryptRescueMessage,
 } from '../crypto/rescue-handshake';
 import { playMessageSound } from '../utils/sound';
+import { getTodayDate, getYesterdayDate } from '../utils/date';
 import {
   DME_SERVER_URL,
   PDS_URL,
@@ -708,7 +708,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setReceivedGroupInvites(myReceivedInvites);
 
       // Load pending rescue invites (only today's are shown).
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getTodayDate();
       const rescueInvites: PendingRescueInvite[] = [];
       for (const groupId of sessionGroupIds) {
         const invite = await correctStorage.getRescueInvite(groupId);
@@ -1873,23 +1873,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    *   - sendRescueHandshake：写自己通道
    *   - handleRescueMessage：解密对方消息
    *
-   * 优先取持久化的 welcomeDate（握手成功时写入）；老用户（该特性上线前
-   * 握手）没有 → 退回「第一条历史消息的日期」；再没有 → 当天。
+   * 规则：**持久化的 welcomeDate → 昨天日期**。
+   *
+   * 刻意**不**用「第一条历史消息的日期」做兜底：双方的本地消息历史不同
+   * （各自的首条消息时间可能差一天），兜底值分叉 → 派生出不同的
+   * message key → 解密必失败。「昨天」是纯本地时钟派生、不依赖消息历史，
+   * 两端规则完全一致。
    */
   const resolveWelcomeDate = useCallback(async (groupId: string): Promise<string> => {
     const activeStorage = storageRef.current ?? storage;
-    if (!activeStorage) return new Date().toISOString().slice(0, 10);
-    const today = new Date().toISOString().slice(0, 10);
+    if (!activeStorage) return getYesterdayDate();
     const stored = await activeStorage.getWelcomeDate(groupId);
     if (stored) return stored;
-    const messages = await activeStorage.getMessages(groupId);
-    if (messages.length > 0) {
-      const earliest = messages.reduce((min, m) =>
-        m.createdAt < min.createdAt ? m : min,
-      );
-      return earliest.createdAt.slice(0, 10);
-    }
-    return today;
+    return getYesterdayDate();
   }, [storage]);
 
   const refreshRescueQueueIds = useCallback(async (): Promise<void> => {
@@ -1899,7 +1895,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const activePoller = pollerRef.current ?? poller;
     if (!activePoller || !activeStorage || !activeKeys || !activeSession) return;
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getTodayDate();
     const groupIds = await activeStorage.listGroups();
 
     for (const groupId of groupIds) {
@@ -1973,7 +1969,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       return false;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getTodayDate();
     // ⚠️ 必须与发送方用**完全相同**的 welcomeDate 规则，否则派生出的
     //    message key 不同 → 解密失败。缺失时走统一 fallback（见
     //    resolveWelcomeDate），不能直接丢弃消息。
@@ -2022,14 +2018,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     const invite: PendingRescueInvite = {
       date: today,
-      fromDid: message.fromDid,
+      groupId,
       qrData: message.qrData,
       callbackQueueId: message.callbackQueueId,
     };
 
     await activeStorage.setRescueInvite(groupId, invite);
     setPendingRescueInvites((prev) => {
-      const filtered = prev.filter((i) => i.fromDid !== groupId);
+      const filtered = prev.filter((i) => i.groupId !== groupId);
       return [...filtered, invite];
     });
     setChatListVersion((v) => v + 1);
@@ -2045,7 +2041,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const activeStorage = storageRef.current ?? storage;
     if (!activeStorage) return;
     await activeStorage.clearRescueInvite(groupId);
-    setPendingRescueInvites((prev) => prev.filter((i) => i.fromDid !== groupId));
+    setPendingRescueInvites((prev) => prev.filter((i) => i.groupId !== groupId));
     setChatListVersion((v) => v + 1);
   }, [storage]);
 
@@ -2078,6 +2074,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
     // acceptInvite 推进状态，必须过宣言门禁
     const { aliceDid } = await decodeAndDecryptQr(invite.qrData, activeKeys.encryption.privateKey);
+    // ⚠️ 完整性校验：QR 里的 aliceDid 必须就是本会话的对端 DID（= groupId）。
+    //    qrData 由救援消息的 Ed25519 签名覆盖，理论上可信，但仍显式断言，
+    //    防止任何一端把 QR 换成指向第三方的 DID → 我们替对方建出会话。
+    if (aliceDid !== groupId) {
+      throw new Error(
+        `acceptRescueInvite: qrData aliceDid ${aliceDid} != conversation ${groupId}`,
+      );
+    }
     const claimSeq = await acquireClaimForCommit(aliceDid, 0);
     if (claimSeq === null) {
       throw new Error('acceptRescueInvite: claim denied');
@@ -2091,17 +2095,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw err;
     }
 
-    await activeStorage.putMlsSession(result.groupId, result.mlsSession.serialize());
-    activePoller.addSession(result.groupId, result.mlsSession);
+    // 1v1 会话的 MLS groupId 就是对端 DID；断言确保后续所有存储/状态
+    // 操作都用同一个标识（groupId），不混用 result.groupId。
+    if (result.groupId !== groupId) {
+      await releaseClaim();
+      throw new Error(
+        `acceptRescueInvite: mls groupId ${result.groupId} != conversation ${groupId}`,
+      );
+    }
+
+    await activeStorage.putMlsSession(groupId, result.mlsSession.serialize());
+    activePoller.addSession(groupId, result.mlsSession);
     await activeStorage.setCommitSeq(claimSeq);
 
     const createdAt = new Date().toISOString();
-    await activeStorage.setWelcomeDate(result.groupId, createdAt.slice(0, 10));
+    await activeStorage.setWelcomeDate(groupId, createdAt.slice(0, 10));
     // 立即刷新通道：welcomeDate 已更新为今天 → refreshRescueQueueIds 会
     // 按「今天 welcome 的私聊不轮询救援」立即停扫该会话的救援通道。
     void refreshRescueQueueIds();
 
-    await triggerBackupAfterAdvance(`acceptRescueInvite ${result.groupId}`);
+    await triggerBackupAfterAdvance(`acceptRescueInvite ${groupId}`);
 
     const envelope: DmeEnvelope = {
       $type: 'dme.queue.envelope',
@@ -2112,47 +2125,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
     await activePds.createEnvelope(envelope);
 
-    await activeStorage.clearRescueInvite(result.groupId);
-    setPendingRescueInvites((prev) => prev.filter((i) => i.fromDid !== result.groupId));
+    await activeStorage.clearRescueInvite(groupId);
+    setPendingRescueInvites((prev) => prev.filter((i) => i.groupId !== groupId));
     setChatListVersion((v) => v + 1);
 
     // 救援握手成功、新 1v1 会话建立 → 自动发送打招呼文案（尽力而为）
-    void sendGreetingRef.current(result.groupId).catch((err) => {
+    void sendGreetingRef.current(groupId).catch((err) => {
       console.error('sendGreetingAfterHandshake (acceptRescueInvite) failed:', err);
     });
   }, [storage, identityKeys, session, pds, poller, takeFreshPoolPair, refreshKeyPackagePool, acquireClaimForCommit, triggerBackupAfterAdvance, releaseClaim, refreshRescueQueueIds]);
-
-  /**
-   * Prompt the user to leave a rescue marker when entering a 1v1 chat.
-   */
-  const checkRescuePrompt = useCallback(async (groupId: string): Promise<boolean> => {
-    const activeStorage = storageRef.current ?? storage;
-    const activeKeys = identityKeysRef.current ?? identityKeys;
-    const activeSession = sessionRef.current ?? session;
-    const activePds = pdsRef.current ?? pds;
-    if (!activeStorage || !activeKeys || !activeSession || !activePds) return false;
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    const pendingCallback = await activeStorage.getRescueCallback(groupId);
-    if (pendingCallback && pendingCallback.date === today) return false;
-
-    if (await activeStorage.wasRescuePromptedToday(groupId, today)) return false;
-
-    // Conditions: no message from peer for 7 days AND no envelope received in last 3 polls.
-    const messages = await activeStorage.getMessages(groupId);
-    const lastPeerMessage = messages
-      .filter((m) => m.fromDid === groupId)
-      .pop();
-    if (lastPeerMessage) {
-      const ageMs = Date.now() - Date.parse(lastPeerMessage.createdAt);
-      if (ageMs < 7 * 24 * 60 * 60 * 1000) return false;
-    }
-
-    // TODO: track last 3 poll results per 1v1 session; for now require 7-day silence.
-
-    return true;
-  }, [storage, identityKeys, session, pds]);
 
   /**
    * Send a rescue handshake request for a 1v1 conversation.
@@ -2167,7 +2148,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw new Error('sendRescueHandshake: not fully initialized');
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getTodayDate();
     // ⚠️ 与接收方必须用**完全相同**的 welcomeDate 规则（见 resolveWelcomeDate）
     const welcomeDate = await resolveWelcomeDate(groupId);
 
@@ -2211,7 +2192,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       qrData: qrResult.qrString,
       callbackQueueId,
       sentAt: new Date().toISOString(),
-      nonce: createRescueNonce(),
     };
 
     const ciphertext = encryptRescueMessage(

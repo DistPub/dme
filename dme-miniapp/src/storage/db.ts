@@ -225,13 +225,13 @@ export class DmeStorage {
       const parsed = JSON.parse(raw) as Partial<PendingRescueInvite>;
       if (
         typeof parsed.date === 'string' &&
-        typeof parsed.fromDid === 'string' &&
+        typeof parsed.groupId === 'string' &&
         typeof parsed.qrData === 'string' &&
         typeof parsed.callbackQueueId === 'string'
       ) {
         return {
           date: parsed.date,
-          fromDid: parsed.fromDid,
+          groupId: parsed.groupId,
           qrData: parsed.qrData,
           callbackQueueId: parsed.callbackQueueId,
         };

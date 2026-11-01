@@ -18,18 +18,21 @@ export interface RescueMessage {
   callbackQueueId: string;
   /** ISO-8601 timestamp when the message was created. */
   sentAt: string;
-  /** Single-use nonce to prevent replay. */
-  nonce: string;
   /** Ed25519 signature over the canonical JSON of the fields above. */
   signature: string;
 }
 
 /** Stored on the rescuer side while waiting for user confirmation. */
 export interface PendingRescueInvite {
-  /** Local date (YYYY-MM-DD) when the invite was received. Only shown today. */
+  /** UTC date (YYYY-MM-DD) when the invite was received. Only shown today. */
   date: string;
-  /** DID of the party requesting rescue. */
-  fromDid: string;
+  /**
+   * 1v1 conversation key = the requester's DID.
+   *
+   * This is the single identifier used for storage keys, state filtering and
+   * MLS session persistence — the requester's DID *is* the 1v1 groupId.
+   */
+  groupId: string;
   /** QR payload that can be passed to acceptInvite(). */
   qrData: string;
   /** Callback queueId where the Welcome should be delivered. */
@@ -38,7 +41,7 @@ export interface PendingRescueInvite {
 
 /** Stored on the rescue-requester side while waiting for the Welcome. */
 export interface PendingRescueCallback {
-  /** Local date (YYYY-MM-DD) when the request was sent. */
+  /** UTC date (YYYY-MM-DD) when the request was sent. */
   date: string;
   /** Welcome queueId to poll. */
   callbackQueueId: string;

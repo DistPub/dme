@@ -287,7 +287,32 @@ export class DmePoller {
         console.log('DmePoller: skipping in-flight queueId', env.queueId);
         continue;
       }
-      if (await this.storage.isQueueIdProcessed(env.queueId)) {
+      let alreadyProcessed = await this.storage.isQueueIdProcessed(env.queueId);
+
+      // ⚠️ 自愈 + 关键不变量：
+      //    **pendingWelcome 还在 ⇒ 这条 welcome 从未被成功消费过**。
+      //    因为成功配对的路径（processReceivedWelcome）第一步就是
+      //    `deletePendingWelcome(queueId)`。
+      //
+      //    所以只要 pending entry 还在，就说明上一次尝试失败了（多半是
+      //    早期"先 mark 后处理"的顺序 bug 导致的），此时 LRU 里的标记是
+      //    **脏数据**，必须撤销并重试，否则用户会永远卡在"等对方扫码"，
+      //    控制台一直刷 `skipping already-processed queueId`。
+      if (ctx.type === 'welcome') {
+        const stillPending = (await this.storage.getPendingWelcomes()).some(
+          (w) => w.queueId === env.queueId,
+        );
+        if (stillPending && alreadyProcessed) {
+          console.warn(
+            'DmePoller: 检测到上次处理失败留下的脏标记，撤销并重试 welcome',
+            env.queueId,
+          );
+          await this.storage.unmarkQueueIdProcessed(env.queueId);
+          alreadyProcessed = false;
+        }
+      }
+
+      if (alreadyProcessed) {
         console.log('DmePoller: skipping already-processed queueId', env.queueId);
         continue;
       }
@@ -295,7 +320,12 @@ export class DmePoller {
 
       try {
         if (ctx.type === 'welcome') {
-          await this.storage.markQueueIdProcessed(env.queueId);
+          // ⚠️ 顺序至关重要：**必须先处理成功，再标记已处理**。
+          //    早期实现先 markQueueIdProcessed 再调 onWelcome，一旦回调提前
+          //    return（未初始化 / 找不到 pending entry）或抛错，这个 queueId 就
+          //    被永久标记为已处理，之后**永远不会再取到**，welcome 直接丢失
+          //    （真机：控制台一直刷 `skipping already-processed queueId`）。
+          //    下面的 message 分支就是正确顺序（先 decrypt 再 mark），保持一致。
           const welcomeBytes = base64urlToBytes(env.payload);
           if (this.onWelcome) {
             await this.onWelcome({
@@ -303,7 +333,13 @@ export class DmePoller {
               welcomeBytes,
               createdAt: env.createdAt,
             });
+          } else {
+            // 没有回调就等于没人消费，不能标记，否则这条 welcome 会永久丢失
+            console.warn('DmePoller: onWelcome 未注册，跳过 welcome', ctx.queueId);
+            this.inFlightQueueIds.delete(env.queueId);
+            continue;
           }
+          await this.storage.markQueueIdProcessed(env.queueId);
         } else if (ctx.type === 'rescue') {
           // ⚠️ 顺序至关重要：**必须先处理成功，再标记已处理**。
           //    早期实现先 markQueueIdProcessed 再调 onRescue，一旦
@@ -437,6 +473,15 @@ export class DmePoller {
         this.inFlightQueueIds.delete(env.queueId);
       } catch (err) {
         this.inFlightQueueIds.delete(env.queueId);
+        // ⚠️ 关键：处理失败必须**撤销**「已处理」标记，否则该 queueId 会被
+        //    LRU 集合永久跳过 —— welcome 尤其致命（丢了就再也配不上对）。
+        //    正常路径的 mark 只在处理成功之后才执行，这里是防御性回滚
+        //    （例如 mark 本身写成功后 onMessage 回调抛错的极端情况）。
+        try {
+          await this.storage.unmarkQueueIdProcessed(env.queueId);
+        } catch (rollbackErr) {
+          console.error('DmePoller: 回滚 queueId 标记失败', env.queueId, rollbackErr);
+        }
         console.error('[DIAG] DmePoller: process failed for', env.queueId, 'ctxType=' + ctx?.type, 'groupId=' + (ctx?.type === 'message' ? ctx.groupId : '(n/a)'), 'err=' + (err instanceof Error ? err.message + ' / ' + err.name : String(err)));
       }
     }

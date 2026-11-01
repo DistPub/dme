@@ -69,14 +69,16 @@ interface RescueMessage {
   callbackQueueId: string;
   /** 救援消息创建时间 ISO-8601 */
   sentAt: string;
-  /** 单次 nonce，用于防重放 */
-  nonce: string;
   /** 对以上字段的 Ed25519 签名 */
   signature: string;
 }
 ```
 
 消息整体用 rescueQueueId 派生密钥做 AEAD 加密后作为 envelope payload 写入 PDS。
+
+> **不使用 nonce**：救援消息的防重放由「AEAD + Ed25519 签名 + `sentAt` 当天校验 +
+> 队列按天轮换」共同保证，额外的 nonce 字段没有实际作用（且从未落盘校验过），
+> 故移除。
 
 ### 2.4 状态机
 
@@ -161,13 +163,18 @@ async clearRescueCallback(groupId: string): Promise<void>
 
 async setRescueInvite(
   groupId: string,
-  invite: { date: string; fromDid: string; qrData: string; callbackQueueId: string }
+  invite: { date: string; groupId: string; qrData: string; callbackQueueId: string }
 ): Promise<void>
 async getRescueInvite(
   groupId: string
-): Promise<{ date: string; fromDid: string; qrData: string; callbackQueueId: string } | null>
+): Promise<{ date: string; groupId: string; qrData: string; callbackQueueId: string } | null>
 async clearRescueInvite(groupId: string): Promise<void>
 ```
+
+> **标识统一为 groupId**：`PendingRescueInvite.groupId` 就是对端 DID（1v1 的
+> 会话键）。存储 key、状态过滤、MLS 会话持久化全部用同一个 `groupId`，
+> 不再混用 `fromDid` / `result.groupId`（后者是 `acceptInvite` 返回的
+> `aliceDid`，1v1 下与 groupId 相等，但混用会让语义边界变脆）。
 
 ### 3.2 初次握手时写入 welcomeDate
 
@@ -246,37 +253,63 @@ LRU 永久跳过，之后永远取不到。
 - `sendRescueHandshake`：写自己通道
 - `handleRescueMessage`：解密对方消息
 
-规则：持久化值 → 第一条历史消息的日期 → 当天。三处规则不一致 → 双端派生
-出不同的 message key → 解密必失败（表现为「对方收到救援标记，但本机扫不到/
-解不开」）。
+规则：**持久化的 welcomeDate → 昨天日期**。
+
+> **刻意不用「第一条历史消息的日期」做兜底**：双方的本地消息历史不同
+> （各自的首条消息时间可能差一天），兜底值会分叉 → 双端派生出的
+> message key 不同 → 解密必失败（表现为「对方收到救援标记，但本机扫不到/
+> 解不开」）。「昨天」纯由本地时钟派生、不依赖消息历史，两端规则完全一致。
+
+> **日期口径统一为 UTC**（`new Date().toISOString().slice(0, 10)`），
+> 全仓一致（见 `src/utils/date.ts` 的 `getTodayDate` / `getYesterdayDate`）。
 
 ## 5. 进入私聊时的弹窗触发
 
-在 `ChatViewScreen` 挂载时或 AppContext 打开 1v1 会话时：
+在 `ChatViewScreen` 挂载时或 AppContext 打开 1v1 会话时（两端 UI 各自实现，
+逻辑保持一致）：
 
 ```ts
-async function checkRescuePrompt(groupId: string) {
-  const today = getLocalDate()
-  const pending = await storage.getRescueCallback(groupId)
-  if (pending && pending.date === today) return // 已发起
+const today = getTodayDate()
+const pending = await storage.getRescueCallback(groupId)
+if (pending && pending.date === today) return // 已发起
 
-  if (!await shouldPromptRescue(groupId)) return
+if (await storage.wasRescuePromptedToday(groupId, today)) return // 今天已提示过
 
-  const ok = await showConfirm('检测到与对方长时间断联，今日是否需要救援？')
-  if (!ok) {
-    await storage.setRescuePromptedToday(groupId, today)
-    return
-  }
-
-  await sendRescueHandshake(groupId)
+// 对方最近一条消息距今 ≥ 7 天才算断联；< 7 天不弹
+const msgs = await storage.getMessages(groupId)
+const lastPeerAt = msgs
+  .filter((m) => m.fromDid === groupId)
+  .reduce((max, m) => {
+    const t = Date.parse(m.createdAt)
+    return Number.isNaN(t) ? max : Math.max(max, t)
+  }, 0)
+if (lastPeerAt > 0) {
+  const ageMs = Date.now() - lastPeerAt
+  if (ageMs < 7 * 24 * 60 * 60 * 1000) return
 }
+
+setRescuePromptVisible(true)
 ```
 
 触发条件：
 
-- 距离本机最后一次收到对方消息 ≥ 7 天。
-- 最近 3 次轮询该会话都没有收到新 envelope。
-- 今天还没有对该会话提示过。
+- 对方最近一条消息距今 **≥ 7 天**才提示；**< 7 天不弹**。
+- 今天还没有对该会话提示过（`wasRescuePromptedToday`）。
+- 今天已经发起过救援（`pendingCallback.date === today`）不弹。
+
+> **取「最近一条对方消息」必须按 `createdAt` 取最大值**：
+> `getMessages` 返回的是**追加序**（最早在前），直接 `find()` 拿到的是
+> **最早一条** → 长会话里几乎永远判定为断联，误弹救援提示；
+> 只用 `pop()` 也不够——消息是**收到/发出时**才 append 的，网络乱序会让
+> 最后追加的那条不是时间上最新的。正确做法：
+> `filter(m => m.fromDid === peerDid).reduce((max, m) => Math.max(max, Date.parse(m.createdAt)), 0)`。
+
+> 对方**从未发过消息**时（`lastPeerAt === 0`）视为断联，照常提示。
+
+> 弹窗判定与 `resolveWelcomeDate`（救援通道的**派生输入**）是两回事：
+> 前者按「对方 7 天没消息」判断联，后者按「持久化 welcomeDate → 昨天」派生
+> queueId / message key。**不要**用消息历史推导 welcomeDate——双方本地消息
+> 历史不同，派生值会分叉 → 解密必失败。
 
 ## 6. 安全考虑
 
@@ -284,10 +317,14 @@ async function checkRescuePrompt(groupId: string) {
 
 救援消息必须带 Ed25519 签名，施救方验证签名后才执行 `acceptInvite`。防止第三方伪造救援请求重置会话。
 
+施救方执行 `acceptInvite` 前还会断言 QR 内的 `aliceDid` 等于本会话的对端 DID
+（= `groupId`），防止把 QR 换成指向第三方的 DID。
+
 ### 6.2 重放防护
 
 - `sentAt` 日期必须是当天，非当天的救援消息直接拒绝。
-- `nonce` 单次有效，已处理过的 nonce 拒绝。
+- 救援 queueId 按天轮换（派生输入含当天日期），过期通道自然脱离轮询集合。
+- 施救方处理过的队列由 poller 的 queueId LRU 去重。
 
 ### 6.3 隐私
 
@@ -308,7 +345,7 @@ async function checkRescuePrompt(groupId: string) {
 | A 发救援，B 第二天才上线 | A 的 callback 只当天轮询，第二天 A 需重新进入私聊才会再次发救援 |
 | 双方同时发救援 | 各自 pending callback，互不影响；概率极低，不额外处理 |
 | KP 池空 | 自动刷新/补充 KP 池 |
-| 老用户无 welcomeDate | 取第一条历史消息时间；无历史消息则 fallback 昨天；救援成功后写入新日期 |
+| 老用户无 welcomeDate | 统一 fallback 昨天日期（两端规则一致，不依赖本地消息历史）；救援成功后写入新日期 |
 | 重放旧救援消息 | 签名/时间戳校验失败，忽略 |
 
 ## 8. 实施计划

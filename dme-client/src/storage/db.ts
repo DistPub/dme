@@ -225,13 +225,13 @@ export class DmeStorage {
       const parsed = JSON.parse(raw) as Partial<PendingRescueInvite>;
       if (
         typeof parsed.date === 'string' &&
-        typeof parsed.fromDid === 'string' &&
+        typeof parsed.groupId === 'string' &&
         typeof parsed.qrData === 'string' &&
         typeof parsed.callbackQueueId === 'string'
       ) {
         return {
           date: parsed.date,
-          fromDid: parsed.fromDid,
+          groupId: parsed.groupId,
           qrData: parsed.qrData,
           callbackQueueId: parsed.callbackQueueId,
         };
@@ -447,6 +447,24 @@ export class DmeStorage {
       }
     }
 
+    await storage.setItem(
+      this.prefix + 'queueIdLru',
+      JSON.stringify([...entries]),
+    );
+  }
+
+  /**
+   * 撤销「已处理」标记。
+   *
+   * 用途：welcome 的处理**可能失败**（依赖尚未就绪、MLS join 抛错等）。
+   * 一旦失败就绝不能留在已处理集合里，否则该 queueId 会被 LRU 永久跳过、
+   * welcome 再也取不到。poller 在捕获异常后调用本方法回滚，让下一轮重试。
+   */
+  async unmarkQueueIdProcessed(queueId: string): Promise<void> {
+    const raw = await storage.getItem(this.prefix + 'queueIdLru');
+    if (!raw) return;
+    const entries = new Map<string, number>(JSON.parse(raw) as [string, number][]);
+    if (!entries.delete(queueId)) return;
     await storage.setItem(
       this.prefix + 'queueIdLru',
       JSON.stringify([...entries]),

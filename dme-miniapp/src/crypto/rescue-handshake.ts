@@ -116,7 +116,6 @@ function canonicalRescueString(fields: SignableRescueFields): string {
     qrData: fields.qrData,
     callbackQueueId: fields.callbackQueueId,
     sentAt: fields.sentAt,
-    nonce: fields.nonce,
   });
 }
 
@@ -147,13 +146,6 @@ function verifyRescueSignature(
   } catch {
     return false;
   }
-}
-
-/**
- * Create a fresh nonce for a rescue message.
- */
-export function createRescueNonce(): string {
-  return bytesToBase64url(crypto.getRandomValues(new Uint8Array(16)));
 }
 
 /**

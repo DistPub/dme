@@ -144,6 +144,8 @@ export function ChatListScreen(): React.JSX.Element {
   >([]);
   /** desynced 横幅的「oo」：触发标记的 commit 发送者展示名（handle，groupId 索引）。 */
   const [desyncedSenderNames, setDesyncedSenderNames] = useState<Record<string, string>>({});
+  /** 救援横幅的名字兜底：会话行不在列表时用 handle 解析（groupId 索引）。 */
+  const [rescueNames, setRescueNames] = useState<Record<string, string>>({});
 
   // 会话异常标记（sibling-rotated / desynced）：有新标记或状态重建后刷新
   useEffect(() => {
@@ -217,6 +219,31 @@ useEffect(() => {
   })();
   return () => { cancelled = true; };
 }, [sessionIssues, desyncedSenderNames, resolveHandle]);
+
+// 救援横幅名字兜底：收到救援邀请的 1v1 会话正常都在列表里（有历史消息），
+// 但若会话行缺失（如好友被删），用 resolveHandle 解析展示名，最后兜底 DID
+useEffect(() => {
+  const dids = app.pendingRescueInvites
+    .map((i) => i.groupId)
+    .filter((did) => rescueNames[did] === undefined);
+  const uniqueDids = [...new Set(dids)];
+  if (uniqueDids.length === 0) return;
+
+  let cancelled = false;
+  (async () => {
+    const results = await Promise.all(
+      uniqueDids.map(async (did) => ({ did, handle: await resolveHandle(did) })),
+    );
+    if (!cancelled) {
+      const resolved: Record<string, string> = {};
+      for (const { did, handle } of results) {
+        resolved[did] = handle;
+      }
+      setRescueNames((prev) => ({ ...prev, ...resolved }));
+    }
+  })();
+  return () => { cancelled = true; };
+}, [app.pendingRescueInvites, rescueNames, resolveHandle]);
 
 // 关闭 desynced 横幅：隐藏 + 清除标记（轮换恢复参与）；新失败会重新置标记
 const handleDismissDesynced = useCallback(async (groupId: string): Promise<void> => {
@@ -840,6 +867,35 @@ const resolveProfiles = useCallback(async (
                 <Text style={styles.issueBannerText}>{t('chatlist.backupRequiredBanner')}</Text>
               </TouchableOpacity>
             )}
+            {(() => {
+              // 救援请求横幅（2026-11-06 用户拍板）：对方发起救援时不再只靠
+              // 进入私聊才能发现，列表顶部直接强提示；点击进入对应私聊处理
+              // （私聊内已有接受/拒绝救援卡片）。救援是当天的事，邀请只保留
+              // 当天 → 横幅第二天自然消失，符合预期。
+              const rescueInvites = app.pendingRescueInvites;
+              if (rescueInvites.length === 0) return null;
+              return (
+                <View style={styles.issueBanner}>
+                  {rescueInvites.map((invite) => {
+                    const row = conversations.find((c) => c.groupId === invite.groupId);
+                    const name =
+                      row && row.displayName !== invite.groupId
+                        ? row.displayName
+                        : (rescueNames[invite.groupId] ?? invite.groupId);
+                    return (
+                      <TouchableOpacity
+                        key={invite.groupId}
+                        onPress={() => void navigateToChat(invite.groupId, false)}
+                      >
+                        <Text style={styles.issueBannerText}>
+                          {t('chatlist.rescueBanner', { name })}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              );
+            })()}
             {(() => {
               // 2026-10-17 用户拍板：反向幽灵群（有 GroupInfo 无群 mlsSession，
               // 群主兄弟端）与 sessionIssue 同栏展示恢复备份提示，不再用点群弹窗

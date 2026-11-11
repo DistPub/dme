@@ -35,6 +35,7 @@ let parentOrigin: string | null = null;
 let readyRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let readyRetryCount = 0;
 let lastUnread: { count: number; hasNew: boolean } | null = null;
+let lastActionNeeded: { needed: boolean; count: number } | null = null;
 let lastInvalidJwt: string | null = null;
 let isChatActive = false;
 let storageDataReceived = false;
@@ -285,6 +286,35 @@ export function sendUnread(count: number, hasNew: boolean): void {
       protocol: DME_EMBED_PROTOCOL,
       type: DME_MSG.UNREAD,
       payload: { count, hasNew },
+    },
+    target,
+  );
+}
+
+/**
+ * Push "user action needed" info to the parent. Fired when one or more
+ * conversations carry a session issue (sibling-rotated / forked / desynced)
+ * and again when all issues are resolved. Value-deduplicated — same
+ * (needed, count) pair is sent at most once.
+ */
+export function sendActionNeeded(needed: boolean, count: number): void {
+  if (!isEmbedContext()) return;
+
+  if (
+    lastActionNeeded?.needed === needed &&
+    lastActionNeeded?.count === count
+  ) {
+    return;
+  }
+  lastActionNeeded = { needed, count };
+
+  const target = parentOrigin ?? resolveParentTargetOrigin();
+
+  window.parent.postMessage(
+    {
+      protocol: DME_EMBED_PROTOCOL,
+      type: DME_MSG.ACTION_NEEDED,
+      payload: { needed, count },
     },
     target,
   );

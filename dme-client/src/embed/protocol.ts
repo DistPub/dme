@@ -17,6 +17,10 @@ export const DME_MSG = {
   TOKEN: 'DME_TOKEN',
   SESSION_INVALID: 'DME_SESSION_INVALID',
   UNREAD: 'DME_UNREAD',
+  // DME → fatesky: 用户需要在 DME 内做恢复动作（会话异常：sibling-rotated /
+  // forked / desynced 横幅）。payload {needed: boolean, count: number}，
+  // count = 需要处理的会话数。仅 embed 模式发送。
+  ACTION_NEEDED: 'DME_ACTION_NEEDED',
   CHAT_ACTIVE: 'DME_CHAT_ACTIVE',
   PING: 'DME_PING',
   PONG: 'DME_PONG',

@@ -24,3 +24,17 @@ export async function computeTotalUnread(
   }
   return total;
 }
+
+/**
+ * Compute the number of conversations that need user action (any session
+ * issue: sibling-rotated / forked / desynced). Mirrors the ChatListScreen
+ * issue-banner source of truth.
+ */
+export async function computeActionNeeded(storage: DmeStorage): Promise<number> {
+  const groups = await storage.listGroups();
+  let count = 0;
+  for (const groupId of groups) {
+    if (await storage.getSessionIssue(groupId)) count++;
+  }
+  return count;
+}

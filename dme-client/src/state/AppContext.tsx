@@ -104,13 +104,14 @@ import {
   start,
   notifySessionInvalid,
   sendUnread,
+  sendActionNeeded,
   onChatActiveChange,
   offChatActiveChange,
   onShare,
   onStartChat,
 } from '../embed/bridge';
 import type { EmbedSharePayload, EmbedStartChatPayload } from '../embed/protocol';
-import { computeTotalUnread } from '../embed/unread';
+import { computeActionNeeded, computeTotalUnread } from '../embed/unread';
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (Uint8Array <-> base64 via JSON replacer)
@@ -4777,6 +4778,10 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
 
   // Push total unread count to the parent frame (embed mode only). Reports
   // immediately on every chatListVersion bump and every 30s as a fallback.
+  // Also reports "action needed" (conversation(s) with a session issue —
+  // sibling-rotated / forked / desynced rescue banners) over the same
+  // heartbeat; issue changes that don't bump chatListVersion are caught by
+  // the 30s fallback.
   useEffect(() => {
     if (!isEmbedContext() || !embedTokenApplied || !session || !storage || embedMismatch) return;
     let cancelled = false;
@@ -4785,6 +4790,8 @@ const shouldPlayFile = soundEnabled && (activeConversationRef.current === null |
         if (embedMismatch) return;
         const total = await computeTotalUnread(storage, session.did, new Set(blockList));
         if (!cancelled) sendUnread(total, total > 0);
+        const actionCount = await computeActionNeeded(storage);
+        if (!cancelled) sendActionNeeded(actionCount > 0, actionCount);
       } catch (err) {
         console.error('embed unread report failed:', err);
       }

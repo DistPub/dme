@@ -53,6 +53,13 @@ export interface PendingWelcome {
   groupId: string;
   keyPackageSerialized: string;
   createdAt: string;
+  /**
+   * 'rescue' = 1v1 救援回调通道的内部登记（sendRescueHandshake 写入）。
+   * 这类条目是 Welcome 消费的钥匙（poller 扫描 + KP pair），但**不是**
+   * 群邀请语义，聊天列表「待处理握手」横幅必须过滤掉。
+   * 旧记录无此字段（= undefined），仍按普通待处理握手渲染，向后兼容。
+   */
+  kind?: 'rescue';
 }
 
 /** 本地 KeyPackage 池条目。 */

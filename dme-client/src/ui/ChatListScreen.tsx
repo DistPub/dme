@@ -320,7 +320,9 @@ const resolveProfiles = useCallback(async (
   }, [app.receivedGroupInvites, inviterHandles, resolveHandle]);
 
   useEffect(() => {
+    // 救援回调登记（kind='rescue'）不渲染横幅，也无需解析 handle
     const dids = app.pendingWelcomes
+      .filter((w) => w.kind !== 'rescue')
       .map((w) => w.groupId)
       .filter((did) => !welcomeHandles[did]);
     const uniqueDids = [...new Set(dids)];
@@ -1083,14 +1085,20 @@ const resolveProfiles = useCallback(async (
               </View>
             )}
 
-            {app.pendingWelcomes.length > 0 ? (
-              <View style={styles.inviteSection}>
-                <Text style={styles.sectionTitle}>{t('chatlist.pendingWelcomes', { count: app.pendingWelcomes.length })}</Text>
-                {app.pendingWelcomes.map((welcome) => (
-                  <View key={welcome.queueId}>{renderWelcomeRow(welcome)}</View>
-                ))}
-              </View>
-            ) : null}
+            {(() => {
+              // 救援回调登记（kind='rescue'）是 Welcome 消费的内部钥匙，
+              // 不是群邀请语义，不得计入「待处理握手」横幅。
+              const visibleWelcomes = app.pendingWelcomes.filter((w) => w.kind !== 'rescue');
+              if (visibleWelcomes.length === 0) return null;
+              return (
+                <View style={styles.inviteSection}>
+                  <Text style={styles.sectionTitle}>{t('chatlist.pendingWelcomes', { count: visibleWelcomes.length })}</Text>
+                  {visibleWelcomes.map((welcome) => (
+                    <View key={welcome.queueId}>{renderWelcomeRow(welcome)}</View>
+                  ))}
+                </View>
+              );
+            })()}
           </>
         }
         ListEmptyComponent={

@@ -487,7 +487,8 @@ export default function ChatListPage(): React.JSX.Element {
   }, [receivedGroupInvites, inviterHandles, resolveHandle]);
 
   useEffect(() => {
-    const dids = [...new Set(pendingWelcomes.map((w) => w.groupId).filter((d) => !welcomeHandles[d]))];
+    // 救援回调登记（kind='rescue'）不渲染横幅，也无需解析 handle
+    const dids = [...new Set(pendingWelcomes.filter((w) => w.kind !== 'rescue').map((w) => w.groupId).filter((d) => !welcomeHandles[d]))];
     if (dids.length === 0) return;
     let cancelled = false;
     (async () => {
@@ -995,13 +996,17 @@ export default function ChatListPage(): React.JSX.Element {
           </View>
         ) : null}
 
-        {/* ③ 待处理握手 */}
-        {pendingWelcomes.length > 0 ? (
-          <View className="chatlist__section">
-            <Text className="chatlist__sectionTitle">
-              {t('chatlist.pendingWelcomes', { count: pendingWelcomes.length })}
-            </Text>
-            {pendingWelcomes.map((w: PendingWelcome) => {
+        {/* ③ 待处理握手（救援回调登记 kind='rescue' 是 Welcome 消费的内部钥匙，
+            不是群邀请语义，不得计入横幅） */}
+        {(() => {
+          const visibleWelcomes = pendingWelcomes.filter((w) => w.kind !== 'rescue');
+          if (visibleWelcomes.length === 0) return null;
+          return (
+            <View className="chatlist__section">
+              <Text className="chatlist__sectionTitle">
+                {t('chatlist.pendingWelcomes', { count: visibleWelcomes.length })}
+              </Text>
+              {visibleWelcomes.map((w: PendingWelcome) => {
               const h = welcomeHandles[w.groupId];
               const label = h && h !== w.groupId ? `@${h}` : w.groupId;
               return (
@@ -1020,9 +1025,10 @@ export default function ChatListPage(): React.JSX.Element {
                   </Button>
                 </View>
               );
-            })}
-          </View>
-        ) : null}
+              })}
+            </View>
+          );
+        })()}
 
         {/* ④ 会话行 */}
         {rows.length === 0 ? (

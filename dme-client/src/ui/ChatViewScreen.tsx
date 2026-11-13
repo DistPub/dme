@@ -995,7 +995,13 @@ export function ChatViewScreen(): React.JSX.Element {
                 label={t('common.yes')}
                 onPress={() => {
                   setRescuePromptVisible(false);
-                  void sendRescueHandshake(conversationId);
+                  // ⚠️ 不能裸 void：发起失败（今天刚重建过会话 / KP 池取不到 /
+                  //    上传失败）静默吞掉会让用户以为标记已留下，
+                  //    实际对方永远收不到（2026-11-13）。
+                  sendRescueHandshake(conversationId).catch((err: unknown) => {
+                    console.error('sendRescueHandshake failed:', err);
+                    Alert.alert(t('chatview.title'), t('chatview.rescueSendFailed'));
+                  });
                 }}
                 variant="primary"
                 style={styles.rescuePromptBtn}

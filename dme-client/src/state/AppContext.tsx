@@ -1982,13 +1982,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw new Error('acceptRescueInvite: no pending invite for ' + groupId);
     }
 
-    // KP 池统一消费：先取 pair，失败则刷新后重试一次
+    // KP 池统一消费：先取 pair，失败则刷新后重试一次。
+    // ⚠️ consume=true（同 sendRescueHandshake，2026-11-13）：两次接受救援
+    //    取到同一把 pair 会跨会话复用 KP；pair 在 acceptInvite 内即刻使用，
+    //    提前消费无副作用（失败多烧一把，池自动补充）。
     let poolPair: KeyPackagePair;
     try {
-      poolPair = (await takeFreshPoolPair('acceptRescueInvite', false)).pair;
+      poolPair = (await takeFreshPoolPair('acceptRescueInvite', true)).pair;
     } catch {
       await refreshKeyPackagePool();
-      poolPair = (await takeFreshPoolPair('acceptRescueInvite', false)).pair;
+      poolPair = (await takeFreshPoolPair('acceptRescueInvite', true)).pair;
     }
 
     // acceptInvite 推进状态，必须过宣言门禁
@@ -2072,13 +2075,20 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       throw new Error('sendRescueHandshake: 会话今天刚建立，无需救援');
     }
 
-    // KP 池统一消费：先取 pair，失败则刷新后重试一次
+    // KP 池统一消费：先取 pair，失败则刷新后重试一次。
+    // ⚠️ 必须 consume=true（2026-11-13 真机 bug）：consume=false 时两次救援
+    //    发起会取到同一把未消费的 pool entry → initKey 相同 →
+    //    deriveWelcomeQueueId 产出相同 callbackQueueId → 第二条
+    //    PendingWelcome 按相同键覆盖第一条（横幅只显示一个），且两个对端
+    //    被告知同一 callback 通道：先到的 Welcome 消费掉登记后，后到的
+    //    Welcome 永久丢失。消费时机提前到 take 是消除碰撞的根源修复
+    //    （发起失败多烧一把 KP 可接受，池会自动补充）。
     let poolPair: KeyPackagePair;
     try {
-      poolPair = (await takeFreshPoolPair('sendRescueHandshake', false)).pair;
+      poolPair = (await takeFreshPoolPair('sendRescueHandshake', true)).pair;
     } catch {
       await refreshKeyPackagePool();
-      poolPair = (await takeFreshPoolPair('sendRescueHandshake', false)).pair;
+      poolPair = (await takeFreshPoolPair('sendRescueHandshake', true)).pair;
     }
 
     const theirEncPub = await getRemoteEncryptionKey(groupId);
@@ -2146,6 +2156,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       groupId,
       keyPackageSerialized: serializeWithUint8Array(poolPair),
       createdAt: new Date().toISOString(),
+      // 标记为救援回调登记：横幅渲染据此过滤（这不是普通的待处理握手）
+      kind: 'rescue',
     };
     await storage.putPendingWelcome(pendingWelcomeEntry);
     // 本机转为等待对方的 Welcome：扫 callback 通道。

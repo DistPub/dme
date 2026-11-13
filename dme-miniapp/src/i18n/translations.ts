@@ -224,6 +224,7 @@ export const zh: Record<string, string> = {
   'chatview.tooShort': '说话时间太短',
   'chatview.recordFailed': '录音失败，请允许麦克风权限',
   'chatview.rescuePrompt': '检测到与对方长时间断联，今日是否需要救援？',
+  'chatview.rescueSendFailed': '救援标记发送失败，请稍后重试',
   'chatview.rescueInviteTitle': '{handle} 请求救援握手以恢复私聊',
 
   // qrdisplay
@@ -566,6 +567,7 @@ export const en: Record<string, string> = {
   'chatview.tooShort': 'Too short',
   'chatview.recordFailed': 'Recording failed — please allow microphone access',
   'chatview.rescuePrompt': 'Long disconnect with this contact detected. Need rescue today?',
+  'chatview.rescueSendFailed': 'Failed to send rescue marker. Please try again later.',
   'chatview.rescueInviteTitle': '{handle} requested a rescue handshake to recover this DM',
 
   // qrdisplay

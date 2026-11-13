@@ -209,6 +209,7 @@ export const zh: Record<string, string> = {
   'chatview.dayThisYear': '{M}月{D}日',
   'chatview.dayOtherYear': '{Y}年{M}月{D}日',
   'chatview.rescuePrompt': '检测到与对方长时间断联，今日是否需要救援？',
+  'chatview.rescueSendFailed': '救援标记发送失败，请稍后重试',
   'chatview.rescueInviteTitle': '{handle} 请求救援握手以恢复私聊',
 
   // qrdisplay
@@ -530,6 +531,7 @@ export const en: Record<string, string> = {
   'chatview.dayThisYear': '{M}/{D}',
   'chatview.dayOtherYear': '{Y}/{M}/{D}',
   'chatview.rescuePrompt': 'Long disconnect with this contact detected. Need rescue today?',
+  'chatview.rescueSendFailed': 'Failed to send rescue marker. Please try again later.',
   'chatview.rescueInviteTitle': '{handle} requests a rescue handshake to restore the chat',
 
   // qrdisplay

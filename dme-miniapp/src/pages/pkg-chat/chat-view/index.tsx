@@ -1116,7 +1116,12 @@ export default function ChatViewPage(): React.JSX.Element {
               className="chatview__rescuePromptBtn chatview__rescuePromptBtn--primary"
               onClick={() => {
                 setRescuePromptVisible(false);
-                void sendRescueHandshake(conversationId);
+                // ⚠️ 不能裸 void：发起失败静默吞掉会让用户以为标记已留下，
+                //    实际对方永远收不到（2026-11-13）。
+                sendRescueHandshake(conversationId).catch((err: unknown) => {
+                  console.error('sendRescueHandshake failed:', err);
+                  Taro.showToast({ title: t('chatview.rescueSendFailed'), icon: 'none' });
+                });
               }}
             >
               <Text className="chatview__rescuePromptBtnText chatview__rescuePromptBtnText--primary">
